@@ -2024,11 +2024,33 @@ export function App() {
                       <Database size={26} />
                     </span>
                     <Badge
-                      tone={s.state === "imported" ? "success" : "neutral"}
+                      tone={
+                        s.id === "printing"
+                          ? live.value
+                            ? live.error
+                              ? "warning"
+                              : "success"
+                            : live.error
+                              ? "warning"
+                              : "neutral"
+                          : s.state === "imported"
+                            ? "success"
+                            : "neutral"
+                      }
                     >
-                      {s.state === "imported"
-                        ? "CSV загружен"
-                        : "Не подключено"}
+                      {s.id === "printing"
+                        ? live.value
+                          ? live.error
+                            ? "Ошибка обновления"
+                            : "Подключено"
+                          : live.loading
+                            ? "Подключаю…"
+                            : live.error
+                              ? "Нет связи"
+                              : "Ожидает подключения"
+                        : s.state === "imported"
+                          ? "CSV загружен"
+                          : "Не подключено"}
                     </Badge>
                   </div>
                   <h2>{s.name}</h2>
@@ -2036,7 +2058,7 @@ export function App() {
                     {s.id === "assembly"
                       ? "Операции, количества и нормы по сотрудникам."
                       : s.id === "printing"
-                        ? "Завершённые рулоны, площадь и сотрудник."
+                        ? "Журнал выпуска · площадь и сотрудник по каждой записи о печати."
                         : "Готовый товар с разбивкой по ячейкам."}
                   </p>
                   {s.state === "imported" && (
