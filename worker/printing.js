@@ -49,61 +49,33 @@ function ritmBridgeResolve_(index, uid, sheetName) {
   });
   return list.length === 1 ? list[0] : null;
 }
-export function reconcilePrinting(index, system, journal) {
-  var events = [],
+// The daily summary is QUERY(group by B, C, D; sum L) over this journal.
+// Completed rolls outside the journal are not production facts for this KPI.
+export function collectJournalPrinting(index, journal) {
+  const events = [],
     issues = index.issues.slice(),
-    eventCounts = {},
-    rollCounts = {},
-    coverage = {},
-    invalidRolls = {};
-  system.forEach(function (r) {
-    if (r[8]) rollCounts[String(r[8])] = (rollCounts[String(r[8])] || 0) + 1;
+    eventCounts = {};
+  journal.forEach((r) => {
+    const id = String(r[0] || "").trim();
+    if (String(r[3]).trim() === "Печать" && id)
+      eventCounts[id] = (eventCounts[id] || 0) + 1;
   });
-  journal.forEach(function (r) {
-    if (String(r[3]).trim() === "Печать" && r[0])
-      eventCounts[String(r[0])] = (eventCounts[String(r[0])] || 0) + 1;
-  });
-  function event(id, order, roll, employee, date, quantity, area, source) {
-    return {
-      id: id,
-      uid: order.uid,
-      roll: String(roll || ""),
-      employee: employee,
-      date: date,
-      quantity: quantity,
-      area: area,
-      article: order.article,
-      sheetId: order.sheetId,
-      sheetName: order.sheetName,
-      source: source,
-    };
-  }
-  journal.forEach(function (r, i) {
+  journal.forEach((r, i) => {
     if (String(r[3]).trim() !== "Печать") return;
-    var id = String(r[0] || ""),
-      rollId = String(r[14] || ""),
+    const id = String(r[0] || "").trim(),
       order = ritmBridgeResolve_(index, r[7], String(r[4] || "")),
       employee = ritmBridgeEmployee_(r[2]),
       date = ritmBridgeDay_(r[1]),
       quantity = ritmBridgeNumber_(r[9]),
       area = ritmBridgeNumber_(r[11]),
       errors = [];
-    if (rollId) {
-      var cov =
-        coverage[rollId] || (coverage[rollId] = { quantity: 0, area: 0 });
-      cov.quantity += Math.max(0, quantity);
-      cov.area += Math.max(0, area);
-    }
     if (!id || eventCounts[id] > 1) errors.push("Нет уникального ID записи");
-    if (!rollId || rollCounts[rollId] > 1)
-      errors.push("Нет уникального ID рулона");
     if (!order) errors.push("Заказ не найден");
     if (!employee) errors.push("Неизвестный сотрудник");
     if (!date) errors.push("Нет даты");
     if (!Number.isInteger(quantity) || quantity <= 0 || area <= 0)
       errors.push("Нет количества или площади");
     if (errors.length) {
-      if (rollId) invalidRolls[rollId] = true;
       issues.push({
         source: "Журнал выпуска",
         row: i + 2,
@@ -111,90 +83,21 @@ export function reconcilePrinting(index, system, journal) {
       });
       return;
     }
-    events.push(
-      event(
-        "journal:" + id,
-        order,
-        r[8],
-        employee,
-        date,
-        quantity,
-        area,
-        "Журнал выпуска",
-      ),
-    );
+    events.push({
+      id: "journal:" + id,
+      uid: order.uid,
+      roll: String(r[8] || ""),
+      employee,
+      date,
+      quantity,
+      area,
+      article: order.article,
+      sheetId: order.sheetId,
+      sheetName: order.sheetName,
+      source: "Журнал выпуска",
+    });
   });
-  system.forEach(function (r, i) {
-    if (r[3] !== true) return;
-    var id = String(r[8] || ""),
-      order = ritmBridgeResolve_(index, r[0]),
-      employee = ritmBridgeEmployee_(r[10]),
-      date = ritmBridgeDay_(r[9]),
-      quantity = ritmBridgeNumber_(r[7]),
-      area = ritmBridgeNumber_(r[11]),
-      errors = [];
-    if (!id || rollCounts[id] > 1) errors.push("Нет уникального ID рулона");
-    if (!order) errors.push("Заказ не найден");
-    if (!employee) errors.push("Неизвестный сотрудник");
-    if (!date) errors.push("Нет даты");
-    if (!Number.isInteger(quantity) || quantity <= 0 || area <= 0)
-      errors.push("Нет количества или площади");
-    if (errors.length) {
-      issues.push({
-        source: "_SYSTEM_ROLLS",
-        row: i + 2,
-        message: errors.join("; "),
-      });
-      return;
-    }
-    var logged = coverage[id];
-    if (invalidRolls[id]) return;
-    // Automatic journal rows round to 3 decimals. Retain the original stored roll area at completion.
-    if (
-      logged &&
-      logged.quantity === quantity &&
-      Math.abs(logged.area - area) <= 0.001
-    ) {
-      var auto = events.find(function (e) {
-        return (
-          e.id === "journal:AUTO_PRINT_" + id &&
-          e.uid === order.uid &&
-          e.employee === employee &&
-          e.date === date
-        );
-      });
-      if (auto) {
-        auto.area += area - logged.area;
-        logged.area = area;
-      }
-    }
-    if (logged) {
-      if (logged.quantity > quantity || logged.area > area + 0.001) {
-        issues.push({
-          source: "_SYSTEM_ROLLS",
-          row: i + 2,
-          message: "В журнале выпуск больше полного рулона",
-        });
-        return;
-      }
-      quantity -= logged.quantity;
-      area -= logged.area;
-    }
-    if (quantity > 0 && area > 0.0000001)
-      events.push(
-        event(
-          "roll:" + id,
-          order,
-          r[1],
-          employee,
-          date,
-          quantity,
-          area,
-          logged ? "Остаток выполненного рулона" : "_SYSTEM_ROLLS",
-        ),
-      );
-  });
-  return { events: events, issues: issues };
+  return { events, issues };
 }
 
 export const SHEET_ID = "1eNdUuk-2l83Pgv95LyqYKuOOfhAsEMm5tKLbhWBJiC4";
@@ -310,7 +213,6 @@ export function indexOrders(sheets) {
 export async function loadPrinting(fetcher = fetch) {
   const descriptors = [
     ...SUPPLY_SHEETS.map(([gid, name]) => ({ gid, name })),
-    { gid: 86586324, name: "_SYSTEM_ROLLS" },
     { gid: 725126844, name: "Журнал выпуска" },
   ];
   const exports = await Promise.all(
@@ -323,27 +225,24 @@ export async function loadPrinting(fetcher = fetch) {
       return { ...s, rows: parseCsv(await response.text()) };
     }),
   );
-  const index = indexOrders(exports.slice(0, 11)),
-    system = exports[11].rows,
-    journal = exports[12].rows;
+  const index = indexOrders(exports.slice(0, SUPPLY_SHEETS.length)),
+    journal = exports[SUPPLY_SHEETS.length].rows;
+  const expected = {
+    0: "ID записи",
+    1: "Дата",
+    2: "Сотрудник",
+    3: "Операция",
+    7: "UID заказа",
+    9: "Сделано, шт.",
+    11: "Выпуск, м²",
+  };
   if (
-    system[0]?.[8] !== "ROLL_ID" ||
-    system[0]?.[11] !== "PRINT_AREA" ||
-    journal[0]?.[14] !== "ID рулона"
+    Object.entries(expected).some(
+      ([col, header]) => journal[0]?.[col] !== header,
+    )
   )
     throw new Error("Printing schema changed");
-  const facts = reconcilePrinting(
-    index,
-    system
-      .slice(1)
-      .filter((r) => r[0])
-      .map((r) => {
-        const x = r.slice();
-        x[3] = r[3] === "TRUE" || r[3] === "ИСТИНА";
-        return x;
-      }),
-    journal.slice(1).filter((r) => r[0]),
-  );
+  const facts = collectJournalPrinting(index, journal.slice(1));
   return {
     ok: true,
     schemaVersion: 2,
