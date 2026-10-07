@@ -764,23 +764,25 @@ export function App() {
           </div>
         </header>
         <div className="context-bar">
-          <span>
-            {mode === "demo" ? (
-              <>Показан демонстрационный пример на {shortDate(date)}.</>
-            ) : (
-              <>
-                {live.loading
-                  ? "Читаю рабочую таблицу…"
-                  : live.error
-                    ? live.value
-                      ? "Обновление не удалось · показаны последние полученные данные"
-                      : "Таблица недоступна"
-                    : live.value
-                      ? `Печать подключена · ${live.value.sheets.length} листов · обновлено ${new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" }).format(new Date(live.value.updatedAt))} · автообновление 5 мин`
-                      : "Подключаю печать…"}
-              </>
-            )}
-          </span>
+          {page !== "sources" && (
+            <span>
+              {mode === "demo" ? (
+                <>Показан демонстрационный пример на {shortDate(date)}.</>
+              ) : (
+                <>
+                  {live.loading
+                    ? "Читаю рабочую таблицу…"
+                    : live.error
+                      ? live.value
+                        ? "Обновление не удалось · показаны последние полученные данные"
+                        : "Таблица недоступна"
+                      : live.value
+                        ? `Печать подключена · ${live.value.sheets.length} листов · обновлено ${new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" }).format(new Date(live.value.updatedAt))} · автообновление 5 мин`
+                        : "Подключаю печать…"}
+                </>
+              )}
+            </span>
+          )}
           <div>
             <select
               aria-label="Режим данных"
@@ -1951,71 +1953,6 @@ export function App() {
         )}
         {page === "sources" && (
           <>
-            <Notice>
-              Печать подключена к «СЕЗОННАЯ ПЕЧАТЬ КРАСНОЕ ЗДАНИЕ». Сборщики и
-              склад пока используют загрузку CSV. Таблица читается при открытии,
-              по кнопке «Обновить» и раз в 5 минут, пока RITM открыт.
-            </Notice>
-            <section className="panel">
-              <div className="panel-heading">
-                <h2>Рабочая таблица печати</h2>
-                <Badge
-                  tone={
-                    live.error ? "warning" : live.value ? "success" : "neutral"
-                  }
-                >
-                  {live.loading
-                    ? "Обновление"
-                    : live.error
-                      ? "Ошибка обновления"
-                      : live.value
-                        ? "Подключено"
-                        : "Подключение"}
-                </Badge>
-              </div>
-              <p>
-                {live.value
-                  ? `${live.value.sheets.length} листов · ${live.value.supplies.length} заказов · ${live.value.events.length} записей выпуска`
-                  : "Ожидаю чтения таблицы"}
-              </p>
-              {live.value && (
-                <p>
-                  Последнее успешное чтение:{" "}
-                  {new Intl.DateTimeFormat("ru-RU", {
-                    dateStyle: "short",
-                    timeStyle: "short",
-                    timeZone: "Europe/Moscow",
-                  }).format(new Date(live.value.updatedAt))}{" "}
-                  (Москва)
-                </p>
-              )}
-              {live.error && <Notice tone="warning">{live.error}</Notice>}
-              <div className="source-actions">
-                {sourceLink("printing")}
-                <Button
-                  disabled={live.loading}
-                  onClick={() => void live.reload()}
-                >
-                  Обновить таблицу
-                </Button>
-              </div>
-              {!!live.value?.issues.length && (
-                <DataTable
-                  rows={live.value.issues}
-                  rowKey={(r) => `${r.source}:${r.row}:${r.message}`}
-                  label="Записи для сверки"
-                  columns={[
-                    { id: "source", label: "Лист", render: (r) => r.source },
-                    { id: "row", label: "Строка", render: (r) => r.row },
-                    {
-                      id: "message",
-                      label: "Причина",
-                      render: (r) => r.message,
-                    },
-                  ]}
-                />
-              )}
-            </section>
             <div className="source-grid">
               {sources.map((s) => (
                 <section className="panel source-card" key={s.id}>
@@ -2061,7 +1998,7 @@ export function App() {
                         ? "Журнал выпуска · площадь и сотрудник по каждой записи о печати."
                         : "Готовый товар с разбивкой по ячейкам."}
                   </p>
-                  {s.state === "imported" && (
+                  {s.state === "imported" && s.id !== "printing" && (
                     <div className="source-facts">
                       <b>{num(s.rows || 0)} строк</b>
                       <small>
@@ -2074,66 +2011,129 @@ export function App() {
                       </small>
                     </div>
                   )}
-                  <div className="source-url">
-                    {s.url ? (
-                      <a href={s.url} target="_blank" rel="noreferrer">
-                        Открыть Google-таблицу
-                        <ArrowSquareOut size={15} />
-                      </a>
+                  {s.id === "printing" && (
+                    <div className="source-facts">
+                      <b>
+                        {live.value
+                          ? `${live.value.sheets.length} листов · ${live.value.supplies.length} заказов · ${live.value.events.length} записей выпуска`
+                          : live.loading
+                            ? "Читаю таблицу…"
+                            : "Ожидаю чтения таблицы"}
+                      </b>
+                      {live.value && (
+                        <small>
+                          Последнее успешное чтение:{" "}
+                          {new Intl.DateTimeFormat("ru-RU", {
+                            dateStyle: "short",
+                            timeStyle: "short",
+                            timeZone: "Europe/Moscow",
+                          }).format(new Date(live.value.updatedAt))}{" "}
+                          (Москва)
+                        </small>
+                      )}
+                    </div>
+                  )}
+                  {s.id === "printing" && live.error && (
+                    <Notice tone="warning">{live.error}</Notice>
+                  )}{" "}
+                  {s.id !== "printing" && (
+                    <div className="source-url">
+                      {s.url ? (
+                        <a href={s.url} target="_blank" rel="noreferrer">
+                          Открыть Google-таблицу
+                          <ArrowSquareOut size={15} />
+                        </a>
+                      ) : (
+                        <span>Ссылка не задана</span>
+                      )}
+                    </div>
+                  )}
+                  <div className="source-actions">
+                    {s.id === "printing" ? (
+                      <>
+                        {sourceLink("printing")}
+                        <Button
+                          disabled={live.loading}
+                          onClick={() => void live.reload()}
+                        >
+                          Обновить таблицу
+                        </Button>
+                      </>
                     ) : (
-                      <span>Ссылка не задана</span>
+                      <>
+                        <Button
+                          onClick={() => {
+                            setSourceEdit(s.id);
+                            setUrlDraft(s.url);
+                            setImportError("");
+                          }}
+                        >
+                          Настроить ссылку
+                        </Button>
+                        <Button kind="primary" onClick={() => openImport(s.id)}>
+                          <UploadSimple size={17} />
+                          Загрузить CSV
+                        </Button>
+                      </>
                     )}
                   </div>
-                  <div className="source-actions">
-                    <Button
+                  {s.id === "printing" && !!live.value?.issues.length && (
+                    <DataTable
+                      rows={live.value.issues}
+                      rowKey={(r) => `${r.source}:${r.row}:${r.message}`}
+                      label="Записи для сверки"
+                      columns={[
+                        {
+                          id: "source",
+                          label: "Лист",
+                          render: (r) => r.source,
+                        },
+                        { id: "row", label: "Строка", render: (r) => r.row },
+                        {
+                          id: "message",
+                          label: "Причина",
+                          render: (r) => r.message,
+                        },
+                      ]}
+                    />
+                  )}
+                  {s.id !== "printing" && (
+                    <button
+                      className="text-button"
                       onClick={() => {
-                        setSourceEdit(s.id);
-                        setUrlDraft(s.url);
-                        setImportError("");
+                        const fields = importFields[s.id];
+                        const examples: Record<Kind, string[]> = {
+                          assembly: [
+                            "OP-001",
+                            "Анна Иванова",
+                            ANCHOR,
+                            "ST0021.A7447",
+                            "Упаковка",
+                            "150",
+                            "250",
+                          ],
+                          printing: [
+                            "NY-001-Д1",
+                            "Дмитрий",
+                            ANCHOR,
+                            "ST0021.A7447",
+                            "200",
+                            "18,6",
+                            "Красное здание",
+                          ],
+                          stock: ["ST0021.A7447", "Б-01-03", "200", ANCHOR],
+                        };
+                        download(
+                          `ritm-${s.id}-template.csv`,
+                          fields.map((f) => f.label).join(";") +
+                            "\n" +
+                            examples[s.id].join(";"),
+                        );
                       }}
                     >
-                      Настроить ссылку
-                    </Button>
-                    <Button kind="primary" onClick={() => openImport(s.id)}>
-                      <UploadSimple size={17} />
-                      Загрузить CSV
-                    </Button>
-                  </div>
-                  <button
-                    className="text-button"
-                    onClick={() => {
-                      const fields = importFields[s.id];
-                      const examples: Record<Kind, string[]> = {
-                        assembly: [
-                          "OP-001",
-                          "Анна Иванова",
-                          ANCHOR,
-                          "ST0021.A7447",
-                          "Упаковка",
-                          "150",
-                          "250",
-                        ],
-                        printing: [
-                          "NY-001-Д1",
-                          "Дмитрий",
-                          ANCHOR,
-                          "ST0021.A7447",
-                          "200",
-                          "18,6",
-                          "Красное здание",
-                        ],
-                        stock: ["ST0021.A7447", "Б-01-03", "200", ANCHOR],
-                      };
-                      download(
-                        `ritm-${s.id}-template.csv`,
-                        fields.map((f) => f.label).join(";") +
-                          "\n" +
-                          examples[s.id].join(";"),
-                      );
-                    }}
-                  >
-                    Скачать пример CSV
-                  </button>
+                      Скачать пример CSV
+                    </button>
+                  )}
                 </section>
               ))}
             </div>
