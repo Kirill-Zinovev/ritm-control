@@ -1713,3 +1713,20 @@ td small {
     background: var(--primary-hover);
   }
 }
+
+/* RITM is used on a workstation monitor: keep navigation anchored on the left. */
+@media (max-width: 950px) {
+  .sidebar,
+  .sidebar.open {
+    transform: none;
+  }
+  .sidebar-scrim {
+    display: none;
+  }
+  .app main {
+    margin-left: 200px;
+  }
+  .mobile-menu {
+    display: none;
+  }
+}
