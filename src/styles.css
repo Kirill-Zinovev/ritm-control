@@ -1680,3 +1680,36 @@ td small {
 .table-scroll:focus-visible {
   outline-offset: -3px;
 }
+
+/* Keep the desktop navigation visible in narrower PC and embedded Site windows. */
+@media (min-width: 769px) and (max-width: 950px) {
+  .sidebar,
+  .sidebar.open {
+    transform: none;
+  }
+  .sidebar-scrim {
+    display: none;
+  }
+  .app main {
+    margin-left: 200px;
+  }
+  .mobile-menu {
+    display: none;
+  }
+}
+
+/* On phone-sized screens, make the drawer control easy to spot. */
+@media (max-width: 768px) {
+  .mobile-menu {
+    display: inline-flex;
+    min-height: 42px;
+    padding: 9px 13px;
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+    font-weight: 650;
+  }
+  .mobile-menu:hover:not(:disabled) {
+    background: var(--primary-hover);
+  }
+}
