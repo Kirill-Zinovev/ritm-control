@@ -1,8 +1,9 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import worker from "./worker/index.js";
 
 export default defineConfig({
-  esbuild: { tsconfigRaw: { compilerOptions: { jsx: 'automatic' } } },
+  esbuild: { tsconfigRaw: { compilerOptions: { jsx: "automatic" } } },
   build: {
     outDir: "dist/client",
   },
@@ -16,5 +17,28 @@ export default defineConfig({
       clientFiles: ["./src/main.jsx"],
     },
   },
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      name: "ritm-printing-api",
+      configureServer(server) {
+        server.middlewares.use("/api/printing", async (req, res) => {
+          try {
+            const response = await worker.fetch(
+              new Request("http://localhost/api/printing", {
+                method: req.method || "GET",
+              }),
+              {},
+            );
+            res.statusCode = response.status;
+            response.headers.forEach((v, k) => res.setHeader(k, v));
+            res.end(await response.text());
+          } catch {
+            res.statusCode = 502;
+            res.end(JSON.stringify({ ok: false, error: "source_unavailable" }));
+          }
+        });
+      },
+    },
+  ],
 });

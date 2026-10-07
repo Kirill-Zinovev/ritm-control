@@ -1,12 +1,40 @@
+import { loadPrinting } from "./printing.js";
 export default {
   async fetch(request, env) {
+    const url = new URL(request.url);
+    if (url.pathname === "/api/printing") {
+      const headers = {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+      };
+      if (request.method !== "GET")
+        return new Response(
+          JSON.stringify({ ok: false, error: "method_not_allowed" }),
+          { status: 405, headers: { ...headers, allow: "GET" } },
+        );
+      try {
+        return new Response(JSON.stringify(await loadPrinting()), { headers });
+      } catch (error) {
+        console.error("printing_source_error", error.message);
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error: "source_unavailable",
+            message:
+              "Не удалось прочитать рабочую таблицу. Повторите обновление.",
+          }),
+          { status: 502, headers },
+        );
+      }
+    }
     const response = await env.ASSETS.fetch(request);
     const acceptsHtml = request.headers.get("accept")?.includes("text/html");
-
-    if (response.status !== 404 || !acceptsHtml || !["GET", "HEAD"].includes(request.method)) {
+    if (
+      response.status !== 404 ||
+      !acceptsHtml ||
+      !["GET", "HEAD"].includes(request.method)
+    )
       return response;
-    }
-
     const indexUrl = new URL(request.url);
     indexUrl.pathname = "/index.html";
     indexUrl.search = "";

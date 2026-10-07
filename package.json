@@ -7,7 +7,7 @@
     "dev": "vite --configLoader native",
     "build": "vite build --configLoader native && node scripts/prepare-sites-build.mjs",
     "preview": "vite preview",
-    "test:sites": "node --test tests/sites-worker.test.mjs",
+    "test:sites": "node --test tests/sites-worker.test.mjs tests/printing.test.mjs",
     "typecheck": "tsc --noEmit",
     "test:domain": "node scripts/test-domain.mjs",
     "format": "prettier --write src tests scripts tsconfig.json DESIGN.md UX-CONTRACT.md README.md",

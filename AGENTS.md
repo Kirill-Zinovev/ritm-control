@@ -11,3 +11,7 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 ## Workstation layout
 
 RITM is used only on workstation monitors. Keep the full navigation permanently visible on the left; do not collapse it into a mobile menu. This is a user requirement from 2026-10-07.
+
+## Printing data
+
+Printing reads the seasonal red-building spreadsheet on the server. Each of the 11 registered working tabs is a separate delivery. Employee aliases: п = Павел, д = Дмитрий, а = Андрей. Planned area comes from J and planned pieces from O. KPI uses attributable dated production facts, reconciles partial journal output with completed rolls, and does not invent historical roll allocations. Include rows hidden by filters. New supply tabs must be registered in worker/printing.js. Poll while the page is open every 5 minutes and retain the previous successful result after a read error.

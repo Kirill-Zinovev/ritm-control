@@ -26,6 +26,7 @@ export interface Work {
 }
 export interface Roll {
   id: string;
+  roll?: string;
   employee: string;
   date: string;
   time: string;

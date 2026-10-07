@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { build } from "esbuild";
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,7 +16,14 @@ for (const file of [index, worker, hosting]) {
 
 mkdirSync(path.join(dist, "server"), { recursive: true });
 mkdirSync(path.join(dist, ".openai"), { recursive: true });
-copyFileSync(worker, path.join(dist, "server", "index.js"));
+await build({
+  entryPoints: [worker],
+  outfile: path.join(dist, "server", "index.js"),
+  bundle: true,
+  format: "esm",
+  platform: "browser",
+  target: "es2022",
+});
 copyFileSync(hosting, path.join(dist, ".openai", "hosting.json"));
 
 console.log(

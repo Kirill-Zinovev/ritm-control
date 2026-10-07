@@ -45,6 +45,12 @@ import {
   type Supply,
 } from "./model";
 import { demoDataset, sources as sourceSeed } from "./demo";
+import {
+  useLivePrinting,
+  printingDataset,
+  PRINTING_URL,
+  PRINTERS,
+} from "./livePrinting";
 import { importFields, importRows } from "./importer";
 import {
   Badge,
@@ -79,7 +85,7 @@ const TITLES: Record<Page, string> = {
 const SUBTITLES: Record<Page, string> = {
   overview: "Вся смена на одном экране",
   assembly: "Дневная цель — коэффициент не ниже 1,00",
-  printing: "Выработка сотрудников по завершённым рулонам",
+  printing: "Фактический выпуск печатников · Красное здание",
   production: "План и выполненное по каждому артикулу",
   stock: "Готовый товар, ячейки хранения и свободный остаток",
   supplies: "Состав, сроки и готовность к отгрузке",
@@ -115,16 +121,25 @@ function download(name: string, text: string, type = "text/csv;charset=utf-8") {
 }
 export function App() {
   const [page, setPage] = useState<Page>(initialPage);
-  const [date, setDate] = useState(ANCHOR);
+  const [date, setDate] = useState(() =>
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Europe/Moscow",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date()),
+  );
   const [period, setPeriod] = useState<Period>("day");
   const [query, setQuery] = useState("");
   const [site, setSite] = useState("Все участки");
-  const [mode, setMode] = useState<"demo" | "imported">("demo");
+  const [mode, setMode] = useState<"demo" | "imported">("imported");
   const [demo, setDemo] = useState(demoDataset);
   const [real, setReal] = useState<Dataset>(() =>
     readStorage("ritm-real-v1", emptyDataset()),
   );
-  const data = mode === "demo" ? demo : real;
+  const live = useLivePrinting();
+  const data = mode === "demo" ? demo : printingDataset(real, live.value);
+  const [supplyFilter, setSupplyFilter] = useState("all");
   const [sources, setSources] = useState<Source[]>(() =>
     readStorage("ritm-sources-v1", sourceSeed),
   );
@@ -208,6 +223,10 @@ export function App() {
     }
   };
   const refresh = () => {
+    if (mode === "imported") {
+      void live.reload();
+      return;
+    }
     if (busy) return;
     setBusy(true);
     refreshTimer.current = setTimeout(() => {
@@ -241,12 +260,28 @@ export function App() {
   const rolls = data.rolls.filter(
     (r) =>
       inPeriod(r.date, date, period) &&
-      (site === "Все участки" || r.site === site),
+      (site === "Все участки" || r.site === site) &&
+      (mode === "demo" || supplyFilter === "all" || r.source === supplyFilter),
   );
   const area = rolls.reduce((s, r) => s + r.area, 0);
-  const printerPeople = data.employees.filter((e) =>
-    rolls.some((r) => r.employee === e.id),
-  );
+  const printerPeople =
+    mode === "imported"
+      ? PRINTERS
+      : data.employees.filter((e) => rolls.some((r) => r.employee === e.id));
+  const supplyPrintingRows = (live.value?.sheets || []).map((sheet) => {
+    const orders = live.value!.supplies.filter(
+      (o) => o.sheetId === sheet.sheetId,
+    );
+    const facts = live.value!.events.filter((e) => e.sheetId === sheet.sheetId);
+    return {
+      ...sheet,
+      orders: orders.length,
+      plan: orders.reduce((n, o) => n + o.quantity, 0),
+      plannedArea: orders.reduce((n, o) => n + o.plannedArea, 0),
+      quantity: facts.reduce((n, e) => n + e.quantity, 0),
+      area: facts.reduce((n, e) => n + e.area, 0),
+    };
+  });
   const totals = data.supplies.reduce(
     (s, v) => {
       const t = lineTotals(v);
@@ -439,7 +474,10 @@ export function App() {
     }
   };
   const sourceLink = (kind: Kind) => {
-    const url = sources.find((s) => s.id === kind)?.url;
+    const url =
+      kind === "printing"
+        ? PRINTING_URL
+        : sources.find((s) => s.id === kind)?.url;
     return url ? (
       <a
         className="button secondary"
@@ -454,6 +492,52 @@ export function App() {
       <Button onClick={() => go("sources")}>Настроить источник</Button>
     );
   };
+  const liveSupplyPanel = (
+    <section className="panel">
+      <div className="panel-heading">
+        <h2>Печать по поставкам</h2>
+        <small>За всё время · план из J и O · факт из записей выпуска</small>
+      </div>
+      <DataTable
+        rows={supplyPrintingRows}
+        rowKey={(r) => String(r.sheetId)}
+        label="Печать всех поставок"
+        pageSize={25}
+        columns={[
+          {
+            id: "name",
+            label: "Поставка",
+            render: (r) => (
+              <a
+                href={`${PRINTING_URL}#gid=${r.sheetId}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {r.name}
+              </a>
+            ),
+          },
+          { id: "orders", label: "Заказов", render: (r) => num(r.orders) },
+          { id: "plan", label: "План, шт.", render: (r) => num(r.plan) },
+          {
+            id: "plannedArea",
+            label: "План, м²",
+            render: (r) => num(r.plannedArea, 2),
+          },
+          {
+            id: "quantity",
+            label: "Учтено, шт.",
+            render: (r) => num(r.quantity),
+          },
+          {
+            id: "area",
+            label: "Учтено, м²",
+            render: (r) => <strong>{num(r.area, 2)}</strong>,
+          },
+        ]}
+      />
+    </section>
+  );
   const metric = (
     label: string,
     value: string,
@@ -640,7 +724,11 @@ export function App() {
               </button>
               <h1>{TITLES[page]}</h1>
               <Badge tone={mode === "demo" ? "warning" : "info"}>
-                {mode === "demo" ? "Демо-данные" : "Из файлов"}
+                {mode === "demo"
+                  ? "Демо-данные"
+                  : live.value
+                    ? "Рабочие данные"
+                    : "Подключение"}
               </Badge>
             </div>
             <p>{SUBTITLES[page]}</p>
@@ -678,14 +766,18 @@ export function App() {
         <div className="context-bar">
           <span>
             {mode === "demo" ? (
-              <>
-                Показан пример на {shortDate(date)}. Рабочие таблицы ещё не
-                подключены.
-              </>
+              <>Показан демонстрационный пример на {shortDate(date)}.</>
             ) : (
               <>
-                Используются загруженные CSV. Автоматическое обновление ещё не
-                настроено.
+                {live.loading
+                  ? "Читаю рабочую таблицу…"
+                  : live.error
+                    ? live.value
+                      ? "Обновление не удалось · показаны последние полученные данные"
+                      : "Таблица недоступна"
+                    : live.value
+                      ? `Печать подключена · ${live.value.sheets.length} листов · обновлено ${new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" }).format(new Date(live.value.updatedAt))} · автообновление 5 мин`
+                      : "Подключаю печать…"}
               </>
             )}
           </span>
@@ -701,11 +793,11 @@ export function App() {
               }}
             >
               <option value="demo">Демонстрация</option>
-              <option value="imported">Мои данные</option>
+              <option value="imported">Рабочие данные</option>
             </select>
-            <Button disabled={busy} onClick={refresh}>
+            <Button disabled={busy || live.loading} onClick={refresh}>
               <ArrowsClockwise size={17} className={busy ? "spin" : ""} />
-              {busy ? "Обновление" : "Обновить"}
+              {busy || live.loading ? "Обновление" : "Обновить"}
             </Button>
           </div>
         </div>
@@ -713,11 +805,13 @@ export function App() {
           <>
             <div className="metrics four">
               {metric(
-                "Поставки в работе",
+                mode === "imported" ? "Листов поставок" : "Поставки в работе",
                 num(
-                  data.supplies.filter(
-                    (s) => lineTotals(s).shipped < lineTotals(s).plan,
-                  ).length,
+                  mode === "imported"
+                    ? live.value?.sheets.length || 0
+                    : data.supplies.filter(
+                        (s) => lineTotals(s).shipped < lineTotals(s).plan,
+                      ).length,
                 ),
                 Truck,
               )}
@@ -777,26 +871,28 @@ export function App() {
                   <h2>Состояние данных</h2>
                 </div>
                 <div className="issue-list">
-                  {sources.map((s) => (
-                    <button
-                      className="issue"
-                      key={s.id}
-                      onClick={() => go("sources")}
-                    >
-                      <Database size={23} />
-                      <div>
-                        <strong>{s.name}</strong>
-                        <small>
-                          {s.state === "imported"
-                            ? `Загружено ${s.rows} строк`
-                            : s.url
-                              ? "Ссылка подготовлена. Чтение ещё не настроено."
-                              : "Нужна свежая выгрузка остатков."}
-                        </small>
-                      </div>
-                      <CaretRight size={19} />
-                    </button>
-                  ))}
+                  {sources
+                    .filter((s) => s.id !== "printing")
+                    .map((s) => (
+                      <button
+                        className="issue"
+                        key={s.id}
+                        onClick={() => go("sources")}
+                      >
+                        <Database size={23} />
+                        <div>
+                          <strong>{s.name}</strong>
+                          <small>
+                            {s.state === "imported"
+                              ? `Загружено ${s.rows} строк`
+                              : s.url
+                                ? "Ссылка подготовлена. Чтение ещё не настроено."
+                                : "Нужна свежая выгрузка остатков."}
+                          </small>
+                        </div>
+                        <CaretRight size={19} />
+                      </button>
+                    ))}
                 </div>
                 <Notice>
                   Нет обновлений в таблице — повод проверить данные. Это не
@@ -1051,206 +1147,279 @@ export function App() {
         )}
         {page === "printing" && (
           <>
-            <div className="metrics three">
-              {metric("Учтено за период", num(area, 1) + " м²", Printer)}
-              {metric("Завершено рулонов", num(rolls.length), Package)}
-              {metric("Сотрудников", num(printerPeople.length), Users)}
-            </div>
-            <div className="split">
+            {mode === "imported" && live.error && (
+              <Notice tone="warning">
+                {live.error}{" "}
+                {live.value && "Показаны данные последнего успешного чтения."}
+              </Notice>
+            )}
+            {mode === "imported" && !live.value ? (
               <section className="panel">
-                <div className="panel-heading">
-                  <h2>Выработка по сотрудникам</h2>
-                  <select
-                    aria-label="Участок печати"
-                    value={site}
-                    onChange={(e) => setSite(e.target.value)}
-                  >
-                    <option>Все участки</option>
-                    {[...new Set(data.rolls.map((r) => r.site))].map((s) => (
-                      <option key={s}>{s}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="printer-rows">
-                  {printerPeople.map((e) => {
-                    const own = rolls.filter((r) => r.employee === e.id);
-                    const value = own.reduce((s, r) => s + r.area, 0);
-                    return (
-                      <button
-                        key={e.id}
-                        className={`printer-row ${printer === e.id ? "selected" : ""}`}
-                        onClick={() => setPrinter(e.id)}
-                      >
-                        <span className="avatar">{e.name[0]}</span>
-                        <strong>{e.name}</strong>
-                        <div>
-                          <b>{num(value, 1)} м²</b>
-                          <Progress
-                            value={value}
-                            plan={area}
-                            showValue={false}
-                          />
-                        </div>
-                        <small>{own.length} рулонов</small>
-                        <CaretRight size={18} />
-                      </button>
-                    );
-                  })}
-                  {!printerPeople.length && (
-                    <Empty title="Нет завершённых рулонов" />
-                  )}
-                </div>
+                <Empty
+                  title={
+                    live.loading
+                      ? "Читаю рабочую таблицу"
+                      : "Нет подключения к таблице"
+                  }
+                >
+                  {live.loading
+                    ? "Загружаю все поставки и журнал выпуска."
+                    : "Повторите обновление. Показатели появятся после успешного чтения."}
+                </Empty>
               </section>
-              <section className="panel">
-                <div className="panel-heading">
-                  <h2>По участкам</h2>
-                </div>
-                <div className="site-rows">
-                  {[...new Set(rolls.map((r) => r.site))].map((s) => {
-                    const value = rolls
-                      .filter((r) => r.site === s)
-                      .reduce((a, r) => a + r.area, 0);
-                    return (
-                      <div key={s}>
-                        <strong>{s}</strong>
-                        <b>{num(value, 1)} м²</b>
-                        <Progress value={value} plan={area} showValue={false} />
-                      </div>
-                    );
-                  })}
-                  {!rolls.length && <Empty />}
-                  <div className="site-total">
-                    <strong>Итого</strong>
-                    <b>{num(area, 1)} м²</b>
-                  </div>
-                </div>
-              </section>
-            </div>
-            <section className="panel">
-              <div className="panel-heading">
-                <h2>Динамика по дням</h2>
-                <small>Последние даты с выполненной печатью</small>
-              </div>
-              <div className="daily-strip">
-                {[
-                  ...new Set(
-                    data.rolls
-                      .filter(
-                        (r) =>
-                          r.date <= date &&
-                          (site === "Все участки" || r.site === site),
-                      )
-                      .map((r) => r.date),
-                  ),
-                ]
-                  .sort()
-                  .slice(-4)
-                  .map((d) => (
-                    <button
-                      key={d}
-                      className={d === date ? "active" : ""}
-                      onClick={() => {
-                        setDate(d);
-                        setPeriod("day");
-                      }}
+            ) : (
+              <>
+                {mode === "imported" && (
+                  <div className="panel-heading">
+                    <h2>Все поставки</h2>
+                    <select
+                      aria-label="Поставка печати"
+                      value={supplyFilter}
+                      onChange={(e) => setSupplyFilter(e.target.value)}
                     >
-                      <span>{shortDate(d)}</span>
-                      <strong>
-                        {num(
-                          data.rolls
-                            .filter(
-                              (r) =>
-                                r.date === d &&
-                                (site === "Все участки" || r.site === site),
-                            )
-                            .reduce((s, r) => s + r.area, 0),
-                          1,
-                        )}{" "}
-                        м²
-                      </strong>
-                    </button>
-                  ))}
-              </div>
-            </section>
-            <section className="panel">
-              <div className="panel-heading">
-                <h2>Рулоны сотрудника</h2>
-                <div className="table-tools">
-                  <select
-                    aria-label="Печатник"
-                    value={printer}
-                    onChange={(e) => setPrinter(e.target.value)}
-                  >
-                    <option value="all">Все сотрудники</option>
-                    {printerPeople.map((e) => (
-                      <option key={e.id} value={e.id}>
-                        {e.name}
-                      </option>
-                    ))}
-                  </select>
-                  <Search
-                    label="Артикул или номер рулона"
-                    value={query}
-                    onChange={setQuery}
-                  />
-                </div>
-              </div>
-              <DataTable
-                rows={rolls.filter(
-                  (r) =>
-                    (printer === "all" || r.employee === printer) &&
-                    contains(`${r.id} ${r.article}`),
+                      <option value="all">Все 11 поставок</option>
+                      {live.value?.sheets.map((s) => (
+                        <option key={s.sheetId} value={s.name}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 )}
-                rowKey={(r) => r.id}
-                label="Завершённые рулоны"
-                columns={[
-                  {
-                    id: "id",
-                    label: "Рулон",
-                    render: (r) => <strong>{r.id}</strong>,
-                  },
-                  { id: "article", label: "Артикул", render: (r) => r.article },
-                  {
-                    id: "employee",
-                    label: "Сотрудник",
-                    render: (r) =>
-                      data.employees.find((e) => e.id === r.employee)?.name ||
-                      "Не указан",
-                  },
-                  {
-                    id: "qty",
-                    label: "Количество, шт.",
-                    render: (r) => num(r.quantity),
-                  },
-                  {
-                    id: "area",
-                    label: "Площадь, м²",
-                    render: (r) => <strong>{num(r.area, 1)}</strong>,
-                    sort: (r) => r.area,
-                  },
-                  { id: "site", label: "Участок", render: (r) => r.site },
-                  {
-                    id: "date",
-                    label: "Завершено",
-                    render: (r) => (
-                      <>
-                        <span>{shortDate(r.date)}</span>
-                        <small>{r.time}</small>
-                      </>
-                    ),
-                    sort: (r) => r.date + r.time,
-                  },
-                ]}
-              />
-              <div className="panel-footer">
-                <small>Каждый завершённый рулон учитывается один раз.</small>
-                {sourceLink("printing")}
-              </div>
-            </section>
-            <Notice tone="warning">
-              Перепечатки: отдельный тип печати пока не учитывается. Для
-              разбивки потребуется соответствующая отметка в источнике.
-            </Notice>
+                <div className="metrics three">
+                  {metric("Учтено за период", num(area, 2) + " м²", Printer)}
+                  {metric("Записей выпуска", num(rolls.length), Package)}
+                  {metric("Сотрудников", num(printerPeople.length), Users)}
+                </div>
+                <div className="split">
+                  <section className="panel">
+                    <div className="panel-heading">
+                      <h2>Выработка по сотрудникам</h2>
+                      <select
+                        aria-label="Участок печати"
+                        value={site}
+                        onChange={(e) => setSite(e.target.value)}
+                      >
+                        <option>Все участки</option>
+                        {[...new Set(data.rolls.map((r) => r.site))].map(
+                          (s) => (
+                            <option key={s}>{s}</option>
+                          ),
+                        )}
+                      </select>
+                    </div>
+                    <div className="printer-rows">
+                      {printerPeople.map((e) => {
+                        const own = rolls.filter((r) => r.employee === e.id);
+                        const value = own.reduce((s, r) => s + r.area, 0);
+                        return (
+                          <button
+                            key={e.id}
+                            className={`printer-row ${printer === e.id ? "selected" : ""}`}
+                            onClick={() => setPrinter(e.id)}
+                          >
+                            <span className="avatar">{e.name[0]}</span>
+                            <strong>{e.name}</strong>
+                            <div>
+                              <b>{num(value, 2)} м²</b>
+                              <Progress
+                                value={value}
+                                plan={area}
+                                showValue={false}
+                              />
+                            </div>
+                            <small>{own.length} записей</small>
+                            <CaretRight size={18} />
+                          </button>
+                        );
+                      })}
+                      {!printerPeople.length && (
+                        <Empty title="Нет записей выпуска" />
+                      )}
+                    </div>
+                  </section>
+                  <section className="panel">
+                    <div className="panel-heading">
+                      <h2>По участкам</h2>
+                    </div>
+                    <div className="site-rows">
+                      {[...new Set(rolls.map((r) => r.site))].map((s) => {
+                        const value = rolls
+                          .filter((r) => r.site === s)
+                          .reduce((a, r) => a + r.area, 0);
+                        return (
+                          <div key={s}>
+                            <strong>{s}</strong>
+                            <b>{num(value, 2)} м²</b>
+                            <Progress
+                              value={value}
+                              plan={area}
+                              showValue={false}
+                            />
+                          </div>
+                        );
+                      })}
+                      {!rolls.length && <Empty />}
+                      <div className="site-total">
+                        <strong>Итого</strong>
+                        <b>{num(area, 2)} м²</b>
+                      </div>
+                    </div>
+                  </section>
+                </div>
+                <section className="panel">
+                  <div className="panel-heading">
+                    <h2>Динамика по дням</h2>
+                    <small>Последние даты с выполненной печатью</small>
+                  </div>
+                  <div className="daily-strip">
+                    {[
+                      ...new Set(
+                        data.rolls
+                          .filter(
+                            (r) =>
+                              r.date <= date &&
+                              (site === "Все участки" || r.site === site),
+                          )
+                          .map((r) => r.date),
+                      ),
+                    ]
+                      .sort()
+                      .slice(-4)
+                      .map((d) => (
+                        <button
+                          key={d}
+                          className={d === date ? "active" : ""}
+                          onClick={() => {
+                            setDate(d);
+                            setPeriod("day");
+                          }}
+                        >
+                          <span>{shortDate(d)}</span>
+                          <strong>
+                            {num(
+                              data.rolls
+                                .filter(
+                                  (r) =>
+                                    r.date === d &&
+                                    (site === "Все участки" || r.site === site),
+                                )
+                                .reduce((s, r) => s + r.area, 0),
+                              1,
+                            )}{" "}
+                            м²
+                          </strong>
+                        </button>
+                      ))}
+                  </div>
+                </section>
+                <section className="panel">
+                  <div className="panel-heading">
+                    <h2>Выпуск сотрудника</h2>
+                    <div className="table-tools">
+                      <select
+                        aria-label="Печатник"
+                        value={printer}
+                        onChange={(e) => setPrinter(e.target.value)}
+                      >
+                        <option value="all">Все сотрудники</option>
+                        {printerPeople.map((e) => (
+                          <option key={e.id} value={e.id}>
+                            {e.name}
+                          </option>
+                        ))}
+                      </select>
+                      <Search
+                        label="Артикул или номер рулона"
+                        value={query}
+                        onChange={setQuery}
+                      />
+                    </div>
+                  </div>
+                  <DataTable
+                    rows={rolls.filter(
+                      (r) =>
+                        (printer === "all" || r.employee === printer) &&
+                        contains(`${r.roll || r.id} ${r.article}`),
+                    )}
+                    rowKey={(r) => r.id}
+                    label="Фактический выпуск"
+                    columns={[
+                      {
+                        id: "id",
+                        label: "Рулон",
+                        render: (r) => <strong>{r.roll || r.id}</strong>,
+                      },
+                      {
+                        id: "article",
+                        label: "Артикул",
+                        render: (r) => r.article,
+                      },
+                      {
+                        id: "employee",
+                        label: "Сотрудник",
+                        render: (r) =>
+                          data.employees.find((e) => e.id === r.employee)
+                            ?.name || "Не указан",
+                      },
+                      {
+                        id: "qty",
+                        label: "Количество, шт.",
+                        render: (r) => num(r.quantity),
+                      },
+                      {
+                        id: "area",
+                        label: "Площадь, м²",
+                        render: (r) => <strong>{num(r.area, 2)}</strong>,
+                        sort: (r) => r.area,
+                      },
+                      {
+                        id: "site",
+                        label: "Поставка",
+                        render: (r) => <small>{r.source}</small>,
+                      },
+                      {
+                        id: "date",
+                        label: "Дата выпуска",
+                        render: (r) => (
+                          <>
+                            <span>{shortDate(r.date)}</span>
+                            <small>{r.time}</small>
+                          </>
+                        ),
+                        sort: (r) => r.date + r.time,
+                      },
+                    ]}
+                  />
+                  <div className="panel-footer">
+                    <small>
+                      Частичный выпуск и завершение рулона сверяются без
+                      удвоения площади.
+                    </small>
+                    {sourceLink("printing")}
+                  </div>
+                </section>
+                {mode === "imported" && liveSupplyPanel}
+                {mode === "imported" && (
+                  <Notice>
+                    В KPI попадает выпуск с сотрудником, датой и площадью.
+                    Старые отметки «Готов» и названия рулонов без истории
+                    выпуска требуют сверки; ноль означает отсутствие
+                    подтверждённых записей.
+                  </Notice>
+                )}
+                {mode === "imported" && !!live.value?.issues.length && (
+                  <Notice tone="warning">
+                    Требуют сверки: {live.value.issues.length} записей.
+                    Подробности в «Источниках».
+                  </Notice>
+                )}
+                <Notice tone="warning">
+                  Перепечатки: отдельный тип печати пока не учитывается. Для
+                  разбивки потребуется соответствующая отметка в источнике.
+                </Notice>
+              </>
+            )}
           </>
         )}
         {page === "production" && (
@@ -1423,334 +1592,431 @@ export function App() {
         )}
         {page === "supplies" && (
           <>
-            <div className="toolbar">
-              <select
-                aria-label="Маркетплейс поставки"
-                value={market}
-                onChange={(e) => setMarket(e.target.value)}
-              >
-                <option>Все маркетплейсы</option>
-                <option>Ozon</option>
-                <option>WB</option>
-              </select>
-              <Button kind="primary" onClick={startCreate}>
-                <Plus size={18} />
-                Добавить поставку
-              </Button>
-            </div>
-            <div className="supplies-layout">
-              <section className="panel supplies-list">
-                <div
-                  className="segments list-tabs"
-                  role="group"
-                  aria-label="Состояние поставок"
-                >
-                  <button
-                    aria-pressed={!completed}
-                    className={!completed ? "selected" : ""}
-                    onClick={() => setCompleted(false)}
+            {mode === "imported" &&
+              (live.value ? (
+                liveSupplyPanel
+              ) : (
+                <section className="panel">
+                  <Empty
+                    title={
+                      live.loading
+                        ? "Читаю поставки"
+                        : "Нет подключения к таблице"
+                    }
                   >
-                    В работе
-                  </button>
-                  <button
-                    aria-pressed={completed}
-                    className={completed ? "selected" : ""}
-                    onClick={() => setCompleted(true)}
-                  >
-                    Завершённые
-                  </button>
-                </div>
-                <Search
-                  label="Найти поставку"
-                  value={query}
-                  onChange={setQuery}
-                />
-                {data.supplies
-                  .filter(
-                    (s) =>
-                      (market === "Все маркетплейсы" || s.market === market) &&
-                      (completed
-                        ? lineTotals(s).shipped >= lineTotals(s).plan
-                        : lineTotals(s).shipped < lineTotals(s).plan) &&
-                      contains(s.name + " " + s.id),
-                  )
-                  .map((s) => {
-                    const t = lineTotals(s);
-                    return (
-                      <button
-                        className={`supply-list-item ${supply?.id === s.id ? "selected" : ""}`}
-                        key={s.id}
-                        onClick={() => setSupplyId(s.id)}
-                      >
-                        <Badge tone={s.market === "Ozon" ? "ozon" : "wb"}>
-                          {s.market}
-                        </Badge>
-                        <div>
-                          <strong>
-                            {s.market} · {s.name}
-                          </strong>
-                          <small>{s.id}</small>
-                          <span>Прибытие {shortDate(s.arrival)}</span>
-                          <small>
-                            Упаковано <b>{num((t.packed / t.plan) * 100)}%</b>
-                          </small>
-                          <Progress
-                            value={t.packed}
-                            plan={t.plan}
-                            showValue={false}
-                          />
-                        </div>
-                        <CaretRight size={17} />
-                      </button>
-                    );
-                  })}
-                {!data.supplies.some(
-                  (s) =>
-                    (market === "Все маркетплейсы" || s.market === market) &&
-                    (completed
-                      ? lineTotals(s).shipped >= lineTotals(s).plan
-                      : lineTotals(s).shipped < lineTotals(s).plan) &&
-                    contains(s.name + " " + s.id),
-                ) && (
-                  <Empty title="Нет поставок">
-                    Добавь поставку или измени фильтры.
+                    {live.error || "Загружаю все листы рабочей таблицы."}
                   </Empty>
-                )}
-              </section>
-              <div className="supply-detail">
-                {supply ? (
-                  <>
-                    <section className="panel">
-                      <div className="panel-heading">
-                        <div className="supply-detail-title">
-                          <Badge
-                            tone={supply.market === "Ozon" ? "ozon" : "wb"}
-                          >
-                            {supply.market}
-                          </Badge>
-                          <div>
-                            <h2>
-                              {supply.market} · {supply.name}
-                            </h2>
-                            <p>Поставка {supply.id}</p>
-                          </div>
-                        </div>
-                        <Badge tone="success">
-                          {lineTotals(supply).shipped >= lineTotals(supply).plan
-                            ? "Отправлена"
-                            : "В работе"}
-                        </Badge>
-                      </div>
-                      <div className="metadata">
-                        {[
-                          ["Магазин", supply.store],
-                          ["Склад назначения", supply.destination],
-                          ["Прибытие", shortDate(supply.arrival)],
-                          ["Готовность к отправке", shortDate(supply.ready)],
-                          ["Ответственный", supply.owner],
-                        ].map(([label, value]) => (
-                          <div key={label}>
-                            <small>{label}</small>
-                            <strong>{value}</strong>
-                          </div>
-                        ))}
-                      </div>
-                    </section>
-                    <section className="panel">
-                      <div className="panel-heading">
-                        <h2>Готовность по этапам</h2>
-                      </div>
-                      <div className="stage-grid">
-                        {(["printed", "cut", "packed", "shipped"] as const).map(
-                          (key, i) => {
-                            const t = lineTotals(supply);
-                            const Icon = [Printer, Scissors, Package, Truck][i];
-                            return (
-                              <div className="stage" key={key}>
-                                <Icon size={25} />
-                                <div>
-                                  <strong>
-                                    {
-                                      [
-                                        "Печать",
-                                        "Резка",
-                                        "Упаковка",
-                                        "Отправлено",
-                                      ][i]
-                                    }
-                                  </strong>
-                                  <Progress value={t[key]} plan={t.plan} />
-                                </div>
-                              </div>
-                            );
-                          },
-                        )}
-                      </div>
-                      <Notice>
-                        Срок готовности задан вручную. Прогноз завершения ещё не
-                        рассчитывается.
-                      </Notice>
-                    </section>
-                    <section className="panel">
-                      <div className="panel-heading">
-                        <h2>Состав поставки</h2>
-                        <Button
-                          onClick={() =>
-                            download(
-                              `${supply.id}.csv`,
-                              "Артикул;План;Напечатано;Порезано;Упаковано;Резерв\n" +
-                                supply.lines
-                                  .map((l) =>
-                                    [
-                                      l.article,
-                                      l.plan,
-                                      l.printed,
-                                      l.cut,
-                                      l.packed,
-                                      l.reserved,
-                                    ].join(";"),
-                                  )
-                                  .join("\n"),
-                            )
-                          }
-                        >
-                          <DownloadSimple size={17} />
-                          CSV
-                        </Button>
-                      </div>
-                      <DataTable
-                        rows={supply.lines}
-                        rowKey={(l) => l.article}
-                        label="Артикулы поставки"
-                        columns={[
-                          {
-                            id: "article",
-                            label: "Артикул",
-                            render: (l) => <strong>{l.article}</strong>,
-                          },
-                          {
-                            id: "plan",
-                            label: "План, шт.",
-                            render: (l) => num(l.plan),
-                          },
-                          {
-                            id: "stock",
-                            label: "Свободно на складе",
-                            render: (l) => num(freeStock(data, l.article)),
-                          },
-                          {
-                            id: "reserved",
-                            label: "Резерв",
-                            render: (l) => num(l.reserved),
-                          },
-                          {
-                            id: "print",
-                            label: "Напечатано",
-                            render: (l) => num(l.printed),
-                          },
-                          {
-                            id: "cut",
-                            label: "Порезано",
-                            render: (l) => num(l.cut),
-                          },
-                          {
-                            id: "packed",
-                            label: "Упаковано",
-                            render: (l) => num(l.packed),
-                          },
-                          {
-                            id: "rest",
-                            label: "Осталось упаковать",
-                            render: (l) => num(Math.max(0, l.plan - l.packed)),
-                          },
-                        ]}
-                      />
-                      <div className="panel-footer">
-                        <small>
-                          Резерв не увеличивает упакованное количество до
-                          подтверждения комплектования.
-                        </small>
-                        <Button
-                          onClick={() => {
-                            update(reserveSupply(data, supply.id));
-                            setToast(
-                              "Свободный товар закреплён за поставкой в приложении. Складская таблица не изменялась.",
-                            );
-                          }}
-                        >
-                          Зарезервировать свободный товар
-                        </Button>
-                      </div>
-                    </section>
-                    <div className="split">
-                      <section className="panel">
-                        <div className="panel-heading">
-                          <h2>Связь с исходными заданиями</h2>
-                        </div>
-                        <div className="source-detail">
-                          <Database size={24} />
-                          <p>
-                            {mode === "demo"
-                              ? "Связи показаны на примере."
-                              : "Автоматическая связь ещё не настроена."}
-                            <small>
-                              Для реальных поставок нужна привязка к заданиям
-                              печати и сборки.
-                            </small>
-                          </p>
-                        </div>
-                        <Button kind="ghost" onClick={() => go("sources")}>
-                          Открыть источники
-                          <CaretRight size={17} />
-                        </Button>
-                      </section>
-                      <section className="panel">
-                        <div className="panel-heading">
-                          <h2>Отгрузка и приёмка</h2>
-                        </div>
-                        <div className="shipment-stages">
-                          <span>
-                            <Package size={19} />
-                            Упаковка
-                          </span>
-                          <span>
-                            <Truck size={19} />
-                            Отправка
-                          </span>
-                          <span>
-                            <CheckCircle size={19} />
-                            Приёмка
-                          </span>
-                        </div>
-                        <Notice>
-                          Отправку и приёмку показываем после получения
-                          соответствующих данных.
-                        </Notice>
-                      </section>
+                </section>
+              ))}
+            {mode === "imported" && (
+              <Notice>
+                Каждый рабочий лист — отдельная поставка. Здесь показаны план и
+                подтверждённый выпуск печати. Порезку, упаковку и отгрузку
+                подключим отдельно.
+              </Notice>
+            )}
+            {(mode === "demo" || data.supplies.length > 0) && (
+              <>
+                <div className="toolbar">
+                  <select
+                    aria-label="Маркетплейс поставки"
+                    value={market}
+                    onChange={(e) => setMarket(e.target.value)}
+                  >
+                    <option>Все маркетплейсы</option>
+                    <option>Ozon</option>
+                    <option>WB</option>
+                  </select>
+                  <Button kind="primary" onClick={startCreate}>
+                    <Plus size={18} />
+                    Добавить поставку
+                  </Button>
+                </div>
+                <div className="supplies-layout">
+                  <section className="panel supplies-list">
+                    <div
+                      className="segments list-tabs"
+                      role="group"
+                      aria-label="Состояние поставок"
+                    >
+                      <button
+                        aria-pressed={!completed}
+                        className={!completed ? "selected" : ""}
+                        onClick={() => setCompleted(false)}
+                      >
+                        В работе
+                      </button>
+                      <button
+                        aria-pressed={completed}
+                        className={completed ? "selected" : ""}
+                        onClick={() => setCompleted(true)}
+                      >
+                        Завершённые
+                      </button>
                     </div>
-                  </>
-                ) : (
-                  <section className="panel">
-                    <Empty title="Добавь первую поставку">
-                      Укажи артикулы, количество и дату прибытия.
-                    </Empty>
-                    <Button kind="primary" onClick={startCreate}>
-                      <Plus size={18} />
-                      Добавить поставку
-                    </Button>
+                    <Search
+                      label="Найти поставку"
+                      value={query}
+                      onChange={setQuery}
+                    />
+                    {data.supplies
+                      .filter(
+                        (s) =>
+                          (market === "Все маркетплейсы" ||
+                            s.market === market) &&
+                          (completed
+                            ? lineTotals(s).shipped >= lineTotals(s).plan
+                            : lineTotals(s).shipped < lineTotals(s).plan) &&
+                          contains(s.name + " " + s.id),
+                      )
+                      .map((s) => {
+                        const t = lineTotals(s);
+                        return (
+                          <button
+                            className={`supply-list-item ${supply?.id === s.id ? "selected" : ""}`}
+                            key={s.id}
+                            onClick={() => setSupplyId(s.id)}
+                          >
+                            <Badge tone={s.market === "Ozon" ? "ozon" : "wb"}>
+                              {s.market}
+                            </Badge>
+                            <div>
+                              <strong>
+                                {s.market} · {s.name}
+                              </strong>
+                              <small>{s.id}</small>
+                              <span>Прибытие {shortDate(s.arrival)}</span>
+                              <small>
+                                Упаковано{" "}
+                                <b>{num((t.packed / t.plan) * 100)}%</b>
+                              </small>
+                              <Progress
+                                value={t.packed}
+                                plan={t.plan}
+                                showValue={false}
+                              />
+                            </div>
+                            <CaretRight size={17} />
+                          </button>
+                        );
+                      })}
+                    {!data.supplies.some(
+                      (s) =>
+                        (market === "Все маркетплейсы" ||
+                          s.market === market) &&
+                        (completed
+                          ? lineTotals(s).shipped >= lineTotals(s).plan
+                          : lineTotals(s).shipped < lineTotals(s).plan) &&
+                        contains(s.name + " " + s.id),
+                    ) && (
+                      <Empty title="Нет поставок">
+                        Добавь поставку или измени фильтры.
+                      </Empty>
+                    )}
                   </section>
-                )}
-              </div>
-            </div>
+                  <div className="supply-detail">
+                    {supply ? (
+                      <>
+                        <section className="panel">
+                          <div className="panel-heading">
+                            <div className="supply-detail-title">
+                              <Badge
+                                tone={supply.market === "Ozon" ? "ozon" : "wb"}
+                              >
+                                {supply.market}
+                              </Badge>
+                              <div>
+                                <h2>
+                                  {supply.market} · {supply.name}
+                                </h2>
+                                <p>Поставка {supply.id}</p>
+                              </div>
+                            </div>
+                            <Badge tone="success">
+                              {lineTotals(supply).shipped >=
+                              lineTotals(supply).plan
+                                ? "Отправлена"
+                                : "В работе"}
+                            </Badge>
+                          </div>
+                          <div className="metadata">
+                            {[
+                              ["Магазин", supply.store],
+                              ["Склад назначения", supply.destination],
+                              ["Прибытие", shortDate(supply.arrival)],
+                              [
+                                "Готовность к отправке",
+                                shortDate(supply.ready),
+                              ],
+                              ["Ответственный", supply.owner],
+                            ].map(([label, value]) => (
+                              <div key={label}>
+                                <small>{label}</small>
+                                <strong>{value}</strong>
+                              </div>
+                            ))}
+                          </div>
+                        </section>
+                        <section className="panel">
+                          <div className="panel-heading">
+                            <h2>Готовность по этапам</h2>
+                          </div>
+                          <div className="stage-grid">
+                            {(
+                              ["printed", "cut", "packed", "shipped"] as const
+                            ).map((key, i) => {
+                              const t = lineTotals(supply);
+                              const Icon = [Printer, Scissors, Package, Truck][
+                                i
+                              ];
+                              return (
+                                <div className="stage" key={key}>
+                                  <Icon size={25} />
+                                  <div>
+                                    <strong>
+                                      {
+                                        [
+                                          "Печать",
+                                          "Резка",
+                                          "Упаковка",
+                                          "Отправлено",
+                                        ][i]
+                                      }
+                                    </strong>
+                                    <Progress value={t[key]} plan={t.plan} />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <Notice>
+                            Срок готовности задан вручную. Прогноз завершения
+                            ещё не рассчитывается.
+                          </Notice>
+                        </section>
+                        <section className="panel">
+                          <div className="panel-heading">
+                            <h2>Состав поставки</h2>
+                            <Button
+                              onClick={() =>
+                                download(
+                                  `${supply.id}.csv`,
+                                  "Артикул;План;Напечатано;Порезано;Упаковано;Резерв\n" +
+                                    supply.lines
+                                      .map((l) =>
+                                        [
+                                          l.article,
+                                          l.plan,
+                                          l.printed,
+                                          l.cut,
+                                          l.packed,
+                                          l.reserved,
+                                        ].join(";"),
+                                      )
+                                      .join("\n"),
+                                )
+                              }
+                            >
+                              <DownloadSimple size={17} />
+                              CSV
+                            </Button>
+                          </div>
+                          <DataTable
+                            rows={supply.lines}
+                            rowKey={(l) => l.article}
+                            label="Артикулы поставки"
+                            columns={[
+                              {
+                                id: "article",
+                                label: "Артикул",
+                                render: (l) => <strong>{l.article}</strong>,
+                              },
+                              {
+                                id: "plan",
+                                label: "План, шт.",
+                                render: (l) => num(l.plan),
+                              },
+                              {
+                                id: "stock",
+                                label: "Свободно на складе",
+                                render: (l) => num(freeStock(data, l.article)),
+                              },
+                              {
+                                id: "reserved",
+                                label: "Резерв",
+                                render: (l) => num(l.reserved),
+                              },
+                              {
+                                id: "print",
+                                label: "Напечатано",
+                                render: (l) => num(l.printed),
+                              },
+                              {
+                                id: "cut",
+                                label: "Порезано",
+                                render: (l) => num(l.cut),
+                              },
+                              {
+                                id: "packed",
+                                label: "Упаковано",
+                                render: (l) => num(l.packed),
+                              },
+                              {
+                                id: "rest",
+                                label: "Осталось упаковать",
+                                render: (l) =>
+                                  num(Math.max(0, l.plan - l.packed)),
+                              },
+                            ]}
+                          />
+                          <div className="panel-footer">
+                            <small>
+                              Резерв не увеличивает упакованное количество до
+                              подтверждения комплектования.
+                            </small>
+                            <Button
+                              onClick={() => {
+                                update(reserveSupply(data, supply.id));
+                                setToast(
+                                  "Свободный товар закреплён за поставкой в приложении. Складская таблица не изменялась.",
+                                );
+                              }}
+                            >
+                              Зарезервировать свободный товар
+                            </Button>
+                          </div>
+                        </section>
+                        <div className="split">
+                          <section className="panel">
+                            <div className="panel-heading">
+                              <h2>Связь с исходными заданиями</h2>
+                            </div>
+                            <div className="source-detail">
+                              <Database size={24} />
+                              <p>
+                                {mode === "demo"
+                                  ? "Связи показаны на примере."
+                                  : "Автоматическая связь ещё не настроена."}
+                                <small>
+                                  Для реальных поставок нужна привязка к
+                                  заданиям печати и сборки.
+                                </small>
+                              </p>
+                            </div>
+                            <Button kind="ghost" onClick={() => go("sources")}>
+                              Открыть источники
+                              <CaretRight size={17} />
+                            </Button>
+                          </section>
+                          <section className="panel">
+                            <div className="panel-heading">
+                              <h2>Отгрузка и приёмка</h2>
+                            </div>
+                            <div className="shipment-stages">
+                              <span>
+                                <Package size={19} />
+                                Упаковка
+                              </span>
+                              <span>
+                                <Truck size={19} />
+                                Отправка
+                              </span>
+                              <span>
+                                <CheckCircle size={19} />
+                                Приёмка
+                              </span>
+                            </div>
+                            <Notice>
+                              Отправку и приёмку показываем после получения
+                              соответствующих данных.
+                            </Notice>
+                          </section>
+                        </div>
+                      </>
+                    ) : (
+                      <section className="panel">
+                        <Empty title="Добавь первую поставку">
+                          Укажи артикулы, количество и дату прибытия.
+                        </Empty>
+                        <Button kind="primary" onClick={startCreate}>
+                          <Plus size={18} />
+                          Добавить поставку
+                        </Button>
+                      </section>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
           </>
         )}
         {page === "sources" && (
           <>
             <Notice>
-              Google-таблицы: ссылки сохраняются для настройки чтения.
-              Автоматическое подключение потребует серверного доступа. Уже
-              сейчас можно загрузить CSV и проверить расчёты.
+              Печать подключена к «СЕЗОННАЯ ПЕЧАТЬ КРАСНОЕ ЗДАНИЕ». Сборщики и
+              склад пока используют загрузку CSV. Таблица читается при открытии,
+              по кнопке «Обновить» и раз в 5 минут, пока RITM открыт.
             </Notice>
+            <section className="panel">
+              <div className="panel-heading">
+                <h2>Рабочая таблица печати</h2>
+                <Badge
+                  tone={
+                    live.error ? "warning" : live.value ? "success" : "neutral"
+                  }
+                >
+                  {live.loading
+                    ? "Обновление"
+                    : live.error
+                      ? "Ошибка обновления"
+                      : live.value
+                        ? "Подключено"
+                        : "Подключение"}
+                </Badge>
+              </div>
+              <p>
+                {live.value
+                  ? `${live.value.sheets.length} листов · ${live.value.supplies.length} заказов · ${live.value.events.length} записей выпуска`
+                  : "Ожидаю чтения таблицы"}
+              </p>
+              {live.value && (
+                <p>
+                  Последнее успешное чтение:{" "}
+                  {new Intl.DateTimeFormat("ru-RU", {
+                    dateStyle: "short",
+                    timeStyle: "short",
+                    timeZone: "Europe/Moscow",
+                  }).format(new Date(live.value.updatedAt))}{" "}
+                  (Москва)
+                </p>
+              )}
+              {live.error && <Notice tone="warning">{live.error}</Notice>}
+              <div className="source-actions">
+                {sourceLink("printing")}
+                <Button
+                  disabled={live.loading}
+                  onClick={() => void live.reload()}
+                >
+                  Обновить таблицу
+                </Button>
+              </div>
+              {!!live.value?.issues.length && (
+                <DataTable
+                  rows={live.value.issues}
+                  rowKey={(r) => `${r.source}:${r.row}:${r.message}`}
+                  label="Записи для сверки"
+                  columns={[
+                    { id: "source", label: "Лист", render: (r) => r.source },
+                    { id: "row", label: "Строка", render: (r) => r.row },
+                    {
+                      id: "message",
+                      label: "Причина",
+                      render: (r) => r.message,
+                    },
+                  ]}
+                />
+              )}
+            </section>
             <div className="source-grid">
               {sources.map((s) => (
                 <section className="panel source-card" key={s.id}>
