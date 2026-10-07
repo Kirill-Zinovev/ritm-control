@@ -621,7 +621,7 @@ export function App() {
             <strong>Кирилл</strong>
             <small>Управление</small>
           </div>
-          <Badge tone="sidebar">v0.1</Badge>
+          <Badge tone="nav-version">v0.1</Badge>
         </div>
       </aside>
       <main id="main">
