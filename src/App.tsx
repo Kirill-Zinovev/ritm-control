@@ -282,25 +282,6 @@ export function App() {
       area: facts.reduce((n, e) => n + e.area, 0),
     };
   });
-  const printingDailyMap = new Map<
-    string,
-    { date: string; employee: string; area: number; records: number }
-  >();
-  for (const event of live.value?.events || []) {
-    const key = `${event.date}:${event.employee}`;
-    const row = printingDailyMap.get(key) || {
-      date: event.date,
-      employee: event.employee,
-      area: 0,
-      records: 0,
-    };
-    row.area += event.area;
-    row.records += 1;
-    printingDailyMap.set(key, row);
-  }
-  const printingDailyRows = [...printingDailyMap.values()].sort(
-    (a, b) => b.date.localeCompare(a.date) || b.area - a.area,
-  );
   const totals = data.supplies.reduce(
     (s, v) => {
       const t = lineTotals(v);
@@ -2018,39 +1999,6 @@ export function App() {
                   Обновить таблицу
                 </Button>
               </div>
-              {!!live.value && (
-                <section className="source-daily-summary">
-                  <h3>Выпуск по дням</h3>
-                  <DataTable
-                    rows={printingDailyRows}
-                    rowKey={(r) => `${r.date}:${r.employee}`}
-                    label="Выпуск печати по дням и сотрудникам"
-                    columns={[
-                      {
-                        id: "date",
-                        label: "Дата",
-                        render: (r) => shortDate(r.date),
-                      },
-                      {
-                        id: "employee",
-                        label: "Сотрудник",
-                        render: (r) => r.employee,
-                      },
-                      {
-                        id: "area",
-                        label: "Площадь",
-                        render: (r) => `${num(r.area, 2)} м²`,
-                        sort: (r) => r.area,
-                      },
-                      {
-                        id: "records",
-                        label: "Записей",
-                        render: (r) => r.records,
-                      },
-                    ]}
-                  />
-                </section>
-              )}
               {!!live.value?.issues.length && (
                 <DataTable
                   rows={live.value.issues}
