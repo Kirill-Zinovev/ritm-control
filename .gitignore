@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.checks/
+.npm-cache/
+.sites-checkout/
+.sites-checkout-*/
+.sites-runtime/
+.env
+.env.*
+!.env.example

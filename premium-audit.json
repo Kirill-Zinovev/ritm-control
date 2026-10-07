@@ -1,0 +1,1 @@
+{"mode":"strict","status":"blocked","reason":"Python executable unavailable in this Windows session; the skill audit script did not run.","browserVerification":"blocked","note":"No compliance pass is inferred from type check, SSR or domain tests."}
