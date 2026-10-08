@@ -20,3 +20,6 @@ Printing reads the seasonal red-building spreadsheet on the server. Each of the 
 
 Design decision from 2026-10-08: clicking an assembler opens the selected first mock's right-side drawer; clicking a printer opens the selected second mock's full employee profile.
 Use only source-backed daily output in both calendars. A blank date means the source has no entry and does not prove the person was absent. Assembler coefficients are summed from daily FBO records; printer area comes only from unique attributable rows in the printing journal.
+## FBO dashboard coefficients
+
+The visible «По дням · Дашборд» tab (gid 605337763) is an additional source for daily assembler coefficients and its «Командный» row. On 2026-10-08, the dashboard showed dates 2026-10-01 through 2026-10-21. All 64 employee/date values that overlapped «История производства» matched within 0.00001; 39 were nonzero. The «Командный» value matches the unweighted average of employees with a nonzero coefficient for that day. Do not add dashboard values to history totals: this is a cross-check/summary, while «История производства» remains the full-detail source for cut/pack quantities, work types, longer history, and precise coefficients.
