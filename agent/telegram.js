@@ -15,8 +15,13 @@ export async function flushTelegram(
     const incident = store.getIncident(entry.incident_id);
     if (
       !incident ||
-      incident.status !== "open" ||
-      !["critical", "high"].includes(incident.severity)
+      (incident.monitorStatus || incident.status) !== "open" ||
+      incident.status === "ignored" ||
+      (!["critical", "high"].includes(incident.severity) &&
+        !(
+          incident.kind === "table_doctor" &&
+          incident.verification === "rule_confirmed"
+        ))
     ) {
       store.db
         .prepare("UPDATE outbox SET status='cancelled' WHERE id=?")
@@ -31,7 +36,7 @@ export async function flushTelegram(
       incident.cell ? "Ячейка: " + incident.cell : "",
       "Проблема: " + incident.title,
       "Обоснование: " + incident.cause,
-      "Действие: " + incident.action,
+      "Действие: " + (incident.recommendation || incident.action),
       "ID инцидента: " + incident.id,
     ]
       .filter(Boolean)

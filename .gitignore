@@ -16,3 +16,10 @@ agent-data/
 *.sqlite-shm
 *.secrets.xml
 intelligence.local.json
+
+# Google service-account credentials and private local doctor state
+service-account*.json
+credentials*.json
+google-key*.json
+table-doctor-demo.json
+doctor.private.json

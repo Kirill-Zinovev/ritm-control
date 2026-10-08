@@ -34,8 +34,17 @@ export class IncidentStore {
         "CREATE TABLE IF NOT EXISTS recommendations (id TEXT PRIMARY KEY,at TEXT NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL);",
         "CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY,incident_id TEXT NOT NULL,status TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,next_at TEXT NOT NULL);",
         "CREATE TABLE IF NOT EXISTS lease (id INTEGER PRIMARY KEY CHECK(id=1),owner TEXT NOT NULL,expires INTEGER NOT NULL);",
-        "PRAGMA user_version=1;",
       ].join("\n"),
+    );
+    if (
+      !this.db
+        .prepare("PRAGMA table_info(incidents)")
+        .all()
+        .some((c) => c.name === "workflow")
+    )
+      this.db.exec("ALTER TABLE incidents ADD COLUMN workflow TEXT");
+    this.db.exec(
+      "CREATE TABLE IF NOT EXISTS repair_requests (id TEXT PRIMARY KEY,incident_id TEXT NOT NULL,generation INTEGER NOT NULL,at TEXT NOT NULL,status TEXT NOT NULL,payload TEXT NOT NULL); PRAGMA user_version=2;",
     );
   }
   recoverNotifications() {
@@ -110,7 +119,7 @@ export class IncidentStore {
         const generation = old ? old.generation + (reopen ? 1 : 0) : 1;
         this.db
           .prepare(
-            "INSERT INTO incidents VALUES(?,?,?,'open',?,?,NULL,1,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,status='open',last_seen=excluded.last_seen,resolved_at=NULL,occurrences=incidents.occurrences+1,generation=excluded.generation",
+            "INSERT INTO incidents(id,scope,payload,status,first_seen,last_seen,resolved_at,occurrences,generation) VALUES(?,?,?,'open',?,?,NULL,1,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,status='open',last_seen=excluded.last_seen,resolved_at=NULL,occurrences=incidents.occurrences+1,generation=excluded.generation",
           )
           .run(
             id,
@@ -120,6 +129,21 @@ export class IncidentStore {
             at,
             generation,
           );
+        if (f.kind === "table_doctor") {
+          const workflow =
+            old?.workflow === "ignored" && !reopen
+              ? "ignored"
+              : !old || reopen
+                ? f.initialStatus || "review"
+                : f.verification === "rule_confirmed"
+                  ? "confirmed"
+                  : "review";
+          this.db
+            .prepare("UPDATE incidents SET workflow=? WHERE id=?")
+            .run(workflow, id);
+          if (old && !reopen && workflow !== old.workflow)
+            this.log("incident_state", "Статус проверки: " + workflow, id, at);
+        }
         if (!old || reopen) {
           this.log(
             reopen ? "incident_reopened" : "incident_detected",
@@ -127,13 +151,30 @@ export class IncidentStore {
             id,
             at,
           );
-          this.db
-            .prepare(
-              "INSERT OR IGNORE INTO outbox(id,incident_id,status,next_at) VALUES(?,?,'pending',?)",
-            )
-            .run(id + ":" + generation, id, at);
+          if (
+            f.kind !== "table_doctor" ||
+            (f.verification === "rule_confirmed" && !f.demonstration)
+          )
+            this.db
+              .prepare(
+                "INSERT OR IGNORE INTO outbox(id,incident_id,status,next_at) VALUES(?,?,'pending',?)",
+              )
+              .run(id + ":" + generation, id, at);
           created.push(id);
         }
+        if (
+          old &&
+          !reopen &&
+          f.kind === "table_doctor" &&
+          f.verification === "rule_confirmed" &&
+          !f.demonstration &&
+          old.workflow !== "ignored"
+        )
+          this.db
+            .prepare(
+              "INSERT OR IGNORE INTO outbox(id,incident_id,status,next_at) VALUES(?,?,\'pending\',?)",
+            )
+            .run(id + ":" + generation, id, at);
       }
       if (verified) {
         const active = this.db
@@ -143,9 +184,9 @@ export class IncidentStore {
           if (!seen.has(old.id)) {
             this.db
               .prepare(
-                "UPDATE incidents SET status='resolved',resolved_at=? WHERE id=?",
+                "UPDATE incidents SET status='resolved',resolved_at=?,last_seen=?,workflow=CASE WHEN workflow IS NULL THEN NULL ELSE 'fixed' END WHERE id=?",
               )
-              .run(at, old.id);
+              .run(at, at, old.id);
             this.db
               .prepare(
                 "UPDATE outbox SET status='cancelled' WHERE incident_id=? AND status='pending'",
@@ -201,6 +242,8 @@ export class IncidentStore {
     severity = "",
     status = "",
     search = "",
+    kind = "",
+    type = "",
     page = 0,
     limit = 20,
   } = {}) {
@@ -210,6 +253,8 @@ export class IncidentStore {
       ["department", department],
       ["sourceId", source],
       ["severity", severity],
+      ["kind", kind],
+      ["type", type],
     ]) {
       if (val) {
         clauses.push("json_extract(payload,'$." + name + "')=?");
@@ -217,7 +262,11 @@ export class IncidentStore {
       }
     }
     if (status) {
-      clauses.push("status=?");
+      clauses.push(
+        ["open", "resolved"].includes(status)
+          ? "status=?"
+          : "COALESCE(workflow,status)=?",
+      );
       params.push(status);
     }
     if (search) {
@@ -247,7 +296,13 @@ export class IncidentStore {
     return {
       ...JSON.parse(row.payload),
       id: row.id,
-      status: row.status,
+      status: row.workflow || row.status,
+      monitorStatus: row.status,
+      repairRequested: !!this.db
+        .prepare(
+          "SELECT id FROM repair_requests WHERE incident_id=? AND generation=?",
+        )
+        .get(row.id, row.generation),
       firstSeen: row.first_seen,
       lastSeen: row.last_seen,
       resolvedAt: row.resolved_at,
@@ -264,10 +319,14 @@ export class IncidentStore {
       .all()
       .map((r) => ({ id: r.id, at: r.at, ...JSON.parse(r.payload) }));
     const active = this.db
-      .prepare("SELECT count(*) AS n FROM incidents WHERE status='open'")
+      .prepare(
+        "SELECT count(*) AS n FROM incidents WHERE status='open' AND COALESCE(workflow,'')!='ignored' AND COALESCE(json_extract(payload,'$.demonstration'),0)=0",
+      )
       .get().n;
     const resolved = this.db
-      .prepare("SELECT count(*) AS n FROM incidents WHERE status='resolved'")
+      .prepare(
+        "SELECT count(*) AS n FROM incidents WHERE status='resolved' AND COALESCE(json_extract(payload,'$.demonstration'),0)=0",
+      )
       .get().n;
     const recommendations = this.db
       .prepare("SELECT * FROM recommendations ORDER BY at DESC")
@@ -284,6 +343,11 @@ export class IncidentStore {
       checks,
       active,
       resolved,
+      demoActive: this.db
+        .prepare(
+          "SELECT count(*) n FROM incidents WHERE status=\'open\' AND COALESCE(workflow,\'\')!=\'ignored\' AND json_extract(payload,\'$.demonstration\')=1",
+        )
+        .get().n,
       corrections: 0,
       recommendations,
     };
@@ -301,6 +365,55 @@ export class IncidentStore {
         )
         .all(limit, safePage * limit),
     };
+  }
+  incidentAction(id, action, at = new Date().toISOString()) {
+    const row = this.db.prepare("SELECT * FROM incidents WHERE id=?").get(id);
+    if (
+      !row ||
+      JSON.parse(row.payload).kind !== "table_doctor" ||
+      row.status !== "open"
+    )
+      return null;
+    if (!["request-repair", "ignore"].includes(action))
+      throw new Error("Unsupported action");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      if (action === "ignore") {
+        this.db
+          .prepare("UPDATE incidents SET workflow=\'ignored\' WHERE id=?")
+          .run(id);
+        this.db
+          .prepare(
+            "UPDATE outbox SET status=\'cancelled\' WHERE incident_id=? AND status=\'pending\'",
+          )
+          .run(id);
+        this.log(
+          "incident_ignored",
+          "Владелец игнорирует проблему; таблица не изменена",
+          id,
+          at,
+        );
+      } else {
+        const requestId = id + ":" + row.generation;
+        const change = this.db
+          .prepare(
+            "INSERT OR IGNORE INTO repair_requests VALUES(?,?,?, ?,\'pending\',?)",
+          )
+          .run(requestId, id, row.generation, at, row.payload);
+        if (change.changes)
+          this.log(
+            "repair_requested",
+            "Создана заявка на будущее исправление; Google Sheets не изменён",
+            id,
+            at,
+          );
+      }
+      this.db.exec("COMMIT");
+      return this.getIncident(id);
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
   close() {
     this.db.close();

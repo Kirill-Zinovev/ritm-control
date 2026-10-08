@@ -1,0 +1,14 @@
+{
+  "demonstration": true,
+  "source": "Локальная фикстура, рабочие таблицы не изменены",
+  "cell": "G247",
+  "id": "f03e073a5d12170249e957dd018dc81f090d4148508fbcad181741215c3b9880",
+  "firstStatus": "new",
+  "repeatedStatus": "confirmed",
+  "finalStatus": "fixed",
+  "observations": 4,
+  "repairRequestCreated": true,
+  "consoleErrors": [],
+  "outerHorizontalOverflow": false,
+  "checkedAt": "2026-10-08T11:46:09.423Z"
+}

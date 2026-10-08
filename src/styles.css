@@ -2585,3 +2585,64 @@ td small {
     gap: 4px;
   }
 }
+
+/* Table Doctor uses existing panel, modal, fields and table tokens. */
+.doctor-center {
+  display: grid;
+  gap: 16px;
+}
+.doctor-metrics {
+  margin: 16px 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.doctor-metrics > div {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.doctor-metrics strong {
+  font-size: 26px;
+}
+.doctor-metrics .doctor-time {
+  font-size: 16px;
+}
+.doctor-metrics span,
+.doctor-metrics small {
+  color: var(--muted);
+  font-size: 13px;
+}
+.doctor-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.doctor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+}
+.doctor-demo {
+  border-left: 3px solid var(--warning);
+}
+@media (max-width: 1000px) {
+  .doctor-filters,
+  .doctor-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.doctor-center .table-panel table {
+  min-width: 0;
+}
+.doctor-center td {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.doctor-center td .ai-block {
+  white-space: normal;
+  max-width: 300px;
+}

@@ -15,7 +15,7 @@ Language ru-RU, domain timezone Europe/Moscow. Production dates use Europe/Mosco
 
 ## Data ownership
 
-Production APIs read the approved Google Sheets sources. Demo and imported data remain disjoint. Local drafts and imported CSV snapshots belong to the browser. The independent Intelligence agent stores incidents, history and verified snapshots in SQLite outside the repository. Its API requires owner authentication; the owner key is masked and never stored in browser storage. No Google OAuth or production writes are implemented. Formula access is not configured. Source links alone are not authentication.
+Production APIs read the approved Google Sheets sources. Demo and imported data remain disjoint. Local drafts and imported CSV snapshots belong to the browser. The independent Intelligence agent stores incidents, history and verified snapshots in SQLite outside the repository. Its API requires owner authentication; the owner key is masked and never stored in browser storage. Stage 2 supports service-account Google OAuth with spreadsheets.readonly; no production writes are implemented. Formula access requires local Google credentials and approved source rules. Source links alone are not authentication.
 
 ## Navigation
 
@@ -35,6 +35,6 @@ Native buttons/links/fields, associated labels/errors, visible focus, textual st
 
 ## Intelligence states and permissions
 
-AI Center uses real read-only monitoring results. Failed checks retain verified snapshots with an explicit stale notice; absent snapshots produce unavailable states, not zero KPIs. Partial source data cannot establish a productivity decline. A missing weekend entry is unknown work, not zero. Chat, formula checks and repairs remain unavailable until their respective stages.
+AI Center uses real read-only monitoring results. Failed checks retain verified snapshots with an explicit stale notice; absent snapshots produce unavailable states, not zero KPIs. Partial source data cannot establish a productivity decline. A missing weekend entry is unknown work, not zero. Table Doctor checks authorized formulas when configured. Pending templates are review-only. Chat and production repairs remain unavailable. Demonstration fixtures are clearly labelled and explicitly enabled.
 
-Incident filters are transient local state. DataTable uses controlled server pagination for incidents/history and local pagination elsewhere. Login uses an expiring HttpOnly SameSite=Strict cookie. Cross-origin private access and modification endpoints are forbidden. A closed incident means it was absent on a later successful check; it is not an agent repair. See docs/RITM-INTELLIGENCE-ARCHITECTURE.md.
+Incident filters are transient local state. DataTable uses controlled server pagination for incidents/history and local pagination elsewhere. Login uses an expiring HttpOnly SameSite=Strict cookie. Cross-origin private access and production modification endpoints are forbidden. Authenticated local incident requests/ignore and manual scans are allowed; only the explicitly enabled demo endpoint changes a local fixture. A closed incident means it was absent on a later successful check; it is not an agent repair. See docs/RITM-INTELLIGENCE-ARCHITECTURE.md and docs/TABLE-DOCTOR.md.

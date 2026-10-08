@@ -9,6 +9,7 @@ import {
 import path from "node:path";
 import { loadConfig } from "./config.js";
 import { IncidentStore } from "./store.js";
+import { TableDoctor } from "./doctorService.js";
 import { Monitor } from "./monitor.js";
 import { createAgentServer } from "./server.js";
 import { flushTelegram } from "./telegram.js";
@@ -24,7 +25,8 @@ if (!store.acquire(owner)) {
 }
 store.recoverNotifications();
 const controller = new AbortController(),
-  monitor = new Monitor(store, config);
+  monitor = new Monitor(store, config),
+  doctor = new TableDoctor(store, config);
 mkdirSync(config.dataDir, { recursive: true });
 const logPath = path.join(config.dataDir, "agent.log");
 function log(event) {
@@ -57,7 +59,10 @@ store.log("agent_started", "Локальный агент запущен в ре
 log("agent_started");
 async function tick() {
   try {
-    await monitor.run(controller.signal);
+    await Promise.all([
+      monitor.run(controller.signal),
+      doctor.run(controller.signal),
+    ]);
     const notificationState = await flushTelegram(store, config.telegram, {
       signal: controller.signal,
     });
@@ -80,6 +85,7 @@ async function stop() {
   clearTimeout(timer);
   controller.abort();
   if (current) await current;
+  if (doctor.current) await doctor.current;
   store.meta("agent", {
     status: "stopped",
     heartbeatAt: new Date().toISOString(),
@@ -99,7 +105,10 @@ process.once("SIGINT", () => void stop());
 process.once("SIGTERM", () => void stop());
 try {
   if (!process.argv.includes("--once")) {
-    server = createAgentServer(store, config);
+    server = createAgentServer(store, config, {
+      doctor,
+      signal: controller.signal,
+    });
     await new Promise((resolve, reject) => {
       server.once("error", reject);
       server.listen(config.port, "127.0.0.1", resolve);

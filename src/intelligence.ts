@@ -18,6 +18,13 @@ export type SourceDefinition = {
 };
 export type Incident = {
   id: string;
+  kind?: string;
+  demonstration?: boolean;
+  observed?: unknown;
+  recommendation?: string;
+  previousFormula?: string | null;
+  monitorStatus?: string;
+  repairRequested?: boolean;
   type: string;
   severity: string;
   sourceId: string;
@@ -65,6 +72,7 @@ export type AgentStatus = {
   } | null;
   lastCheck: string | null;
   active: number;
+  demoActive?: number;
   resolved: number;
   corrections: number;
   controlledSources: number;
@@ -127,6 +135,14 @@ export function timeLabel(value?: string | null) {
   }).format(new Date(value));
 }
 export const statusLabel: Record<string, string> = {
+  new: "Новая проблема",
+  review: "Требует проверки",
+  confirmed: "Подтверждена",
+  fixed: "Исправлена",
+  ignored: "Игнорируется",
+  warning: "Предупреждение",
+  unavailable: "Недоступен",
+  degraded: "Проверка неполная",
   ok: "Доступен",
   partial: "Данные неполные",
   stale: "Устарели",
