@@ -21,7 +21,7 @@ function bounded(value, fallback, max) {
 export function createAgentServer(
   store,
   config,
-  { now = () => Date.now() } = {},
+  { now = () => Date.now(), doctor = null, signal } = {},
 ) {
   if (config.ownerToken.length < 32)
     throw new Error(
@@ -138,7 +138,7 @@ export function createAgentServer(
         sessions.set(hash(cookie), now() + 8 * 3600000);
         store.log(
           "owner_login",
-          "Владелец вошёл в локальный AI Center; разрешены только просмотры",
+          "Владелец вошёл в локальный AI Center; Google Sheets доступны только для чтения",
         );
         send(
           res,
@@ -181,13 +181,103 @@ export function createAgentServer(
           );
           return;
         }
+        if (req.method === "POST") {
+          const action = pathname.match(
+            /^\/api\/intelligence\/incidents\/([a-f0-9]{64})\/(request-repair|ignore)$/,
+          );
+          if (action) {
+            const incident = store.incidentAction(action[1], action[2]);
+            send(
+              res,
+              incident ? 200 : 409,
+              incident
+                ? { ok: true, incident }
+                : {
+                    ok: false,
+                    message: "Инцидент недоступен для этого действия",
+                  },
+            );
+            return;
+          }
+          if (pathname === "/api/intelligence/doctor/run") {
+            if (!doctor) {
+              send(res, 503, {
+                ok: false,
+                message: "Table Doctor не настроен",
+              });
+              return;
+            }
+            void doctor
+              .run(signal)
+              .catch(() => store.log("doctor_error", "Ошибка ручной проверки"));
+            send(res, 202, { ok: true, running: true });
+            return;
+          }
+          if (
+            pathname === "/api/intelligence/doctor/demo" &&
+            doctor &&
+            config.doctorDemoEnabled
+          ) {
+            if (
+              !String(req.headers["content-type"] || "").startsWith(
+                "application/json",
+              )
+            ) {
+              send(res, 415, { ok: false });
+              return;
+            }
+            let payload;
+            try {
+              payload = await body(req);
+            } catch {
+              send(res, 400, { ok: false, message: "Некорректный запрос" });
+              return;
+            }
+            if (
+              ![
+                "healthy",
+                "missing",
+                "number",
+                "mismatch",
+                "ref",
+                "div_zero",
+                "schema",
+              ].includes(payload?.scenario)
+            ) {
+              send(res, 400, {
+                ok: false,
+                message: "Неизвестный демонстрационный сценарий",
+              });
+              return;
+            }
+            if (doctor.current) {
+              send(res, 409, {
+                ok: false,
+                message: "Дождитесь завершения проверки",
+              });
+              return;
+            }
+            send(res, 200, await doctor.setDemo(payload.scenario, signal));
+            return;
+          }
+        }
         if (req.method !== "GET") {
           send(res, 403, {
             ok: false,
             error: "read_only",
             message:
-              "Первый этап: изменения таблиц, исправления и команды отключены.",
+              "Изменения Google Sheets, исправления и произвольные команды отключены.",
           });
+          return;
+        }
+        if (pathname === "/api/intelligence/doctor") {
+          send(
+            res,
+            doctor ? 200 : 503,
+            doctor
+              ? doctor.state()
+              : { ok: false, message: "Table Doctor не настроен" },
+          );
           return;
         }
         if (pathname === "/api/intelligence/status") {
@@ -238,6 +328,8 @@ export function createAgentServer(
               source: (url.searchParams.get("source") || "").slice(0, 80),
               severity: (url.searchParams.get("severity") || "").slice(0, 20),
               status: (url.searchParams.get("status") || "").slice(0, 20),
+              kind: (url.searchParams.get("kind") || "").slice(0, 40),
+              type: (url.searchParams.get("type") || "").slice(0, 60),
               search: (url.searchParams.get("q") || "").slice(0, 120),
             }),
           });

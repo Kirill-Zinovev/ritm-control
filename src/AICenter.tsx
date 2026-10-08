@@ -1,3 +1,4 @@
+import { TableDoctor } from "./TableDoctor";
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowsClockwise,
@@ -29,6 +30,7 @@ import { useAgentResource } from "./useAgent";
 
 const views = [
   ["overview", "Обзор состояния"],
+  ["doctor", "Table Doctor"],
   ["incidents", "Инциденты"],
   ["recommendations", "Рекомендации"],
   ["chat", "AI-чат"],
@@ -37,6 +39,12 @@ const views = [
 ] as const;
 type View = (typeof views)[number][0];
 const eventNames: Record<string, string> = {
+  doctor_check: "Table Doctor",
+  doctor_unavailable: "Нет доступа к формулам",
+  demo_changed: "Демонстрация",
+  incident_state: "Статус инцидента",
+  repair_requested: "Заявка на исправление",
+  incident_ignored: "Решение владельца",
   agent_started: "Запуск",
   agent_stopped: "Остановка",
   check_completed: "Проверка",
@@ -319,6 +327,7 @@ export function AICenter() {
               </button>
             ))}
           </div>
+          {view === "doctor" && <TableDoctor />}
           {view === "overview" && (
             <>
               <div className="ai-metrics">
@@ -335,6 +344,12 @@ export function AICenter() {
                   </section>
                 ))}
               </div>
+              {!!state.demoActive && (
+                <Notice>
+                  Демонстрационных проблем: {state.demoActive}. Они не включены
+                  в счётчики производственных проблем.
+                </Notice>
+              )}
               <section className="panel">
                 <div className="panel-heading">
                   <div>
@@ -362,7 +377,9 @@ export function AICenter() {
                               ? "Google Sheets · значения CSV"
                               : r.kind === "api"
                                 ? "API RITM"
-                                : "Доступность HTML"}
+                                : r.kind === "table_doctor"
+                                  ? "Table Doctor · формулы"
+                                  : "Доступность HTML"}
                           </small>
                         </>
                       ),
@@ -769,7 +786,8 @@ export function AICenter() {
                   </div>
                   <p>{s.purpose}</p>
                   <small>
-                    Контроль формул: не настроено · Контроль обновления записей:{" "}
+                    Контроль формул: см. Table Doctor · Контроль обновления
+                    записей:{" "}
                     {s.freshness ? "по заданному календарю" : "не настроено"}
                   </small>
                   <ul>
@@ -829,11 +847,22 @@ export function AICenter() {
                   [incident.sheet, incident.cell].filter(Boolean).join(" · ") ||
                     "Проверка сервиса",
                 ],
-                ["Обнаружено", incident.found],
-                ["Ожидается", incident.expected],
+                [
+                  "Обнаружено",
+                  incident.found || String(incident.observed ?? ""),
+                ],
+                [
+                  "Ожидается",
+                  typeof incident.expected === "object"
+                    ? JSON.stringify(incident.expected)
+                    : incident.expected,
+                ],
                 ["Обоснование", incident.cause],
                 ["Влияние на KPI", incident.impact],
-                ["Предлагаемое действие", incident.action],
+                [
+                  "Предлагаемое действие",
+                  incident.recommendation || incident.action,
+                ],
                 ["Первое обнаружение", timeLabel(incident.firstSeen)],
                 ["Последняя проверка", timeLabel(incident.lastSeen)],
                 ["Повторных наблюдений", String(incident.occurrences)],
@@ -861,9 +890,9 @@ export function AICenter() {
               </a>
             )}
             <Notice tone="warning">
-              <Warning size={16} /> Изменения запрещены на первом этапе.
-              Закрытие означает, что проблема не обнаружена при следующей
-              успешной проверке.
+              <Warning size={16} /> Изменения Google Sheets отключены. Закрытие
+              означает, что проблема не обнаружена при следующей успешной
+              проверке.
             </Notice>
           </>
         )}

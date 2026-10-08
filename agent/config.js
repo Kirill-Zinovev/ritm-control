@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import {
+  DEFAULT_DOCTOR_DOCUMENTS,
+  validateDoctorDocuments,
+} from "./doctorRegistry.js";
+import { DEMO_DOCUMENT } from "./doctorDemo.js";
 import { DEFAULT_SOURCES, validateRegistry } from "./registry.js";
 function number(env, key, fallback, min, max) {
   const n =
@@ -55,7 +60,21 @@ export function loadConfig(env = process.env) {
         )
       : DEFAULT_SOURCES,
   );
+  const doctorDocuments = validateDoctorDocuments(
+    env.RITM_DOCTOR_REGISTRY
+      ? JSON.parse(
+          fs
+            .readFileSync(path.resolve(env.RITM_DOCTOR_REGISTRY), "utf8")
+            .replace(/^\uFEFF/, ""),
+        )
+      : DEFAULT_DOCTOR_DOCUMENTS,
+  );
+  if (env.RITM_DOCTOR_DEMO_ENABLED === "true")
+    doctorDocuments.push(validateDoctorDocuments([DEMO_DOCUMENT])[0]);
   return {
+    doctorDocuments,
+    googleCredentialsFile: env.RITM_GOOGLE_CREDENTIALS_FILE || "",
+    doctorDemoEnabled: env.RITM_DOCTOR_DEMO_ENABLED === "true",
     dataDir,
     dbPath: path.join(dataDir, "intelligence.sqlite"),
     port,
@@ -92,7 +111,18 @@ export function publicConfig(config) {
       config.telegram.enabled && config.telegram.token && config.telegram.chatId
         ? "configured"
         : "not_configured",
-    formulaAccess: "not_configured",
+    formulaAccess: config.googleCredentialsFile
+      ? "configured"
+      : "not_configured",
+    doctorDocuments: (config.doctorDocuments || []).map((d) => ({
+      id: d.id,
+      name: d.name,
+      department: d.department,
+      enabled: d.enabled,
+      demonstration: d.adapter === "fixture",
+      sheets: d.sheets.length,
+    })),
+    doctorDemoEnabled: !!config.doctorDemoEnabled,
     deployment: "local",
     sources: config.sources,
     snapshotMaxAgeSeconds: config.snapshotMaxAgeMs / 1000,

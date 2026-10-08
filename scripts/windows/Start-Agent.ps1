@@ -10,7 +10,7 @@ $nodeExe = (Get-Command node -ErrorAction Stop).Source
 $version = & $nodeExe --version
 if ([version]$version.TrimStart('v') -lt [version]'24.12.0') { throw 'Для локального агента нужен Node.js 24.12 или новее.' }
 $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
-$allowed = @('RITM_DATA_DIR','RITM_BASE_URL','RITM_CHECK_INTERVAL_SECONDS','RITM_AGENT_PORT','RITM_REQUEST_TIMEOUT_SECONDS','RITM_REQUEST_RETRIES','RITM_SLOW_API_MS','RITM_SNAPSHOT_MAX_AGE_SECONDS','RITM_SOURCE_REGISTRY','RITM_DEV_ORIGIN','RITM_TELEGRAM_ENABLED','RITM_AI_MODEL')
+$allowed = @('RITM_DATA_DIR','RITM_BASE_URL','RITM_CHECK_INTERVAL_SECONDS','RITM_AGENT_PORT','RITM_REQUEST_TIMEOUT_SECONDS','RITM_REQUEST_RETRIES','RITM_SLOW_API_MS','RITM_SNAPSHOT_MAX_AGE_SECONDS','RITM_SOURCE_REGISTRY','RITM_DEV_ORIGIN','RITM_TELEGRAM_ENABLED','RITM_AI_MODEL','RITM_GOOGLE_CREDENTIALS_FILE','RITM_DOCTOR_REGISTRY','RITM_DOCTOR_DEMO_ENABLED')
 foreach ($property in $config.PSObject.Properties) {
   if ($allowed -notcontains $property.Name) { throw ('Неизвестный параметр конфигурации: ' + $property.Name) }
   [Environment]::SetEnvironmentVariable($property.Name, [string]$property.Value, 'Process')

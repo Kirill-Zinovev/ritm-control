@@ -28,3 +28,7 @@ The visible «По дням · Дашборд» tab (gid 605337763) is an additi
 ## RITM Intelligence
 
 Stage 1 is read-only. Never modify production Google Sheets, norms, salaries, business logic or deploy production automatically. Keep local-agent secrets and SQLite outside Git. Private monitoring API requires owner authentication; no unauthenticated public repair or private-data endpoints. Use existing printing journal semantics and source-backed FBO coefficients. Missing records are not zero KPI; preserve verified snapshots with stale labels after read failures. No demo incidents, invented causes or unmeasured performance gains. Formula and LLM analysis remain explicitly not configured in stage 1.
+
+## Table Doctor — stage 2 (2026-10-08)
+
+Production Google Sheets remain read-only, including Telegram. Owner actions only create local repair requests or ignore incidents. Approved templates and explicit exceptions determine confirmed violations; pending templates require owner review. Do not infer broken formulas from neighboring cells. The user authorized a clearly labelled local fixture demonstration; never mix fixture findings or KPIs with actual production. Enable it only using RITM_DOCTOR_DEMO_ENABLED=true. Google credentials must remain outside the repository. Keep Worker routing and production KPI calculation intact.
