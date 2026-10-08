@@ -3,12 +3,31 @@ param(
   [string]$DataDir = (Join-Path $env:LOCALAPPDATA 'RITMIntelligence'),
   [string]$RitmUrl = 'https://ritm-erp.zinovevkirill234.chatgpt.site',
   [ValidateRange(60,86400)][int]$IntervalSeconds = 600,
-  [switch]$EnableTelegram
+  [switch]$EnableTelegram,
+  [switch]$ConfigureTelegram
 )
 $ErrorActionPreference = 'Stop'
 if ($env:OS -ne 'Windows_NT') { throw 'Эта настройка предназначена для Windows.' }
 $resolvedDataDir = [IO.Path]::GetFullPath($DataDir)
 $secretPath = Join-Path $resolvedDataDir 'owner.secrets.xml'
+if ($ConfigureTelegram) {
+  $configPath = Join-Path $resolvedDataDir 'config.json'
+  if (!(Test-Path -LiteralPath $secretPath) -or !(Test-Path -LiteralPath $configPath)) { throw 'Существующая конфигурация агента не найдена.' }
+  $secrets = Import-Clixml -LiteralPath $secretPath
+  $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+  $botToken = Read-Host 'Токен Telegram-бота (скрытый ввод, не отправляйте в чат)' -AsSecureString
+  $chatId = Read-Host 'Числовой chat_id владельца; сначала отправьте боту /start'
+  if ($botToken.Length -lt 10 -or $chatId -notmatch '^-?\d+$') { throw 'Нужны токен бота и числовой chat_id; настройки не изменены.' }
+  $secrets.TelegramToken = $botToken
+  $secrets.TelegramChatId = $chatId
+  $secrets | Export-Clixml -LiteralPath ($secretPath + '.tmp')
+  Move-Item -LiteralPath ($secretPath + '.tmp') -Destination $secretPath -Force
+  $config | Add-Member -NotePropertyName 'RITM_TELEGRAM_ENABLED' -NotePropertyValue 'true' -Force
+  $config | ConvertTo-Json | Set-Content -LiteralPath ($configPath + '.tmp') -Encoding UTF8
+  Move-Item -LiteralPath ($configPath + '.tmp') -Destination $configPath -Force
+  Write-Output 'Telegram сохранён в DPAPI. Ключ владельца и Google не изменены. Перезапустите существующее задание агента.'
+  return
+}
 if (Test-Path -LiteralPath $secretPath) { throw 'Настройка владельца уже существует; прежняя конфигурация не перезаписывается.' }
 New-Item -ItemType Directory -Force -Path $resolvedDataDir | Out-Null
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
