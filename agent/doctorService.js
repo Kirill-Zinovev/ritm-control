@@ -1,6 +1,7 @@
 import { GoogleSheetsReader } from "./googleSheets.js";
 import { inspectDocument } from "./doctor.js";
 import { DemoFixture } from "./doctorDemo.js";
+import { measureGrid, metricDelta, accessMessage } from "./doctorTelemetry.js";
 export class TableDoctor {
   constructor(store, config, { reader, now = () => new Date() } = {}) {
     this.store = store;
@@ -12,6 +13,7 @@ export class TableDoctor {
         credentialsFile: config.googleCredentialsFile,
         timeoutMs: config.timeoutMs,
         retries: config.retries,
+        minIntervalMs: config.googleMinIntervalMs ?? 2000,
       });
     this.fixture = new DemoFixture(config.dataDir);
     this.current = null;
@@ -36,8 +38,36 @@ export class TableDoctor {
   state() {
     const checks = this.store
         .overview()
-        .checks.filter((c) => c.kind === "table_doctor"),
+        .checks.filter((c) => c.kind === "table_doctor")
+        .map((c) => ({
+          ...c,
+          stale:
+            this.now().getTime() - Date.parse(c.at) >
+            this.config.snapshotMaxAgeMs,
+        })),
       last = this.store.meta("doctorLastCheck");
+    const enabledIds = new Set(
+      this.config.doctorDocuments
+        .filter((d) => d.enabled && d.adapter === "google")
+        .map((d) => d.id),
+    );
+    const realChecks = checks.filter((c) => enabledIds.has(c.id));
+    const validReads = realChecks.filter(
+      (c) =>
+        c.readVerifiedAt &&
+        c.status !== "unavailable" &&
+        c.status !== "not_configured" &&
+        !c.stale,
+    );
+    const connection = !this.reader.configured
+      ? "not_configured"
+      : realChecks.some((c) => c.status === "unavailable")
+        ? "unavailable"
+        : validReads.length === enabledIds.size && enabledIds.size > 0
+          ? "verified"
+          : validReads.length
+            ? "partial"
+            : "awaiting_verification";
     return {
       ok: true,
       running: !!this.current,
@@ -51,11 +81,14 @@ export class TableDoctor {
       demoCheckedFormulas: checks
         .filter((c) => c.demonstration && c.status === "ok")
         .reduce((a, c) => a + (c.checkedFormulas || 0), 0),
-      checkedFormulas: checks.some((c) => !c.demonstration && c.status === "ok")
-        ? checks
-            .filter((c) => !c.demonstration && c.status === "ok")
-            .reduce((a, c) => a + (c.checkedFormulas || 0), 0)
+      checkedFormulas: validReads.length
+        ? validReads.reduce((a, c) => a + (c.checkedFormulas || 0), 0)
         : null,
+      connection,
+      formulasRead: validReads.length
+        ? validReads.reduce((a, c) => a + (c.formulasRead || 0), 0)
+        : null,
+      manualAudit: this.store.getSnapshot("doctor:manual-audit")?.value || null,
       demoEnabled: !!this.config.doctorDemoEnabled,
       documents: (this.config.doctorDocuments || [])
         .filter((d) => d.enabled)
@@ -84,6 +117,8 @@ export class TableDoctor {
       (d) => d.enabled,
     )) {
       if (signal?.aborted) return this.state();
+      const started = performance.now();
+      const metricsBefore = this.reader.telemetry?.();
       const at = this.now().toISOString(),
         common = {
           kind: "table_doctor",
@@ -97,6 +132,8 @@ export class TableDoctor {
           {
             ...common,
             status: "not_configured",
+            formulasRead: null,
+            readVerifiedAt: null,
             message:
               "Авторизованный Google Sheets API не настроен; формулы не проверены",
             checkedFormulas: null,
@@ -149,12 +186,15 @@ export class TableDoctor {
             })),
           };
         }
+        const readStats = measureGrid(document, spreadsheet);
+        const diagnosticStart = performance.now();
         const previous =
           this.store.getSnapshot("doctor-baseline:" + document.id)?.value || {};
         const result = inspectDocument(document, spreadsheet, {
           baseline: previous,
           now: this.now(),
         });
+        const diagnosticMs = Math.round(performance.now() - diagnosticStart);
         this.store.reconcile("doctor:data:" + document.id, result.findings, {
           verified: result.complete,
           at,
@@ -174,6 +214,17 @@ export class TableDoctor {
             ...common,
             status: result.complete ? "ok" : "degraded",
             ...result.stats,
+            ...readStats,
+            durationMs: Math.round(performance.now() - started),
+            diagnosticMs,
+            api: metricDelta(metricsBefore, this.reader.telemetry?.()),
+            readVerifiedAt: at,
+            oauthVerifiedAt:
+              document.adapter === "google"
+                ? this.reader.authorizedAt || null
+                : null,
+            errorCode: null,
+            httpStatus: null,
             issueCount: result.findings.length,
             lastSuccessfulAt: result.complete
               ? at
@@ -199,7 +250,7 @@ export class TableDoctor {
           null,
           at,
         );
-      } catch {
+      } catch (error) {
         if (signal?.aborted) return this.state();
         this.store.reconcile(
           "doctor:access:" + document.id,
@@ -214,9 +265,9 @@ export class TableDoctor {
               type: "sheets_api_unavailable",
               severity: "critical",
               title: "Google Sheets API недоступен",
-              observed: "Не удалось прочитать документ",
+              observed: accessMessage(error),
               expected: "Успешное авторизованное чтение",
-              cause: "Проверьте доступ, сеть и квоты; причина не подтверждена",
+              cause: accessMessage(error),
               impact:
                 "Текущие формулы не проверены; предыдущие проблемы сохраняются",
               recommendation:
@@ -242,7 +293,14 @@ export class TableDoctor {
             checkedFormulas: null,
             issueCount: null,
             lastSuccessfulAt: previous?.lastSuccessfulAt || null,
-            message: "Чтение недоступно; это не нулевая производительность",
+            durationMs: Math.round(performance.now() - started),
+            api: metricDelta(metricsBefore, this.reader.telemetry?.()),
+            httpStatus: Number.isInteger(error.status) ? error.status : null,
+            errorCode:
+              typeof error.code === "string" ? error.code : "read_failed",
+            readVerifiedAt: previous?.readVerifiedAt || null,
+            formulasRead: null,
+            message: accessMessage(error) + "; KPI не обнулён",
           },
           at,
         );

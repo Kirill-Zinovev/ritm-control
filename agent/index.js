@@ -1,3 +1,4 @@
+process.umask(0o077);
 import { randomUUID } from "node:crypto";
 import {
   appendFileSync,

@@ -135,6 +135,8 @@ export function timeLabel(value?: string | null) {
   }).format(new Date(value));
 }
 export const statusLabel: Record<string, string> = {
+  verified: "Чтение подтверждено",
+  awaiting_verification: "Ожидает проверки подключения",
   new: "Новая проблема",
   review: "Требует проверки",
   confirmed: "Подтверждена",

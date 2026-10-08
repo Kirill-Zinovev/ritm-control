@@ -1,0 +1,14 @@
+node_modules
+dist
+.git
+.checks
+.env
+.env.*
+agent-data
+*.sqlite*
+*.secrets.xml
+**/*credentials*.json
+**/*service-account*.json
+**/*google-key*.json
+**/google-audit
+docs/table-doctor-demo

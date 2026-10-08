@@ -39,6 +39,7 @@ const views = [
 ] as const;
 type View = (typeof views)[number][0];
 const eventNames: Record<string, string> = {
+  manual_audit: "Ручной аудит Google Drive",
   doctor_check: "Table Doctor",
   doctor_unavailable: "Нет доступа к формулам",
   demo_changed: "Демонстрация",
@@ -435,8 +436,9 @@ export function AICenter() {
                 </p>
               </section>
               <Notice>
-                Проверка формул: не настроено. LLM-анализ и AI-чат: этап 3.
-                Telegram:{" "}
+                Проверка формул:{" "}
+                {statusLabel[state.config.formulaAccess] || "Не настроено"}.
+                LLM-анализ и AI-чат: не настроено. Telegram:{" "}
                 {state.config.telegram === "configured"
                   ? "настроен"
                   : "не настроено"}
@@ -725,7 +727,11 @@ export function AICenter() {
             <section className="panel">
               <div className="panel-heading">
                 <h2>Настройки · только просмотр</h2>
-                <Badge>Локальный агент Windows</Badge>
+                <Badge>
+                  {state.config.deployment === "local"
+                    ? "Локальный агент"
+                    : "Приватный HTTPS-сервер"}
+                </Badge>
               </div>
               <dl className="ai-details">
                 <div>
@@ -740,6 +746,12 @@ export function AICenter() {
                   <dd>
                     Чтение, диагностика, журнал, рекомендации, настроенные
                     уведомления. Исправления и деплой отключены.
+                  </dd>
+                </div>
+                <div>
+                  <dt>Google Sheets API · формулы</dt>
+                  <dd>
+                    {statusLabel[state.config.formulaAccess] || "Не настроено"}
                   </dd>
                 </div>
                 <div>

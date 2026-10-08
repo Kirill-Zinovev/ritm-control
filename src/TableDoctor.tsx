@@ -23,7 +23,23 @@ type DoctorState = {
   lastCheck: string | null;
   lastSuccessfulCheck: string | null;
   checkedFormulas: number | null;
+  formulasRead: number | null;
+  connection: string;
   demoCheckedFormulas: number;
+  manualAudit?: {
+    channel: string;
+    at: string;
+    formulasRead: number;
+    returnedCells: number;
+    sheets: {
+      name: string;
+      gid: number;
+      formulasRead: number;
+      errors: unknown[];
+      plannedMatches: number;
+      plannedCandidates: number;
+    }[];
+  } | null;
   demoEnabled: boolean;
   documents: {
     id: string;
@@ -41,6 +57,18 @@ type DoctorState = {
       checkedFormulas: number | null;
       issueCount: number | null;
       lastSuccessfulAt?: string;
+      readVerifiedAt?: string;
+      formulasRead?: number | null;
+      returnedCells?: number;
+      durationMs?: number;
+      stale?: boolean;
+      httpStatus?: number | null;
+      api?: { readRequests: number; retries: number } | null;
+      sheetMetrics?: {
+        name: string;
+        formulasRead: number;
+        returnedCells: number;
+      }[];
     } | null;
   }[];
 };
@@ -178,6 +206,11 @@ export function TableDoctor() {
         </Notice>
       )}
       {message && <Notice>{message}</Notice>}
+      <Notice tone={state.connection === "verified" ? "neutral" : "warning"}>
+        Google Sheets API: {statusLabel[state.connection] || state.connection}.
+        {state.connection !== "verified" &&
+          " Успешное чтение от сервисного аккаунта не подтверждено. Путь к ключу не доказывает подключение."}
+      </Notice>
       <section className="panel">
         <div className="panel-heading">
           <div>
@@ -203,15 +236,21 @@ export function TableDoctor() {
             </strong>
           </div>
           <div>
-            <span>Формул проверено в успешных проверках</span>
+            <span>Реальных формул прочитано</span>
             <strong
               className={
-                state.checkedFormulas === null ? "doctor-time" : undefined
+                state.formulasRead === null ? "doctor-time" : undefined
               }
             >
-              {state.checkedFormulas ?? "Нет проверки"}
+              {state.formulasRead ?? "Нет проверки"}
             </strong>
-            <small>В демонстрации проверено: {state.demoCheckedFormulas}</small>
+            <small>
+              Формульных ячеек по правилам:{" "}
+              {state.checkedFormulas ?? "нет проверки"}
+            </small>
+            {state.demoEnabled && (
+              <small>Демонстрация: {state.demoCheckedFormulas}</small>
+            )}
           </div>
           <div>
             <span>Последняя проверка</span>
@@ -262,7 +301,9 @@ export function TableDoctor() {
                         r.check?.status}
                   </Badge>
                   <small className="ai-block">
+                    {r.check?.stale ? "Предыдущая проверка устарела. " : ""}
                     {r.check?.message || "Проверка ещё не выполнялась"}
+                    {r.check?.httpStatus ? " · HTTP " + r.check.httpStatus : ""}
                   </small>
                 </>
               ),
@@ -286,8 +327,26 @@ export function TableDoctor() {
             },
             {
               id: "at",
-              label: "Последнее успешное чтение",
-              render: (r) => timeLabel(r.check?.lastSuccessfulAt),
+              label: "Чтение API и время",
+              render: (r) => (
+                <>
+                  {timeLabel(r.check?.readVerifiedAt)}
+                  {r.check?.durationMs !== undefined && (
+                    <small className="ai-block">
+                      {(r.check.durationMs / 1000).toFixed(2)} с · запросов
+                      Sheets: {r.check.api?.readRequests ?? "—"} · повторов:{" "}
+                      {r.check.api?.retries ?? "—"}
+                    </small>
+                  )}
+                  {r.check?.formulasRead !== undefined &&
+                    r.check.formulasRead !== null && (
+                      <small className="ai-block">
+                        Прочитано формул: {r.check.formulasRead}, ячеек:{" "}
+                        {r.check.returnedCells}
+                      </small>
+                    )}
+                </>
+              ),
             },
             {
               id: "link",
@@ -314,6 +373,52 @@ export function TableDoctor() {
           владельца. Они не используются для автоматического исправления.
         </Notice>
       </section>
+      {state.manualAudit?.channel === "google_drive_connector" && (
+        <section className="panel">
+          <div className="panel-heading">
+            <div>
+              <h3>Реальные источники · разовый аудит Google Drive</h3>
+              <p className="panel-note">
+                {timeLabel(state.manualAudit.at)} · отдельный сохранённый отчёт
+              </p>
+            </div>
+            <Badge>Ручное чтение</Badge>
+          </div>
+          <Notice>
+            Прочитано {state.manualAudit.formulasRead.toLocaleString("ru-RU")}{" "}
+            формул в {state.manualAudit.sheets.length} листах и диапазонах. Это
+            разовый аудит через подключённый Google Drive. Он не подтверждает
+            авторизацию или работу фонового агента от сервисного аккаунта.
+            Формульные шаблоны ещё ждут утверждения.
+          </Notice>
+          <DataTable
+            label="Диапазоны ручного аудита"
+            rows={state.manualAudit.sheets}
+            rowKey={(r) => String(r.gid)}
+            columns={[
+              { id: "sheet", label: "Лист", render: (r) => r.name },
+              {
+                id: "formulas",
+                label: "Формул прочитано",
+                render: (r) => r.formulasRead,
+              },
+              {
+                id: "errors",
+                label: "Ошибки вычисления",
+                render: (r) => r.errors.length,
+              },
+              {
+                id: "candidates",
+                label: "Совпадение кандидата площади J",
+                render: (r) =>
+                  r.plannedCandidates
+                    ? r.plannedMatches + " / " + r.plannedCandidates
+                    : "Не применимо",
+              },
+            ]}
+          />
+        </section>
+      )}
       {state.demoEnabled && (
         <section className="panel doctor-demo">
           <div className="panel-heading">

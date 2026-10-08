@@ -53,6 +53,27 @@ export function loadConfig(env = process.env) {
       throw new Error("Dev origin must be a loopback origin");
     allowedOrigins.push(u.origin);
   }
+  if (env.RITM_PUBLIC_ORIGIN) {
+    const u = new URL(env.RITM_PUBLIC_ORIGIN);
+    if (
+      u.protocol !== "https:" ||
+      u.origin !== env.RITM_PUBLIC_ORIGIN ||
+      u.username ||
+      u.password
+    )
+      throw new Error("Public origin must be an exact HTTPS origin");
+    allowedOrigins.push(u.origin);
+  }
+  function secretFile(name) {
+    if (!env[name]) return "";
+    const filename = fs.realpathSync(path.resolve(env[name])),
+      root = fs.realpathSync(process.cwd());
+    if (filename.toLowerCase().startsWith(root.toLowerCase() + path.sep))
+      throw new Error("Secret files must be outside repository");
+    if (fs.statSync(filename).size > 8192)
+      throw new Error("Invalid secret file size");
+    return fs.readFileSync(filename, "utf8").trim();
+  }
   const sources = validateRegistry(
     env.RITM_SOURCE_REGISTRY
       ? JSON.parse(
@@ -83,15 +104,25 @@ export function loadConfig(env = process.env) {
       number(env, "RITM_CHECK_INTERVAL_SECONDS", 600, 60, 86400) * 1000,
     timeoutMs: number(env, "RITM_REQUEST_TIMEOUT_SECONDS", 25, 1, 120) * 1000,
     retries: number(env, "RITM_REQUEST_RETRIES", 2, 0, 5),
+    googleMinIntervalMs: number(
+      env,
+      "RITM_GOOGLE_MIN_INTERVAL_MS",
+      2000,
+      1000,
+      60000,
+    ),
     slowApiMs: number(env, "RITM_SLOW_API_MS", 5000, 100, 120000),
     snapshotMaxAgeMs:
       number(env, "RITM_SNAPSHOT_MAX_AGE_SECONDS", 1200, 60, 86400) * 1000,
     apiBase: apiBase ? new URL(apiBase).origin : "",
     sources,
-    ownerToken: env.RITM_OWNER_TOKEN || "",
+    ownerToken: env.RITM_OWNER_TOKEN || secretFile("RITM_OWNER_TOKEN_FILE"),
+    publicOrigin: env.RITM_PUBLIC_ORIGIN || "",
+    apiRateLimit: number(env, "RITM_API_RATE_LIMIT", 180, 60, 600),
     telegram: {
       enabled: env.RITM_TELEGRAM_ENABLED === "true",
-      token: env.RITM_TELEGRAM_BOT_TOKEN || "",
+      token:
+        env.RITM_TELEGRAM_BOT_TOKEN || secretFile("RITM_TELEGRAM_TOKEN_FILE"),
       chatId: env.RITM_TELEGRAM_OWNER_CHAT_ID || "",
     },
     model: env.RITM_AI_MODEL || null,
@@ -112,7 +143,7 @@ export function publicConfig(config) {
         ? "configured"
         : "not_configured",
     formulaAccess: config.googleCredentialsFile
-      ? "configured"
+      ? "awaiting_verification"
       : "not_configured",
     doctorDocuments: (config.doctorDocuments || []).map((d) => ({
       id: d.id,
@@ -123,7 +154,7 @@ export function publicConfig(config) {
       sheets: d.sheets.length,
     })),
     doctorDemoEnabled: !!config.doctorDemoEnabled,
-    deployment: "local",
+    deployment: config.publicOrigin ? "private_https_proxy" : "local",
     sources: config.sources,
     snapshotMaxAgeSeconds: config.snapshotMaxAgeMs / 1000,
   };

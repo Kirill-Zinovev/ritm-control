@@ -19,6 +19,8 @@ export class GoogleSheetsReader {
     timeoutMs = 25000,
     retries = 2,
     now = () => Date.now(),
+    minIntervalMs = 0,
+    sleep = delay,
   } = {}) {
     this.credentialsFile = credentialsFile;
     this.fetcher = fetcher;
@@ -27,25 +29,77 @@ export class GoogleSheetsReader {
     this.now = now;
     this.cached = null;
     this.pending = null;
+    this.minIntervalMs = minIntervalMs;
+    this.sleep = sleep;
+    this.nextReadAt = 0;
+    this.queue = Promise.resolve();
+    this.metrics = {
+      readRequests: 0,
+      oauthRequests: 0,
+      retries: 0,
+      responseBytes: 0,
+      statuses: {},
+    };
+    this.authorizedAt = null;
+  }
+  telemetry() {
+    return structuredClone(this.metrics);
   }
   get configured() {
     return !!this.credentialsFile;
   }
+  async perform(url, options) {
+    const read = new URL(url).hostname === "sheets.googleapis.com";
+    const perform = async () => {
+      if (read) {
+        const wait = Math.max(0, this.nextReadAt - this.now());
+        if (wait) await this.sleep(wait, undefined, { signal: options.signal });
+        this.nextReadAt = this.now() + this.minIntervalMs;
+      }
+      if (options.signal?.aborted)
+        throw new SheetsAccessError("request_cancelled");
+      this.metrics[read ? "readRequests" : "oauthRequests"]++;
+      const response = await this.fetcher(url, options);
+      this.metrics.statuses[response.status] =
+        (this.metrics.statuses[response.status] || 0) + 1;
+      return response;
+    };
+    const pending = this.queue.then(perform);
+    this.queue = pending.catch(() => {});
+    return pending;
+  }
   async request(url, options) {
     for (let attempt = 0; attempt <= this.retries; attempt++) {
+      let retryAfter = 0;
       try {
-        const response = await this.fetcher(url, options);
+        const response = await this.perform(url, options);
         if (
           response.ok ||
           ![429, 500, 502, 503, 504].includes(response.status) ||
           attempt === this.retries
         )
           return response;
+        const hint = response.headers.get("retry-after");
+        if (hint)
+          retryAfter = Math.min(
+            30000,
+            Math.max(
+              0,
+              /^\d+$/.test(hint)
+                ? Number(hint) * 1000
+                : Date.parse(hint) - this.now(),
+            ),
+          );
       } catch (error) {
         if (options.signal?.aborted || attempt === this.retries)
           throw new SheetsAccessError("network_unavailable");
       }
-      await delay(250 * 2 ** attempt, undefined, { signal: options.signal });
+      this.metrics.retries++;
+      await this.sleep(
+        Math.max(1000 * 2 ** attempt, retryAfter || 0),
+        undefined,
+        { signal: options.signal },
+      );
     }
   }
   async accessToken(signal) {
@@ -107,7 +161,7 @@ export class GoogleSheetsReader {
     } catch {
       throw new SheetsAccessError("invalid_private_key");
     }
-    const response = await this.fetcher(tokenEndpoint, {
+    const response = await this.request(tokenEndpoint, {
       method: "POST",
       redirect: "error",
       headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -130,6 +184,7 @@ export class GoogleSheetsReader {
         value.scope.split(" ").some((s) => s !== SHEETS_READ_SCOPE))
     )
       throw new SheetsAccessError("invalid_token_response");
+    this.authorizedAt = new Date(this.now()).toISOString();
     this.cached = {
       token: value.access_token,
       expires: this.now() + value.expires_in * 1000,
@@ -146,7 +201,7 @@ export class GoogleSheetsReader {
     for (const [k, values] of Object.entries(params))
       for (const v of Array.isArray(values) ? values : [values])
         url.searchParams.append(k, v);
-    const response = await this.fetcher(url, {
+    const response = await this.request(url, {
       method: "GET",
       redirect: "error",
       headers: { authorization: "Bearer " + token },
@@ -159,6 +214,7 @@ export class GoogleSheetsReader {
       throw new SheetsAccessError("sheets_unavailable", response.status);
     }
     const text = await response.text();
+    this.metrics.responseBytes += Buffer.byteLength(text);
     if (text.length > 12000000)
       throw new SheetsAccessError("response_too_large");
     let value;

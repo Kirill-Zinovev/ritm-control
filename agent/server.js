@@ -28,7 +28,8 @@ export function createAgentServer(
       "RITM_OWNER_TOKEN must contain at least 32 characters; configure the owner before starting the API",
     );
   const sessions = new Map(),
-    attempts = new Map();
+    attempts = new Map(),
+    requests = new Map();
   const hosts = new Set(config.allowedOrigins.map((o) => new URL(o).host));
   function send(res, status, payload, extra = {}) {
     res.writeHead(status, {
@@ -68,6 +69,25 @@ export function createAgentServer(
   }
   const handler = async (req, res) => {
     try {
+      const requestKey = req.socket.remoteAddress;
+      const currentWindow = Math.floor(now() / 60000);
+      const entry = requests.get(requestKey);
+      const budget =
+        entry?.window === currentWindow
+          ? entry
+          : { window: currentWindow, count: 0 };
+      budget.count++;
+      if (requests.size > 1000) requests.clear();
+      requests.set(requestKey, budget);
+      if (budget.count > (config.apiRateLimit || 180)) {
+        send(
+          res,
+          429,
+          { ok: false, error: "rate_limited" },
+          { "retry-after": "60" },
+        );
+        return;
+      }
       const origin = req.headers.origin;
       const localHost = [
         "127.0.0.1:" + req.socket.localPort,
@@ -81,7 +101,7 @@ export function createAgentServer(
         send(res, 403, {
           ok: false,
           error: "origin_forbidden",
-          message: "Доступ разрешён только с настроенного локального адреса.",
+          message: "Доступ разрешён только с настроенного адреса.",
         });
         return;
       }
@@ -149,7 +169,8 @@ export function createAgentServer(
               sessionCookie +
               "=" +
               cookie +
-              "; HttpOnly; SameSite=Strict; Path=/api; Max-Age=28800",
+              "; HttpOnly; SameSite=Strict; Path=/api; Max-Age=28800" +
+              (config.publicOrigin ? "; Secure" : ""),
           },
         );
         return;
@@ -176,7 +197,8 @@ export function createAgentServer(
             {
               "set-cookie":
                 sessionCookie +
-                "=; HttpOnly; SameSite=Strict; Path=/api; Max-Age=0",
+                "=; HttpOnly; SameSite=Strict; Path=/api; Max-Age=0" +
+                (config.publicOrigin ? "; Secure" : ""),
             },
           );
           return;
@@ -299,7 +321,12 @@ export function createAgentServer(
               : null,
             checks,
             controlledSources: config.sources.filter((s) => s.enabled).length,
-            config: publicConfig(config),
+            config: {
+              ...publicConfig(config),
+              formulaAccess:
+                doctor?.state().connection ||
+                publicConfig(config).formulaAccess,
+            },
             notifications: store.meta("notifications") || {
               status: "not_configured",
             },
@@ -307,7 +334,12 @@ export function createAgentServer(
           return;
         }
         if (pathname === "/api/intelligence/settings") {
-          send(res, 200, { ok: true, ...publicConfig(config) });
+          send(res, 200, {
+            ok: true,
+            ...publicConfig(config),
+            formulaAccess:
+              doctor?.state().connection || publicConfig(config).formulaAccess,
+          });
           return;
         }
         const pagination = {
