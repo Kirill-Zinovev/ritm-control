@@ -1,5 +1,7 @@
+import { AICenter } from "./AICenter";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Bot,
   ArrowsClockwise,
   CalendarBlank,
   ChartBar,
@@ -77,9 +79,11 @@ const NAV = [
   { id: "production", label: "Производство", icon: ChartBar },
   { id: "stock", label: "Склад", icon: Cube },
   { id: "supplies", label: "Поставки", icon: Truck },
+  { id: "intelligence", label: "AI Center", icon: Bot },
   { id: "sources", label: "Источники данных", icon: Database },
 ] as const;
 const TITLES: Record<Page, string> = {
+  intelligence: "AI Center",
   overview: "Обзор производства",
   assembly: "Сборщики",
   printing: "Печать",
@@ -89,6 +93,7 @@ const TITLES: Record<Page, string> = {
   sources: "Источники данных",
 };
 const SUBTITLES: Record<Page, string> = {
+  intelligence: "RITM Intelligence · контроль источников и системы",
   overview: "Вся смена на одном экране",
   assembly: "Дневная цель — коэффициент не ниже 1,00",
   printing: "Фактический выпуск печатников · Красное здание",
@@ -143,8 +148,8 @@ export function App() {
   const [real, setReal] = useState<Dataset>(() =>
     readStorage("ritm-real-v1", emptyDataset()),
   );
-  const live = useLivePrinting();
-  const assemblyLive = useLiveAssembly(date, period);
+  const live = useLivePrinting(page !== "intelligence");
+  const assemblyLive = useLiveAssembly(date, period, page !== "intelligence");
   const data = mode === "demo" ? demo : printingDataset(real, live.value);
   const [supplyFilter, setSupplyFilter] = useState("all");
   const [sources, setSources] = useState<Source[]>(() =>
@@ -257,9 +262,36 @@ export function App() {
       );
     }, 450);
   };
-  const assemblyRows = (assemblyLive.value?.rows || []).filter((row) => !query || (row.employee + " " + row.cutTypes.map((x) => x.name).join(" ") + " " + row.packTypes.map((x) => x.name).join(" ")).toLocaleLowerCase("ru").includes(query.toLocaleLowerCase("ru")));
-  const assemblyTotals = assemblyRows.reduce((sum, row) => ({ coefficient: sum.coefficient + row.coefficient, cut: sum.cut + row.cut, packed: sum.packed + row.packed, total: sum.total + row.total }), { coefficient: 0, cut: 0, packed: 0, total: 0 });
-  const activeSourceLoading = page === "assembly" ? assemblyLive.loading : live.loading;
+  const assemblyRows = (
+    assemblyLive.value?.date === date && assemblyLive.value?.period === period
+      ? assemblyLive.value.rows
+      : []
+  ).filter(
+    (row) =>
+      !query ||
+      (
+        row.employee +
+        " " +
+        row.cutTypes.map((x) => x.name).join(" ") +
+        " " +
+        row.packTypes.map((x) => x.name).join(" ")
+      )
+        .toLocaleLowerCase("ru")
+        .includes(query.toLocaleLowerCase("ru")),
+  );
+  const assemblyTotals = assemblyRows.reduce(
+    (sum, row) => ({
+      coefficient: sum.coefficient + row.coefficient,
+      cut: sum.cut + row.cut,
+      packed: sum.packed + row.packed,
+      total: sum.total + row.total,
+    }),
+    { coefficient: 0, cut: 0, packed: 0, total: 0 },
+  );
+  const assemblyKnown = assemblyRows.length > 0;
+  const printingKnown = mode === "demo" || !!live.value;
+  const activeSourceLoading =
+    page === "assembly" ? assemblyLive.loading : live.loading;
   const contains = (value: string) =>
     value.toLocaleLowerCase("ru").includes(query.toLocaleLowerCase("ru"));
   const workPeople = data.employees.filter(
@@ -300,15 +332,23 @@ export function App() {
       ? (live.value?.events || [])
           .filter((event) => event.employee === activePrinterProfile.name)
           .map((event) => ({
-            id: event.id, roll: event.roll || event.id, date: event.date,
-            article: event.article, quantity: event.quantity, area: event.area,
+            id: event.id,
+            roll: event.roll || event.id,
+            date: event.date,
+            article: event.article,
+            quantity: event.quantity,
+            area: event.area,
             supply: event.sheetName,
           }))
       : data.rolls
           .filter((record) => record.employee === activePrinterProfile.id)
           .map((record) => ({
-            id: record.id, roll: record.roll || record.id, date: record.date,
-            article: record.article, quantity: record.quantity, area: record.area,
+            id: record.id,
+            roll: record.roll || record.id,
+            date: record.date,
+            article: record.article,
+            quantity: record.quantity,
+            area: record.area,
             supply: record.source,
           }))
     : [];
@@ -754,7 +794,11 @@ export function App() {
       </aside>
       <main
         id="main"
-        className={page === "printing" && printerProfileId ? "is-printer-profile" : undefined}
+        className={
+          page === "printing" && printerProfileId
+            ? "is-printer-profile"
+            : undefined
+        }
       >
         <header className="page-header">
           <div>
@@ -770,98 +814,142 @@ export function App() {
                 <span>Меню</span>
               </button>
               <h1>{TITLES[page]}</h1>
-              <Badge tone={mode === "demo" ? "warning" : page === "assembly" ? assemblyLive.error ? "warning" : assemblyLive.value ? "success" : "info" : "info"}>
-                {page === "assembly" && mode === "imported" ? assemblyLive.error ? "Ошибка FBO" : assemblyLive.value ? "FBO подключено" : "Подключаю FBO" : mode === "demo"
-                  ? "Демо-данные"
-                  : live.value
-                    ? "Рабочие данные"
-                    : "Подключение"}
-              </Badge>
+              {page !== "intelligence" && (
+                <Badge
+                  tone={
+                    mode === "demo"
+                      ? "warning"
+                      : page === "assembly"
+                        ? assemblyLive.error
+                          ? "warning"
+                          : assemblyLive.value
+                            ? "success"
+                            : "info"
+                        : "info"
+                  }
+                >
+                  {page === "assembly" && mode === "imported"
+                    ? assemblyLive.error
+                      ? "Ошибка FBO"
+                      : assemblyLive.value
+                        ? "FBO подключено"
+                        : "Подключаю FBO"
+                    : mode === "demo"
+                      ? "Демо-данные"
+                      : live.value
+                        ? "Рабочие данные"
+                        : "Подключение"}
+                </Badge>
+              )}
             </div>
             <p>{SUBTITLES[page]}</p>
           </div>
-          <div className="header-controls">
-            <div
-              className="segments"
-              role="group"
-              aria-label="Период показателей"
-            >
-              {(["day", "week", "month"] as Period[]).map((p, i) => (
-                <button
-                  key={p}
-                  aria-pressed={period === p}
-                  className={period === p ? "selected" : ""}
-                  onClick={() => setPeriod(p)}
-                >
-                  {["День", "Неделя", "Месяц"][i]}
-                </button>
-              ))}
+          {page !== "intelligence" && (
+            <div className="header-controls">
+              <div
+                className="segments"
+                role="group"
+                aria-label="Период показателей"
+              >
+                {(["day", "week", "month"] as Period[]).map((p, i) => (
+                  <button
+                    key={p}
+                    aria-pressed={period === p}
+                    className={period === p ? "selected" : ""}
+                    onClick={() => setPeriod(p)}
+                  >
+                    {["День", "Неделя", "Месяц"][i]}
+                  </button>
+                ))}
+              </div>
+              <label className="date-control">
+                <CalendarBlank size={18} />
+                <input
+                  aria-label="Дата показателей"
+                  type="date"
+                  value={date}
+                  onChange={(e) => {
+                    if (e.target.value) setDate(e.target.value);
+                  }}
+                />
+              </label>
             </div>
-            <label className="date-control">
-              <CalendarBlank size={18} />
-              <input
-                aria-label="Дата показателей"
-                type="date"
-                value={date}
-                onChange={(e) => {
-                  if (e.target.value) setDate(e.target.value);
-                }}
-              />
-            </label>
-          </div>
-        </header>
-        <div className="context-bar">
-          {page !== "sources" && (
-            <span>
-              {mode === "demo" ? (
-                <>Показан демонстрационный пример на {shortDate(date)}.</>
-              ) : (
-                <>
-                  {page === "assembly" && mode === "imported" ? (assemblyLive.loading ? "Читаю подключённую таблицу FBO…" : assemblyLive.error ? assemblyLive.value ? "Не удалось обновить FBO · показаны последние данные" : "Таблица FBO недоступна" : assemblyLive.value ? "FBO «Итого» подключена · " + assemblyLive.value.rows.length + " сборщиков · обновлено " + new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" }).format(new Date(assemblyLive.value.updatedAt)) : "Подключаю FBO…") : live.loading
-                    ? "Читаю рабочую таблицу…"
-                    : live.error
-                      ? live.value
-                        ? "Обновление не удалось · показаны последние полученные данные"
-                        : "Таблица недоступна"
-                      : live.value
-                        ? `Печать подключена · ${live.value.sheets.length} листов · обновлено ${new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" }).format(new Date(live.value.updatedAt))} · автообновление 5 мин`
-                        : "Подключаю печать…"}
-                </>
-              )}
-            </span>
           )}
-          <div>
-            <select
-              aria-label="Режим данных"
-              value={mode}
-              onChange={(e) => {
-                setMode(e.target.value as "demo" | "imported");
-                setEmployee("");
-                setSupplyId("");
-                setQuery("");
-              }}
-            >
-              <option value="demo">Демонстрация</option>
-              <option value="imported">Рабочие данные</option>
-            </select>
-            <Button disabled={busy || activeSourceLoading} onClick={refresh}>
-              <ArrowsClockwise size={17} className={busy ? "spin" : ""} />
-              {busy || activeSourceLoading ? "Обновление" : "Обновить"}
-            </Button>
+        </header>
+        {page !== "intelligence" && (
+          <div className="context-bar">
+            {page !== "sources" && (
+              <span>
+                {mode === "demo" ? (
+                  <>Показан демонстрационный пример на {shortDate(date)}.</>
+                ) : (
+                  <>
+                    {page === "assembly" && mode === "imported"
+                      ? assemblyLive.loading
+                        ? "Читаю подключённую таблицу FBO…"
+                        : assemblyLive.error
+                          ? assemblyLive.value
+                            ? "Не удалось обновить FBO · показаны последние данные"
+                            : "Таблица FBO недоступна"
+                          : assemblyLive.value
+                            ? "FBO «Итого» подключена · " +
+                              assemblyLive.value.rows.length +
+                              " сборщиков · обновлено " +
+                              new Intl.DateTimeFormat("ru-RU", {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                                timeZone: "Europe/Moscow",
+                              }).format(new Date(assemblyLive.value.updatedAt))
+                            : "Подключаю FBO…"
+                      : live.loading
+                        ? "Читаю рабочую таблицу…"
+                        : live.error
+                          ? live.value
+                            ? "Обновление не удалось · показаны последние полученные данные"
+                            : "Таблица недоступна"
+                          : live.value
+                            ? `Печать подключена · ${live.value.sheets.length} листов · обновлено ${new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" }).format(new Date(live.value.updatedAt))} · автообновление 5 мин`
+                            : "Подключаю печать…"}
+                  </>
+                )}
+              </span>
+            )}
+            <div>
+              <select
+                aria-label="Режим данных"
+                value={mode}
+                onChange={(e) => {
+                  setMode(e.target.value as "demo" | "imported");
+                  setEmployee("");
+                  setSupplyId("");
+                  setQuery("");
+                }}
+              >
+                <option value="demo">Демонстрация</option>
+                <option value="imported">Рабочие данные</option>
+              </select>
+              <Button disabled={busy || activeSourceLoading} onClick={refresh}>
+                <ArrowsClockwise size={17} className={busy ? "spin" : ""} />
+                {busy || activeSourceLoading ? "Обновление" : "Обновить"}
+              </Button>
+            </div>
           </div>
-        </div>
+        )}
+        {page === "intelligence" && <AICenter />}
         {page === "overview" && (
           <>
             <div className="metrics four">
               {metric(
                 mode === "imported" ? "Листов поставок" : "Поставки в работе",
-                num(
-                  mode === "imported"
-                    ? live.value?.sheets.length || 0
-                    : data.supplies.filter(
+                mode === "imported"
+                  ? live.value
+                    ? num(live.value.sheets.length)
+                    : "—"
+                  : num(
+                      data.supplies.filter(
                         (s) => lineTotals(s).shipped < lineTotals(s).plan,
                       ).length,
-                ),
+                    ),
                 Truck,
               )}
               {metric(
@@ -880,7 +968,11 @@ export function App() {
                   ? "Дневная цель ≥ 1"
                   : "По среднему за рабочий день",
               )}
-              {metric("Напечатано за период", num(area, 1) + " м²", Printer)}
+              {metric(
+                "Напечатано за период",
+                printingKnown ? num(area, 1) + " м²" : "—",
+                Printer,
+              )}
             </div>
             <section className="panel">
               <div className="panel-heading">
@@ -932,11 +1024,19 @@ export function App() {
                         <div>
                           <strong>{s.name}</strong>
                           <small>
-                            {s.id === "assembly" ? (assemblyLive.value ? "FBO подключено · " + assemblyLive.value.rows.length + " сборщиков" : assemblyLive.loading ? "Читаю FBO…" : "Таблица FBO недоступна") : s.state === "imported"
-                              ? `Загружено ${s.rows} строк`
-                              : s.url
-                                ? "Ссылка подготовлена. Чтение ещё не настроено."
-                                : "Нужна свежая выгрузка остатков."}
+                            {s.id === "assembly"
+                              ? assemblyLive.value
+                                ? "FBO подключено · " +
+                                  assemblyLive.value.rows.length +
+                                  " сборщиков"
+                                : assemblyLive.loading
+                                  ? "Читаю FBO…"
+                                  : "Таблица FBO недоступна"
+                              : s.state === "imported"
+                                ? `Загружено ${s.rows} строк`
+                                : s.url
+                                  ? "Ссылка подготовлена. Чтение ещё не настроено."
+                                  : "Нужна свежая выгрузка остатков."}
                           </small>
                         </div>
                         <CaretRight size={19} />
@@ -954,65 +1054,173 @@ export function App() {
         {page === "assembly" && mode === "imported" && (
           <>
             <div className="metrics four">
-              {metric("Сборщики с выпуском", num(assemblyRows.length), Users)}
-              {metric("Общий коэффициент", num(assemblyTotals.coefficient, 3), ChartBar, "Сумма кэфов за выбранный период")}
-              {metric("Порезано", num(assemblyTotals.cut), Scissors, "Штук")}
-              {metric("Упаковано", num(assemblyTotals.packed), Package, num(assemblyTotals.total) + " шт. всего")}
+              {metric(
+                "Сборщики с выпуском",
+                assemblyLive.value ? num(assemblyRows.length) : "—",
+                Users,
+              )}
+              {metric(
+                "Общий коэффициент",
+                assemblyKnown ? num(assemblyTotals.coefficient, 3) : "—",
+                ChartBar,
+                "Сумма кэфов за выбранный период",
+              )}
+              {metric(
+                "Порезано",
+                assemblyKnown ? num(assemblyTotals.cut) : "—",
+                Scissors,
+                "Штук",
+              )}
+              {metric(
+                "Упаковано",
+                assemblyKnown ? num(assemblyTotals.packed) : "—",
+                Package,
+                assemblyKnown
+                  ? num(assemblyTotals.total) + " шт. всего"
+                  : "Нет подтверждённых записей",
+              )}
             </div>
             <section className="panel assembly-report">
               <div className="panel-heading">
                 <div>
                   <h2>Выпуск сборщиков · FBO итого</h2>
-                  <p className="panel-note">Коэффициент, количество штук и виды изделий загружаются из подключённой таблицы.</p>
+                  <p className="panel-note">
+                    Коэффициент, количество штук и виды изделий загружаются из
+                    подключённой таблицы.
+                  </p>
                 </div>
                 <div className="assembly-actions">
-                  <Search label="Найти сборщика или изделие" value={query} onChange={setQuery} />
-                  <a className="button secondary" href={FBO_URL} target="_blank" rel="noreferrer">
+                  <Search
+                    label="Найти сборщика или изделие"
+                    value={query}
+                    onChange={setQuery}
+                  />
+                  <a
+                    className="button secondary"
+                    href={FBO_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
                     Открыть FBO <ArrowSquareOut size={16} />
                   </a>
                 </div>
               </div>
-              {assemblyLive.error && <Notice tone="warning">{assemblyLive.error}</Notice>}
+              {assemblyLive.error && (
+                <Notice tone="warning">{assemblyLive.error}</Notice>
+              )}
+              {assemblyLive.value?.quality?.status === "partial" && (
+                <Notice tone="warning">
+                  Источник содержит некорректные записи:{" "}
+                  {assemblyLive.value.quality.invalidRecords}. Показатели
+                  неполные; снижение KPI нельзя интерпретировать как ухудшение
+                  работы.
+                </Notice>
+              )}
+              {assemblyLive.value?.stale && (
+                <Notice tone="warning">
+                  Данные устарели. Проверенный снимок:{" "}
+                  {assemblyLive.value.updatedAt}. Текущий выпуск не подтверждён.
+                </Notice>
+              )}
               {!assemblyRows.length && assemblyLive.loading ? (
                 <Busy label="Читаю FBO итого…" />
               ) : !assemblyRows.length ? (
-                <Empty title="Нет выпуска за этот период">Проверь дату или выбери другой период.</Empty>
+                <Empty
+                  title={
+                    assemblyLive.error
+                      ? "Источник недоступен"
+                      : "Нет записей за этот период"
+                  }
+                >
+                  Отсутствие записей не подтверждает нулевую производительность.
+                  Проверь дату или выбери другой период.
+                </Empty>
               ) : (
                 <div className="assembly-table-wrap">
                   <table className="assembly-live-table">
-                    <thead><tr>
-                      <th>Сборщик</th>
-                      <th>Общий кэф</th>
-                      <th><span className="assembly-th-icon"><Scissors aria-hidden="true" size={17} /><span>Порезал · шт. и виды</span></span></th>
-                      <th><span className="assembly-th-icon"><Package aria-hidden="true" size={17} /><span>Упаковал · шт. и виды</span></span></th>
-                      <th>Всего, шт.</th>
-                    </tr></thead>
-                    <tbody>{assemblyRows.map((row) => (
-                      <tr key={row.employee}>
-                        <th scope="row">
-                          <button
-                            className="assembly-employee-link"
-                            type="button"
-                            onClick={() => setAssemblyProfile(row.employee)}
-                          >
-                            {row.employee}
-                            <span>Открыть профиль</span>
-                          </button>
+                    <thead>
+                      <tr>
+                        <th>Сборщик</th>
+                        <th>Общий кэф</th>
+                        <th>
+                          <span className="assembly-th-icon">
+                            <Scissors aria-hidden="true" size={17} />
+                            <span>Порезал · шт. и виды</span>
+                          </span>
                         </th>
-                        <td className={`assembly-coefficient${row.coefficient > 0 ? " is-positive" : ""}`}>{num(row.coefficient, 3)}</td>
-                        <td><strong>{num(row.cut)}</strong><small>{row.cutTypes.map((item) => item.name + " × " + num(item.quantity)).join(" · ") || "—"}</small></td>
-                        <td><strong>{num(row.packed)}</strong><small>{row.packTypes.map((item) => item.name + " × " + num(item.quantity)).join(" · ") || "—"}</small></td>
-                        <td className="assembly-total">{num(row.total)}</td>
+                        <th>
+                          <span className="assembly-th-icon">
+                            <Package aria-hidden="true" size={17} />
+                            <span>Упаковал · шт. и виды</span>
+                          </span>
+                        </th>
+                        <th>Всего, шт.</th>
                       </tr>
-                    ))}</tbody>
-                    <tfoot><tr>
-                      <th>Итого</th><td className={`assembly-coefficient${assemblyTotals.coefficient > 0 ? " is-positive" : ""}`}>{num(assemblyTotals.coefficient, 3)}</td>
-                      <td>{num(assemblyTotals.cut)} шт.</td><td>{num(assemblyTotals.packed)} шт.</td><td>{num(assemblyTotals.total)}</td>
-                    </tr></tfoot>
+                    </thead>
+                    <tbody>
+                      {assemblyRows.map((row) => (
+                        <tr key={row.employee}>
+                          <th scope="row">
+                            <button
+                              className="assembly-employee-link"
+                              type="button"
+                              onClick={() => setAssemblyProfile(row.employee)}
+                            >
+                              {row.employee}
+                              <span>Открыть профиль</span>
+                            </button>
+                          </th>
+                          <td
+                            className={`assembly-coefficient${row.coefficient > 0 ? " is-positive" : ""}`}
+                          >
+                            {num(row.coefficient, 3)}
+                          </td>
+                          <td>
+                            <strong>{num(row.cut)}</strong>
+                            <small>
+                              {row.cutTypes
+                                .map(
+                                  (item) =>
+                                    item.name + " × " + num(item.quantity),
+                                )
+                                .join(" · ") || "—"}
+                            </small>
+                          </td>
+                          <td>
+                            <strong>{num(row.packed)}</strong>
+                            <small>
+                              {row.packTypes
+                                .map(
+                                  (item) =>
+                                    item.name + " × " + num(item.quantity),
+                                )
+                                .join(" · ") || "—"}
+                            </small>
+                          </td>
+                          <td className="assembly-total">{num(row.total)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr>
+                        <th>Итого</th>
+                        <td
+                          className={`assembly-coefficient${assemblyTotals.coefficient > 0 ? " is-positive" : ""}`}
+                        >
+                          {num(assemblyTotals.coefficient, 3)}
+                        </td>
+                        <td>{num(assemblyTotals.cut)} шт.</td>
+                        <td>{num(assemblyTotals.packed)} шт.</td>
+                        <td>{num(assemblyTotals.total)}</td>
+                      </tr>
+                    </tfoot>
                   </table>
                 </div>
               )}
-              <p className="panel-note">Данные по коэффициенту и видам взяты из «FBO итого». За неделю и месяц коэффициенты суммируются по дневным строкам источника.</p>
+              <p className="panel-note">
+                Данные по коэффициенту и видам взяты из «FBO итого». За неделю и
+                месяц коэффициенты суммируются по дневным строкам источника.
+              </p>
             </section>
           </>
         )}
@@ -1272,6 +1480,20 @@ export function App() {
           />
         ) : page === "printing" ? (
           <>
+            {mode === "imported" && live.value?.stale && (
+              <Notice tone="warning">
+                Данные печати устарели. Показан проверенный снимок от{" "}
+                {live.value.updatedAt}.
+              </Notice>
+            )}
+            {mode === "imported" &&
+              live.value?.quality?.status === "partial" && (
+                <Notice tone="warning">
+                  Источник печати содержит некорректные записи. Показатели
+                  неполные; снижение выпуска нельзя считать доказательством
+                  ухудшения работы сотрудников.
+                </Notice>
+              )}
             {mode === "imported" && live.error && (
               <Notice tone="warning">
                 {live.error}{" "}
@@ -1312,9 +1534,21 @@ export function App() {
                   </div>
                 )}
                 <div className="metrics three">
-                  {metric("Учтено за период", num(area, 2) + " м²", Printer)}
-                  {metric("Записей выпуска", num(rolls.length), Package)}
-                  {metric("Сотрудников", num(printerPeople.length), Users)}
+                  {metric(
+                    "Учтено за период",
+                    printingKnown ? num(area, 2) + " м²" : "—",
+                    Printer,
+                  )}
+                  {metric(
+                    "Записей выпуска",
+                    printingKnown ? num(rolls.length) : "—",
+                    Package,
+                  )}
+                  {metric(
+                    "Сотрудников",
+                    printingKnown ? num(printerPeople.length) : "—",
+                    Users,
+                  )}
                 </div>
                 <div className="split">
                   <section className="panel">
@@ -2088,32 +2322,50 @@ export function App() {
                     </span>
                     <Badge
                       tone={
-                        s.id === "assembly" ? (assemblyLive.value ? assemblyLive.error ? "warning" : "success" : assemblyLive.error ? "warning" : "neutral") : s.id === "printing"
-                          ? live.value
-                            ? live.error
+                        s.id === "assembly"
+                          ? assemblyLive.value
+                            ? assemblyLive.error
                               ? "warning"
                               : "success"
-                            : live.error
+                            : assemblyLive.error
                               ? "warning"
                               : "neutral"
-                          : s.state === "imported"
-                            ? "success"
-                            : "neutral"
+                          : s.id === "printing"
+                            ? live.value
+                              ? live.error
+                                ? "warning"
+                                : "success"
+                              : live.error
+                                ? "warning"
+                                : "neutral"
+                            : s.state === "imported"
+                              ? "success"
+                              : "neutral"
                       }
                     >
-                      {s.id === "assembly" ? (assemblyLive.value ? assemblyLive.error ? "Ошибка обновления" : "Подключено" : assemblyLive.loading ? "Читаю FBO…" : assemblyLive.error ? "Нет связи" : "Ожидает подключения") : s.id === "printing"
-                        ? live.value
-                          ? live.error
+                      {s.id === "assembly"
+                        ? assemblyLive.value
+                          ? assemblyLive.error
                             ? "Ошибка обновления"
                             : "Подключено"
-                          : live.loading
-                            ? "Подключаю…"
-                            : live.error
+                          : assemblyLive.loading
+                            ? "Читаю FBO…"
+                            : assemblyLive.error
                               ? "Нет связи"
                               : "Ожидает подключения"
-                        : s.state === "imported"
-                          ? "CSV загружен"
-                          : "Не подключено"}
+                        : s.id === "printing"
+                          ? live.value
+                            ? live.error
+                              ? "Ошибка обновления"
+                              : "Подключено"
+                            : live.loading
+                              ? "Подключаю…"
+                              : live.error
+                                ? "Нет связи"
+                                : "Ожидает подключения"
+                          : s.state === "imported"
+                            ? "CSV загружен"
+                            : "Не подключено"}
                     </Badge>
                   </div>
                   <h2>{s.name}</h2>
@@ -2139,13 +2391,40 @@ export function App() {
                   )}
                   {s.id === "assembly" && (
                     <div className="source-facts">
-                      <b>{assemblyLive.value ? assemblyLive.value.rows.length + " сборщиков · " + num(assemblyLive.value.rows.reduce((sum, row) => sum + row.total, 0)) + " шт." : assemblyLive.loading ? "Читаю FBO…" : "Ожидаю чтения FBO"}</b>
-                      {assemblyLive.value && <small>Последнее успешное чтение: {new Intl.DateTimeFormat("ru-RU", { dateStyle: "short", timeStyle: "short", timeZone: "Europe/Moscow" }).format(new Date(assemblyLive.value.updatedAt))} (Москва)</small>}
+                      <b>
+                        {assemblyLive.value
+                          ? assemblyLive.value.rows.length +
+                            " сборщиков · " +
+                            num(
+                              assemblyLive.value.rows.reduce(
+                                (sum, row) => sum + row.total,
+                                0,
+                              ),
+                            ) +
+                            " шт."
+                          : assemblyLive.loading
+                            ? "Читаю FBO…"
+                            : "Ожидаю чтения FBO"}
+                      </b>
+                      {assemblyLive.value && (
+                        <small>
+                          Последнее успешное чтение:{" "}
+                          {new Intl.DateTimeFormat("ru-RU", {
+                            dateStyle: "short",
+                            timeStyle: "short",
+                            timeZone: "Europe/Moscow",
+                          }).format(
+                            new Date(assemblyLive.value.updatedAt),
+                          )}{" "}
+                          (Москва)
+                        </small>
+                      )}
                     </div>
                   )}
                   {s.id === "assembly" && assemblyLive.error && (
                     <Notice tone="warning">{assemblyLive.error}</Notice>
-                  )}                  {s.id === "printing" && (
+                  )}{" "}
+                  {s.id === "printing" && (
                     <div className="source-facts">
                       <b>
                         {live.value
@@ -2186,7 +2465,10 @@ export function App() {
                     {s.id === "assembly" ? (
                       <>
                         {sourceLink("assembly")}
-                        <Button disabled={assemblyLive.loading} onClick={() => void assemblyLive.reload()}>
+                        <Button
+                          disabled={assemblyLive.loading}
+                          onClick={() => void assemblyLive.reload()}
+                        >
                           Обновить FBO
                         </Button>
                       </>
@@ -2430,6 +2712,7 @@ export function App() {
               error={formErrors.lines}
             >
               <textarea
+                className="resize-none"
                 rows={6}
                 style={{ resize: "none" }}
                 value={draft.lines}

@@ -1,96 +1,10 @@
-import { parseCsv } from "./printing.js";
+import { inspectAssemblyRows } from "./assemblyDiagnostics.js";
 
 export const FBO_SOURCE_ID = "1AuPraufSNHwEQHsVEwKR3dtiuEAqUgRrtZJDIQ9I5uo";
 export const FBO_HISTORY_GID = 2070043218;
 
-const HISTORY_HEADERS = [
-  "Дата",
-  "Сотрудник",
-  "Резка станок",
-  "Ручная резка",
-  "Порезано всего",
-  "Упаковано",
-  "Всего",
-  "Коэффициент",
-  "Порезал по видам",
-  "Упаковал по видам",
-  "Обновлено",
-  "Ключ",
-];
-
-function number_(value) {
-  const parsed = Number(
-    String(value || "")
-      .replace(/[\s\u00a0\u202f]/g, "")
-      .replace(",", "."),
-  );
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function dateKey_(value) {
-  const text = String(value || "").trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
-  const match = text.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
-  if (!match) return "";
-  return (
-    match[3] +
-    "-" +
-    match[2].padStart(2, "0") +
-    "-" +
-    match[1].padStart(2, "0")
-  );
-}
-
-function typeList_(value) {
-  const grouped = new Map();
-  String(value || "")
-    .split(/\r?\n/)
-    .forEach((line) => {
-      const match = line
-        .trim()
-        .match(/^(.*)\s+[—–-]\s+([\d\s\u00a0\u202f]+)$/);
-      if (!match) return;
-      const name = match[1].trim();
-      const quantity = number_(match[2]);
-      if (!name || !Number.isInteger(quantity) || quantity < 0) return;
-      const key = name.toLocaleLowerCase("ru-RU");
-      const entry = grouped.get(key) || { name, quantity: 0 };
-      entry.quantity += quantity;
-      grouped.set(key, entry);
-    });
-  return [...grouped.values()];
-}
-
 export function parseAssemblyRows(csv) {
-  const rows = parseCsv(csv);
-  const headers = (rows[0] || []).map((value) =>
-    String(value || "")
-      .replace(/^\uFEFF/, "")
-      .trim(),
-  );
-  if (HISTORY_HEADERS.some((header, index) => headers[index] !== header))
-    throw new Error("FBO history schema changed");
-
-  return rows.slice(1).flatMap((row) => {
-    const date = dateKey_(row[0]);
-    const employee = String(row[1] || "").trim();
-    if (!date || !employee) return [];
-    return [
-      {
-        id: String(row[11] || date + "__" + employee).trim(),
-        date,
-        employee,
-        machineCut: number_(row[2]),
-        manualCut: number_(row[3]),
-        cut: number_(row[4]),
-        packed: number_(row[5]),
-        total: number_(row[6]),
-        coefficient: number_(row[7]),
-        cutTypes: typeList_(row[8]),
-        packTypes: typeList_(row[9]),
-      },
-    ];
-  });
+  return inspectAssemblyRows(csv).records;
 }
 
 function periodStart_(date, period) {
@@ -164,7 +78,7 @@ export function summarizeAssembly(records, date, period = "day") {
 export function summarizeAssemblyDays(records) {
   const days = new Map();
   records.forEach((record) => {
-    const key = record.date + '|' + record.employee;
+    const key = record.date + "|" + record.employee;
     let entry = days.get(key);
     if (!entry) {
       entry = {
@@ -188,25 +102,34 @@ export function summarizeAssemblyDays(records) {
     entry.cut += record.cut;
     entry.packed += record.packed;
     entry.total += record.total;
-    [[entry.cutTypes, record.cutTypes], [entry.packTypes, record.packTypes]].forEach(
-      ([target, types]) => {
-        types.forEach((type) => {
-          const typeKey = type.name.toLocaleLowerCase('ru-RU');
-          const existing = target.get(typeKey) || { name: type.name, quantity: 0 };
-          existing.quantity += type.quantity;
-          target.set(typeKey, existing);
-        });
-      },
-    );
+    [
+      [entry.cutTypes, record.cutTypes],
+      [entry.packTypes, record.packTypes],
+    ].forEach(([target, types]) => {
+      types.forEach((type) => {
+        const typeKey = type.name.toLocaleLowerCase("ru-RU");
+        const existing = target.get(typeKey) || {
+          name: type.name,
+          quantity: 0,
+        };
+        existing.quantity += type.quantity;
+        target.set(typeKey, existing);
+      });
+    });
   });
   return [...days.values()]
     .map((entry) => ({
       ...entry,
-      coefficient: Math.round((entry.coefficient + Number.EPSILON) * 1000000) / 1000000,
+      coefficient:
+        Math.round((entry.coefficient + Number.EPSILON) * 1000000) / 1000000,
       cutTypes: [...entry.cutTypes.values()],
       packTypes: [...entry.packTypes.values()],
     }))
-    .sort((a, b) => a.date.localeCompare(b.date) || a.employee.localeCompare(b.employee, 'ru-RU'));
+    .sort(
+      (a, b) =>
+        a.date.localeCompare(b.date) ||
+        a.employee.localeCompare(b.employee, "ru-RU"),
+    );
 }
 
 function todayMoscow_() {
@@ -229,7 +152,9 @@ export async function loadAssembly(date, period, fetcher = fetch) {
     { signal: AbortSignal.timeout(20000) },
   );
   if (!response.ok) throw new Error("FBO source unavailable");
-  const records = parseAssemblyRows(await response.text());
+  const { records, issues, quality, sourceUpdatedAt } = inspectAssemblyRows(
+    await response.text(),
+  );
   return {
     ok: true,
     schemaVersion: 1,
@@ -237,6 +162,9 @@ export async function loadAssembly(date, period, fetcher = fetch) {
     date: selectedDate,
     period: selectedPeriod,
     updatedAt: new Date().toISOString(),
+    sourceUpdatedAt,
+    issues,
+    quality,
     rows: summarizeAssembly(records, selectedDate, selectedPeriod),
     history: summarizeAssemblyDays(records),
   };

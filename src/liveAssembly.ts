@@ -25,6 +25,9 @@ export type LiveAssembly = {
   date: string;
   period: "day" | "week" | "month";
   updatedAt: string;
+  stale?: boolean;
+  sourceUpdatedAt?: string | null;
+  quality?: { status: string; invalidRecords: number };
   rows: AssemblySummary[];
   history: AssemblyDaily[];
 };
@@ -32,14 +35,19 @@ export type LiveAssembly = {
 function validSummary(row: AssemblySummary) {
   return (
     typeof row.employee === "string" &&
-    ["coefficient", "machineCut", "manualCut", "cut", "packed", "total", "days"].every(
-      (key) => Number.isFinite(row[key as keyof AssemblySummary]),
-    ) &&
+    [
+      "coefficient",
+      "machineCut",
+      "manualCut",
+      "cut",
+      "packed",
+      "total",
+      "days",
+    ].every((key) => Number.isFinite(row[key as keyof AssemblySummary])) &&
     Array.isArray(row.cutTypes) &&
     Array.isArray(row.packTypes) &&
     [...row.cutTypes, ...row.packTypes].every(
-      (item) =>
-        typeof item.name === "string" && Number.isFinite(item.quantity),
+      (item) => typeof item.name === "string" && Number.isFinite(item.quantity),
     )
   );
 }
@@ -47,6 +55,7 @@ function validSummary(row: AssemblySummary) {
 export function useLiveAssembly(
   date: string,
   period: "day" | "week" | "month",
+  enabled = true,
 ) {
   const [value, setValue] = useState<LiveAssembly | null>(null);
   const [loading, setLoading] = useState(false);
@@ -67,7 +76,10 @@ export function useLiveAssembly(
         encodeURIComponent(period);
       const response = await fetch("/api/assembly" + query, {
         cache: "no-store",
-        signal: controller.signal,
+        signal: AbortSignal.any([
+          controller.signal,
+          AbortSignal.timeout(45000),
+        ]),
       });
       const data = await response.json();
       if (
@@ -87,7 +99,9 @@ export function useLiveAssembly(
       if (!controller.signal.aborted) setValue(data);
     } catch {
       if (!controller.signal.aborted)
-        setError("Не удалось обновить FBO «Итого». Показаны последние полученные данные.");
+        setError(
+          "Не удалось обновить FBO «Итого». Показаны последние полученные данные.",
+        );
     } finally {
       if (active.current === controller) {
         active.current = null;
@@ -97,6 +111,7 @@ export function useLiveAssembly(
   }, [date, period]);
 
   useEffect(() => {
+    if (!enabled) return;
     void reload();
     const timer = setInterval(() => {
       if (document.visibilityState === "visible") void reload();
@@ -105,7 +120,7 @@ export function useLiveAssembly(
       clearInterval(timer);
       active.current?.abort();
     };
-  }, [reload]);
+  }, [reload, enabled]);
 
   return { value, loading, error, reload };
 }

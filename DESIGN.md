@@ -53,7 +53,7 @@ Segoe UI includes Cyrillic and is installed on the user's Windows device. Arial 
 
 ## Layout
 
-Sidebar 220px, content padding 32px, section gap 18px. At 1250px the staff split stacks; at 950px sidebar becomes an off-canvas menu; at 600px forms stack and horizontal tables keep their own visible scrolling. No page-height constraints inherited from tables. Tables are paginated at 10/20/50 rows.
+Sidebar 220px, content padding 32px, section gap 18px. RITM is a workstation application: full left navigation remains visible on monitors. Content panels may stack and tables keep their own visible horizontal scrolling. No page-height constraints inherited from tables. Tables are paginated at 10/20/50 rows.
 
 ## Elevation & Depth
 
@@ -69,4 +69,8 @@ Canonical owners: `src/ui.tsx` for Button, Field, Search, DataTable, Modal, Noti
 
 ## Do's and Don'ts
 
-Show demo/imported state on every screen. Never claim a Google link is an established connection. Do not average printing/cutting/packing percentages. Missing work is not a zero unless a completed working shift is known. Warehouse rows are finished goods, grouped by article. Reserved goods are not packed goods. No hourly printing KPI without hours, no completion forecast without capacity data.
+Show demo/imported state on production screens. AI Center has its own authenticated local-agent state and never displays simulated incidents. Never claim a Google link is an established connection. Do not average printing/cutting/packing percentages. Missing work is not a zero unless a completed working shift is known. Warehouse rows are finished goods, grouped by article. Reserved goods are not packed goods. No hourly printing KPI without hours, no completion forecast without capacity data.
+
+## AI Center
+
+Use the existing shell, colors, typography and src/ui.tsx primitives. Reuse DataTable with a controlled server-pagination variant, Radix Modal for incident details and Field for owner login and filters. Agent states are real, unknown or explicitly not configured. No redesign of existing ERP sections.

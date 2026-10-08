@@ -8,3 +8,11 @@ dist/
 .env
 .env.*
 !.env.example
+
+# Local agent state and owner credentials
+agent-data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.secrets.xml
+intelligence.local.json

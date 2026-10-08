@@ -33,6 +33,9 @@ export type LivePrinting = {
   ok: true;
   schemaVersion: 2;
   updatedAt: string;
+  stale?: boolean;
+  sourceUpdatedAt?: string | null;
+  quality?: { status: string; invalidRecords: number };
   events: LiveEvent[];
   supplies: LiveOrder[];
   issues: { source: string; row: number; message: string }[];
@@ -63,7 +66,7 @@ export function printingDataset(
     rolls,
   };
 }
-export function useLivePrinting() {
+export function useLivePrinting(enabled = true) {
   const [value, setValue] = useState<LivePrinting | null>(null),
     [loading, setLoading] = useState(false),
     [error, setError] = useState("");
@@ -77,7 +80,10 @@ export function useLivePrinting() {
     try {
       const r = await fetch("/api/printing", {
         cache: "no-store",
-        signal: controller.signal,
+        signal: AbortSignal.any([
+          controller.signal,
+          AbortSignal.timeout(45000),
+        ]),
       });
       const j = await r.json();
       if (
@@ -109,6 +115,7 @@ export function useLivePrinting() {
     }
   }, []);
   useEffect(() => {
+    if (!enabled) return;
     void reload();
     const timer = setInterval(() => {
       if (document.visibilityState === "visible") void reload();
@@ -117,6 +124,6 @@ export function useLivePrinting() {
       clearInterval(timer);
       active.current?.abort();
     };
-  }, [reload]);
+  }, [reload, enabled]);
   return { value, loading, error, reload };
 }

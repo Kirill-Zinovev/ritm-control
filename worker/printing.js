@@ -1,3 +1,4 @@
+import { sourceTimestamp } from "./timestamps.js";
 const RITM_BRIDGE = { timezone: "Europe/Moscow" };
 function ritmBridgeNumber_(v) {
   var n =
@@ -79,6 +80,32 @@ export function collectJournalPrinting(index, journal) {
       issues.push({
         source: "Журнал выпуска",
         row: i + 2,
+        cell:
+          !id || eventCounts[id] > 1
+            ? "A" + (i + 2)
+            : !order
+              ? "H" + (i + 2)
+              : !employee
+                ? "C" + (i + 2)
+                : !date
+                  ? "B" + (i + 2)
+                  : "J" + (i + 2) + ":L" + (i + 2),
+        code: !id
+          ? "missing_uid"
+          : eventCounts[id] > 1
+            ? "duplicate_uid"
+            : !order
+              ? "missing_order"
+              : "invalid_record",
+        found: JSON.stringify({
+          id,
+          productionDate: r[1],
+          employee: r[2],
+          orderUid: r[7],
+          quantity: r[9],
+          area: r[11],
+        }).slice(0, 500),
+        expected: "Уникальная валидная запись печати, связанная с заказом",
         message: errors.join("; "),
       });
       return;
@@ -100,6 +127,12 @@ export function collectJournalPrinting(index, journal) {
   return { events, issues };
 }
 
+function columnName(n) {
+  let s = "";
+  for (; n; n = Math.floor((n - 1) / 26))
+    s = String.fromCharCode(65 + ((n - 1) % 26)) + s;
+  return s;
+}
 export const SHEET_ID = "1eNdUuk-2l83Pgv95LyqYKuOOfhAsEMm5tKLbhWBJiC4";
 export const SUPPLY_SHEETS = [
   [1040552228, "первая поставка НОВЫЙ ГОД"],
@@ -161,9 +194,30 @@ export function indexOrders(sheets) {
       normal(rows[2]?.[4]) !== "артикул" ||
       normal(rows[2]?.[14]) !== "кол-во"
     )
-      throw new Error("Order schema changed");
+      throw Object.assign(new Error("Order schema changed"), {
+        issue: {
+          source: name,
+          row: 3,
+          cell: "E3:O3",
+          code: "schema_changed",
+          message: "Изменились заголовки листа поставки",
+          found: JSON.stringify(rows[2] || []).slice(0, 500),
+          expected: "Артикул в E3 и Кол-во в O3",
+        },
+      });
     const uidCol = rows[0].indexOf("UID");
-    if (uidCol < 0) throw new Error("UID column missing");
+    if (uidCol < 0)
+      throw Object.assign(new Error("UID column missing"), {
+        issue: {
+          source: name,
+          row: 1,
+          cell: "A1",
+          code: "schema_changed",
+          message: "Не найден столбец UID",
+          found: "Заголовок UID отсутствует",
+          expected: "Заголовок UID в первой строке рабочего листа",
+        },
+      });
     rows.slice(3).forEach((r, i) => {
       const article = String(r[4] || "").trim();
       if (!article) return;
@@ -172,6 +226,10 @@ export function indexOrders(sheets) {
         index.issues.push({
           source: name,
           row: i + 4,
+          cell: columnName(uidCol + 1) + (i + 4),
+          code: "missing_uid",
+          found: "",
+          expected: "UID заказа",
           message: "Нет UID заказа",
         });
         return;
@@ -181,7 +239,18 @@ export function indexOrders(sheets) {
         : gid === 437912546
           ? raw
           : gid + "::" + raw;
-      if (index.byUid[uid]) throw new Error("Duplicate order UID");
+      if (index.byUid[uid])
+        throw Object.assign(new Error("Duplicate order UID"), {
+          issue: {
+            source: name,
+            row: i + 4,
+            cell: columnName(uidCol + 1) + (i + 4),
+            code: "duplicate_uid",
+            message: "Повторяется UID заказа",
+            found: raw,
+            expected: "Уникальный UID заказа",
+          },
+        });
       const quantity = ritmBridgeNumber_(r[14]),
         shownArea = ritmBridgeNumber_(r[9]);
       const calculated =
@@ -241,7 +310,17 @@ export async function loadPrinting(fetcher = fetch) {
       ([col, header]) => journal[0]?.[col] !== header,
     )
   )
-    throw new Error("Printing schema changed");
+    throw Object.assign(new Error("Printing schema changed"), {
+      issue: {
+        source: "Журнал выпуска",
+        row: 1,
+        cell: "A1:L1",
+        code: "schema_changed",
+        message: "Изменились заголовки журнала выпуска",
+        found: JSON.stringify(journal[0] || []).slice(0, 500),
+        expected: JSON.stringify(expected),
+      },
+    });
   const facts = collectJournalPrinting(index, journal.slice(1));
   return {
     ok: true,
@@ -249,6 +328,17 @@ export async function loadPrinting(fetcher = fetch) {
     source: SHEET_ID,
     timezone: "Europe/Moscow",
     updatedAt: new Date().toISOString(),
+    sourceUpdatedAt:
+      journal
+        .slice(1)
+        .map((r) => sourceTimestamp(r[12]))
+        .filter(Boolean)
+        .sort()
+        .at(-1) || null,
+    quality: {
+      status: facts.issues.length ? "partial" : "valid",
+      invalidRecords: facts.issues.length,
+    },
     events: facts.events,
     issues: facts.issues,
     supplies: index.orders,

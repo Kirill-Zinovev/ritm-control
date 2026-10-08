@@ -1,4 +1,5 @@
 export type Page =
+  | "intelligence"
   | "overview"
   | "assembly"
   | "printing"

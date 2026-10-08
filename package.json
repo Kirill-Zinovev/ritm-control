@@ -11,7 +11,10 @@
     "typecheck": "tsc --noEmit",
     "test:domain": "node scripts/test-domain.mjs",
     "format": "prettier --write src tests scripts tsconfig.json DESIGN.md UX-CONTRACT.md README.md",
-    "format:check": "prettier --check src tests/domain.test.ts scripts/test-domain.mjs tsconfig.json DESIGN.md UX-CONTRACT.md README.md"
+    "format:check": "prettier --check src tests/domain.test.ts scripts/test-domain.mjs tsconfig.json DESIGN.md UX-CONTRACT.md README.md",
+    "intelligence": "node agent/index.js",
+    "intelligence:check": "node agent/index.js --once",
+    "test:intelligence": "node --test tests/intelligence*.test.mjs"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "https://registry.npmjs.org/@radix-ui/react-dialog/-/react-dialog-1.1.23.tgz",

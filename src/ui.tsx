@@ -152,16 +152,25 @@ export function Field({
   children: ReactNode;
 }) {
   const id = useId();
-  const errorId = `${id}-error`;
+  const errorId = id + "-error";
+  const labelId = id + "-label";
   const control = isValidElement(children)
     ? cloneElement(
-        children as ReactElement<{ id?: string; "aria-describedby"?: string }>,
-        { id, "aria-describedby": error ? errorId : undefined },
+        children as ReactElement<{
+          id?: string;
+          "aria-labelledby"?: string;
+          "aria-describedby"?: string;
+        }>,
+        {
+          id,
+          "aria-labelledby": labelId,
+          "aria-describedby": error ? errorId : undefined,
+        },
       )
     : children;
   return (
     <label className="field" htmlFor={id}>
-      <span>{label}</span>
+      <span id={labelId}>{label}</span>
       {control}
       {error && (
         <small id={errorId} className="error-text" role="alert">
@@ -234,6 +243,7 @@ export function DataTable<T>({
   pageSize = 10,
   onSelect,
   selected,
+  pagination,
 }: {
   rows: T[];
   columns: Column<T>[];
@@ -242,9 +252,22 @@ export function DataTable<T>({
   pageSize?: number;
   onSelect?: (r: T) => void;
   selected?: string;
+  pagination?: {
+    page: number;
+    size: number;
+    total: number;
+    onPageChange: (n: number) => void;
+    onSizeChange: (n: number) => void;
+    busy?: boolean;
+  };
 }) {
-  const [page, setPage] = useState(0);
-  const [size, setSize] = useState(pageSize);
+  const [localPage, setLocalPage] = useState(0);
+  const [localSize, setLocalSize] = useState(pageSize);
+  const page = pagination?.page ?? localPage;
+  const size = pagination?.size ?? localSize;
+  const total = pagination?.total ?? rows.length;
+  const setPage = pagination?.onPageChange ?? setLocalPage;
+  const setSize = pagination?.onSizeChange ?? setLocalSize;
   const [sort, setSort] = useState<{ id: string; asc: boolean } | null>(null);
   const col = columns.find((c) => c.id === sort?.id);
   const sorted = col?.sort
@@ -258,11 +281,10 @@ export function DataTable<T>({
         );
       })
     : rows;
-  const safePage = Math.min(
-    page,
-    Math.max(0, Math.ceil(rows.length / size) - 1),
-  );
-  useEffect(() => setPage(0), [rows.length, size]);
+  const safePage = Math.min(page, Math.max(0, Math.ceil(total / size) - 1));
+  useEffect(() => {
+    if (!pagination) setLocalPage(0);
+  }, [rows.length, size, pagination]);
   return (
     <div className="table-panel">
       <div className="table-scroll">
@@ -308,7 +330,10 @@ export function DataTable<T>({
             </tr>
           </thead>
           <tbody>
-            {sorted.slice(safePage * size, (safePage + 1) * size).map((r) => (
+            {(pagination
+              ? sorted
+              : sorted.slice(safePage * size, (safePage + 1) * size)
+            ).map((r) => (
               <tr
                 key={rowKey(r)}
                 className={selected === rowKey(r) ? "selected-row" : ""}
@@ -336,7 +361,7 @@ export function DataTable<T>({
       <div className="pagination">
         <span>
           {rows.length
-            ? `${safePage * size + 1}–${Math.min((safePage + 1) * size, rows.length)} из ${num(rows.length)}`
+            ? `${safePage * size + 1}–${Math.min((safePage + 1) * size, total)} из ${num(total)}`
             : "0 записей"}
         </span>
         <div>
@@ -345,6 +370,7 @@ export function DataTable<T>({
             <select
               aria-label="Строк на странице"
               value={size}
+              disabled={pagination?.busy}
               onChange={(e) => setSize(Number(e.target.value))}
             >
               <option value={10}>10</option>
@@ -355,18 +381,18 @@ export function DataTable<T>({
           <button
             className="icon-button"
             aria-label="Предыдущая страница"
-            disabled={safePage === 0}
+            disabled={safePage === 0 || pagination?.busy}
             onClick={() => setPage(safePage - 1)}
           >
             <ArrowLeft size={18} />
           </button>
           <span>
-            {safePage + 1} / {Math.max(1, Math.ceil(rows.length / size))}
+            {safePage + 1} / {Math.max(1, Math.ceil(total / size))}
           </span>
           <button
             className="icon-button"
             aria-label="Следующая страница"
-            disabled={(safePage + 1) * size >= rows.length}
+            disabled={(safePage + 1) * size >= total || pagination?.busy}
             onClick={() => setPage(safePage + 1)}
           >
             <ArrowRight size={18} />

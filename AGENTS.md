@@ -14,12 +14,17 @@ RITM is used only on workstation monitors. Keep the full navigation permanently 
 
 ## Printing data
 
-Printing reads the seasonal red-building spreadsheet on the server. Each of the 11 registered working tabs is a separate delivery. Employee aliases: п = Павел, д = Дмитрий, а = Андрей. Planned area comes from J and planned pieces from O. Printing KPI uses only unique attributable records from «Журнал выпуска»: operation D = «Печать», production date B, employee C, quantity J, and output area L. «Выпуск по дням» is a QUERY summary of the same journal. Do not add _SYSTEM_ROLLS completions or replace journal areas with recalculated roll areas. The record timestamp M is not the production date. This source choice is a user requirement from 2026-10-07. Include rows hidden by filters. New supply tabs must be registered in worker/printing.js. Poll while the page is open every 5 minutes and retain the previous successful result after a read error.
+Printing reads the seasonal red-building spreadsheet on the server. Each of the 11 registered working tabs is a separate delivery. Employee aliases: п = Павел, д = Дмитрий, а = Андрей. Planned area comes from J and planned pieces from O. Printing KPI uses only unique attributable records from «Журнал выпуска»: operation D = «Печать», production date B, employee C, quantity J, and output area L. «Выпуск по дням» is a QUERY summary of the same journal. Do not add \_SYSTEM_ROLLS completions or replace journal areas with recalculated roll areas. The record timestamp M is not the production date. This source choice is a user requirement from 2026-10-07. Include rows hidden by filters. New supply tabs must be registered in worker/printing.js. Poll while the page is open every 5 minutes and retain the previous successful result after a read error.
 
 ## Employee profiles
 
 Design decision from 2026-10-08: clicking an assembler opens the selected first mock's right-side drawer; clicking a printer opens the selected second mock's full employee profile.
 Use only source-backed daily output in both calendars. A blank date means the source has no entry and does not prove the person was absent. Assembler coefficients are summed from daily FBO records; printer area comes only from unique attributable rows in the printing journal.
+
 ## FBO dashboard coefficients
 
 The visible «По дням · Дашборд» tab (gid 605337763) is an additional source for daily assembler coefficients and its «Командный» row. On 2026-10-08, the dashboard showed dates 2026-10-01 through 2026-10-21. All 64 employee/date values that overlapped «История производства» matched within 0.00001; 39 were nonzero. The «Командный» value matches the unweighted average of employees with a nonzero coefficient for that day. Do not add dashboard values to history totals: this is a cross-check/summary, while «История производства» remains the full-detail source for cut/pack quantities, work types, longer history, and precise coefficients.
+
+## RITM Intelligence
+
+Stage 1 is read-only. Never modify production Google Sheets, norms, salaries, business logic or deploy production automatically. Keep local-agent secrets and SQLite outside Git. Private monitoring API requires owner authentication; no unauthenticated public repair or private-data endpoints. Use existing printing journal semantics and source-backed FBO coefficients. Missing records are not zero KPI; preserve verified snapshots with stale labels after read failures. No demo incidents, invented causes or unmeasured performance gains. Formula and LLM analysis remain explicitly not configured in stage 1.

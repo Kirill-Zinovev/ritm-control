@@ -1,4 +1,5 @@
 export {
+  Bot,
   RefreshCw as ArrowsClockwise,
   CalendarDays as CalendarBlank,
   ChartNoAxesColumn as ChartBar,

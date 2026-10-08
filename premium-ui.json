@@ -1,0 +1,25 @@
+{
+  "sourceRoots": ["src"],
+  "canonicalMap": "UX-CONTRACT.md",
+  "ownership": {
+    "Select/Listbox": "native",
+    "Date": "native"
+  },
+  "requiredCapabilities": [
+    "Select/Listbox",
+    "Date",
+    "Form",
+    "Scrollbar",
+    "Toast",
+    "CRUD"
+  ],
+  "requiredCommands": ["typecheck", "tests", "build"],
+  "commands": {
+    "typecheck": "npm run typecheck",
+    "tests": "npm run test:domain && npm run test:sites && npm run test:intelligence",
+    "build": "npm run build"
+  },
+  "evidence": {
+    "failurePaths": "tests/intelligence.test.mjs"
+  }
+}
