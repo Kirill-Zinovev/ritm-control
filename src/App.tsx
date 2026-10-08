@@ -54,6 +54,11 @@ import {
 import { importFields, importRows } from "./importer";
 import { FBO_URL, useLiveAssembly } from "./liveAssembly";
 import {
+  AssemblyProfileDrawer,
+  PrinterProfilePage,
+  type PrinterRecord,
+} from "./EmployeeProfiles";
+import {
   Badge,
   Button,
   Busy,
@@ -147,6 +152,8 @@ export function App() {
   );
   const [employee, setEmployee] = useState("e0");
   const [printer, setPrinter] = useState("all");
+  const [assemblyProfile, setAssemblyProfile] = useState<string | null>(null);
+  const [printerProfileId, setPrinterProfileId] = useState<string | null>(null);
   const [supplyId, setSupplyId] = useState("П-0124");
   const [market, setMarket] = useState("Все маркетплейсы");
   const [completed, setCompleted] = useState(false);
@@ -184,7 +191,11 @@ export function App() {
     history.replaceState(null, "", url);
   }, [page]);
   useEffect(() => {
-    const onPop = () => setPage(initialPage());
+    const onPop = () => {
+      setPage(initialPage());
+      setAssemblyProfile(null);
+      setPrinterProfileId(null);
+    };
     addEventListener("popstate", onPop);
     return () => removeEventListener("popstate", onPop);
   }, []);
@@ -211,6 +222,8 @@ export function App() {
   }, [dirty]);
   const go = (id: Page) => {
     setPage(id);
+    setAssemblyProfile(null);
+    setPrinterProfileId(null);
     setQuery("");
     setSidebar(false);
   };
@@ -277,6 +290,28 @@ export function App() {
     mode === "imported"
       ? PRINTERS
       : data.employees.filter((e) => rolls.some((r) => r.employee === e.id));
+  const activePrinterProfile = printerProfileId
+    ? data.employees.find((person) => person.id === printerProfileId) ||
+      PRINTERS.find((person) => person.id === printerProfileId) ||
+      null
+    : null;
+  const printerProfileRecords: PrinterRecord[] = activePrinterProfile
+    ? mode === "imported"
+      ? (live.value?.events || [])
+          .filter((event) => event.employee === activePrinterProfile.name)
+          .map((event) => ({
+            id: event.id, roll: event.roll || event.id, date: event.date,
+            article: event.article, quantity: event.quantity, area: event.area,
+            supply: event.sheetName,
+          }))
+      : data.rolls
+          .filter((record) => record.employee === activePrinterProfile.id)
+          .map((record) => ({
+            id: record.id, roll: record.roll || record.id, date: record.date,
+            article: record.article, quantity: record.quantity, area: record.area,
+            supply: record.source,
+          }))
+    : [];
   const supplyPrintingRows = (live.value?.sheets || []).map((sheet) => {
     const orders = live.value!.supplies.filter(
       (o) => o.sheetId === sheet.sheetId,
@@ -717,7 +752,10 @@ export function App() {
           <Badge tone="nav-version">v0.1</Badge>
         </div>
       </aside>
-      <main id="main">
+      <main
+        id="main"
+        className={page === "printing" && printerProfileId ? "is-printer-profile" : undefined}
+      >
         <header className="page-header">
           <div>
             <div className="title-line">
@@ -951,7 +989,16 @@ export function App() {
                     </tr></thead>
                     <tbody>{assemblyRows.map((row) => (
                       <tr key={row.employee}>
-                        <th scope="row">{row.employee}</th>
+                        <th scope="row">
+                          <button
+                            className="assembly-employee-link"
+                            type="button"
+                            onClick={() => setAssemblyProfile(row.employee)}
+                          >
+                            {row.employee}
+                            <span>Открыть профиль</span>
+                          </button>
+                        </th>
                         <td className={`assembly-coefficient${row.coefficient > 0 ? " is-positive" : ""}`}>{num(row.coefficient, 3)}</td>
                         <td><strong>{num(row.cut)}</strong><small>{row.cutTypes.map((item) => item.name + " × " + num(item.quantity)).join(" · ") || "—"}</small></td>
                         <td><strong>{num(row.packed)}</strong><small>{row.packTypes.map((item) => item.name + " × " + num(item.quantity)).join(" · ") || "—"}</small></td>
@@ -1212,7 +1259,18 @@ export function App() {
             </section>
           </>
         )}
-        {page === "printing" && (
+        {page === "printing" && printerProfileId && activePrinterProfile ? (
+          <PrinterProfilePage
+            employee={activePrinterProfile}
+            records={printerProfileRecords}
+            selectedDate={date}
+            demo={mode === "demo"}
+            onBack={() => {
+              setPrinterProfileId(null);
+              setPrinter("all");
+            }}
+          />
+        ) : page === "printing" ? (
           <>
             {mode === "imported" && live.error && (
               <Notice tone="warning">
@@ -1283,7 +1341,10 @@ export function App() {
                           <button
                             key={e.id}
                             className={`printer-row ${printer === e.id ? "selected" : ""}`}
-                            onClick={() => setPrinter(e.id)}
+                            onClick={() => {
+                              setPrinter(e.id);
+                              setPrinterProfileId(e.id);
+                            }}
                           >
                             <span className="avatar">{e.name[0]}</span>
                             <strong>{e.name}</strong>
@@ -1487,7 +1548,7 @@ export function App() {
               </>
             )}
           </>
-        )}
+        ) : null}
         {page === "production" && (
           <>
             <div className="toolbar">
@@ -2248,6 +2309,16 @@ export function App() {
               операции.
             </Notice>
           </>
+        )}
+        {page === "assembly" && mode === "imported" && (
+          <AssemblyProfileDrawer
+            employee={assemblyProfile}
+            selectedDate={date}
+            history={assemblyLive.value?.history || []}
+            loading={assemblyLive.loading}
+            error={assemblyLive.error}
+            onClose={() => setAssemblyProfile(null)}
+          />
         )}
       </main>
       <div className="toast-region" role="status" aria-live="polite">

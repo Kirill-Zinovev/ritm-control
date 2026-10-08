@@ -38,6 +38,23 @@ export default defineConfig({
             res.end(JSON.stringify({ ok: false, error: "source_unavailable" }));
           }
         });
+        server.middlewares.use("/api/assembly", async (req, res) => {
+          try {
+            const query = new URL(req.url || "/", "http://localhost").search;
+            const response = await worker.fetch(
+              new Request("http://localhost/api/assembly" + query, {
+                method: req.method || "GET",
+              }),
+              {},
+            );
+            res.statusCode = response.status;
+            response.headers.forEach((v, k) => res.setHeader(k, v));
+            res.end(await response.text());
+          } catch {
+            res.statusCode = 502;
+            res.end(JSON.stringify({ ok: false, error: "source_unavailable" }));
+          }
+        });
       },
     },
   ],

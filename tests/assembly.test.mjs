@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { loadAssembly, parseAssemblyRows, summarizeAssembly } from "../worker/assembly.js";
+import { loadAssembly, parseAssemblyRows, summarizeAssembly, summarizeAssemblyDays } from "../worker/assembly.js";
 import worker from "../worker/index.js";
 
 const headers = [
@@ -38,6 +38,19 @@ test("weekly assembly totals include dates in the selected week through selected
   assert.deepEqual(result[0].cutTypes, [{ name: "ПВХ", quantity: 16 }]);
 });
 
+test("daily history groups production by employee and date", () => {
+  const records = parseAssemblyRows(fixture);
+  const sourceDay = records.find((row) => row.date === "2026-10-08");
+  const duplicate = { ...sourceDay, id: "same-day-row", cut: 2, packed: 3, total: 5, coefficient: 0.1 };
+  const history = summarizeAssemblyDays([...records, duplicate]);
+  assert.equal(history.length, 3);
+  const selected = history.find((row) => row.date === "2026-10-08");
+  assert.equal(selected.cut, 6);
+  assert.equal(selected.packed, 9);
+  assert.equal(selected.total, 15);
+  assert.equal(selected.coefficient, 0.35);
+});
+
 test("FBO endpoint is read-only and serves the selected period", async () => {
   const denied = await worker.fetch(
     new Request("https://ritm.test/api/assembly", { method: "POST" }),
@@ -59,6 +72,8 @@ test("FBO endpoint is read-only and serves the selected period", async () => {
     const result = await response.json();
     assert.equal(result.rows[0].coefficient, 0.75);
     assert.equal(result.period, "week");
+    assert.equal(result.history.length, 3);
+    assert.equal(result.history.find((row) => row.date === "2026-10-08").total, 10);
   } finally {
     globalThis.fetch = originalFetch;
   }

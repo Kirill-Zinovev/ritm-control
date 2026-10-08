@@ -161,6 +161,54 @@ export function summarizeAssembly(records, date, period = "day") {
   }));
 }
 
+export function summarizeAssemblyDays(records) {
+  const days = new Map();
+  records.forEach((record) => {
+    const key = record.date + '|' + record.employee;
+    let entry = days.get(key);
+    if (!entry) {
+      entry = {
+        date: record.date,
+        employee: record.employee,
+        coefficient: 0,
+        machineCut: 0,
+        manualCut: 0,
+        cut: 0,
+        packed: 0,
+        total: 0,
+        days: 1,
+        cutTypes: new Map(),
+        packTypes: new Map(),
+      };
+      days.set(key, entry);
+    }
+    entry.coefficient += record.coefficient;
+    entry.machineCut += record.machineCut;
+    entry.manualCut += record.manualCut;
+    entry.cut += record.cut;
+    entry.packed += record.packed;
+    entry.total += record.total;
+    [[entry.cutTypes, record.cutTypes], [entry.packTypes, record.packTypes]].forEach(
+      ([target, types]) => {
+        types.forEach((type) => {
+          const typeKey = type.name.toLocaleLowerCase('ru-RU');
+          const existing = target.get(typeKey) || { name: type.name, quantity: 0 };
+          existing.quantity += type.quantity;
+          target.set(typeKey, existing);
+        });
+      },
+    );
+  });
+  return [...days.values()]
+    .map((entry) => ({
+      ...entry,
+      coefficient: Math.round((entry.coefficient + Number.EPSILON) * 1000000) / 1000000,
+      cutTypes: [...entry.cutTypes.values()],
+      packTypes: [...entry.packTypes.values()],
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date) || a.employee.localeCompare(b.employee, 'ru-RU'));
+}
+
 function todayMoscow_() {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "Europe/Moscow",
@@ -190,5 +238,6 @@ export async function loadAssembly(date, period, fetcher = fetch) {
     period: selectedPeriod,
     updatedAt: new Date().toISOString(),
     rows: summarizeAssembly(records, selectedDate, selectedPeriod),
+    history: summarizeAssemblyDays(records),
   };
 }

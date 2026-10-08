@@ -16,6 +16,8 @@ export type AssemblySummary = {
   cutTypes: AssemblyTypeCount[];
   packTypes: AssemblyTypeCount[];
 };
+export type AssemblyDaily = AssemblySummary & { date: string };
+
 export type LiveAssembly = {
   ok: true;
   schemaVersion: 1;
@@ -24,6 +26,7 @@ export type LiveAssembly = {
   period: "day" | "week" | "month";
   updatedAt: string;
   rows: AssemblySummary[];
+  history: AssemblyDaily[];
 };
 
 function validSummary(row: AssemblySummary) {
@@ -72,7 +75,12 @@ export function useLiveAssembly(
         !data.ok ||
         data.schemaVersion !== 1 ||
         !Array.isArray(data.rows) ||
+        !Array.isArray(data.history) ||
         data.rows.some((row: AssemblySummary) => !validSummary(row)) ||
+        data.history.some(
+          (row: AssemblyDaily) =>
+            !/^\d{4}-\d{2}-\d{2}$/.test(row.date) || !validSummary(row),
+        ) ||
         !Number.isFinite(Date.parse(data.updatedAt))
       )
         throw new Error("source");
