@@ -921,7 +921,7 @@ export function App() {
               {metric("Порезано", num(assemblyTotals.cut), Scissors, "Штук")}
               {metric("Упаковано", num(assemblyTotals.packed), Package, num(assemblyTotals.total) + " шт. всего")}
             </div>
-            <section className="panel">
+            <section className="panel assembly-report">
               <div className="panel-heading">
                 <div>
                   <h2>Выпуск сборщиков · FBO итого</h2>
@@ -945,21 +945,21 @@ export function App() {
                     <thead><tr>
                       <th>Сборщик</th>
                       <th>Общий кэф</th>
-                      <th>Порезал · шт. и виды</th>
-                      <th>Упаковал · шт. и виды</th>
+                      <th><span className="assembly-th-icon"><Scissors aria-hidden="true" size={17} /><span>Порезал · шт. и виды</span></span></th>
+                      <th><span className="assembly-th-icon"><Package aria-hidden="true" size={17} /><span>Упаковал · шт. и виды</span></span></th>
                       <th>Всего, шт.</th>
                     </tr></thead>
                     <tbody>{assemblyRows.map((row) => (
                       <tr key={row.employee}>
                         <th scope="row">{row.employee}</th>
-                        <td className="assembly-coefficient">{num(row.coefficient, 3)}</td>
+                        <td className={`assembly-coefficient${row.coefficient > 0 ? " is-positive" : ""}`}>{num(row.coefficient, 3)}</td>
                         <td><strong>{num(row.cut)}</strong><small>{row.cutTypes.map((item) => item.name + " × " + num(item.quantity)).join(" · ") || "—"}</small></td>
                         <td><strong>{num(row.packed)}</strong><small>{row.packTypes.map((item) => item.name + " × " + num(item.quantity)).join(" · ") || "—"}</small></td>
                         <td className="assembly-total">{num(row.total)}</td>
                       </tr>
                     ))}</tbody>
                     <tfoot><tr>
-                      <th>Итого</th><td>{num(assemblyTotals.coefficient, 3)}</td>
+                      <th>Итого</th><td className={`assembly-coefficient${assemblyTotals.coefficient > 0 ? " is-positive" : ""}`}>{num(assemblyTotals.coefficient, 3)}</td>
                       <td>{num(assemblyTotals.cut)} шт.</td><td>{num(assemblyTotals.packed)} шт.</td><td>{num(assemblyTotals.total)}</td>
                     </tr></tfoot>
                   </table>

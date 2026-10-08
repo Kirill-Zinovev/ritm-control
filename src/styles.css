@@ -1698,15 +1698,122 @@ td small {
   }
 }
 
-.assembly-actions{display:flex;align-items:center;gap:12px}
-.assembly-actions .button{white-space:nowrap}
-.assembly-table-wrap{width:100%;overflow-x:auto}
-.assembly-live-table{width:100%;min-width:1120px;border-collapse:collapse;text-align:left}
-.assembly-live-table th,.assembly-live-table td{padding:14px 16px;border-bottom:1px solid var(--border,#e5e7eb);vertical-align:top}
-.assembly-live-table thead th{font-size:12px;color:var(--muted,#64748b);font-weight:600;background:#f8fafc}
-.assembly-live-table tbody th{font-weight:650;white-space:nowrap}
-.assembly-live-table td strong{display:block;font-size:16px}
-.assembly-live-table td small{display:block;margin-top:5px;max-width:420px;color:var(--muted,#64748b);line-height:1.5;white-space:normal}
-.assembly-live-table .assembly-coefficient{font-weight:700;color:#2563eb;white-space:nowrap}
-.assembly-live-table .assembly-total{font-weight:750}
-.assembly-live-table tfoot th,.assembly-live-table tfoot td{font-weight:750;background:#f1f5f9}
+.assembly-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.assembly-actions .button {
+  white-space: nowrap;
+}
+.assembly-report .panel-heading {
+  gap: 16px;
+  padding: 22px 24px;
+}
+.assembly-report .panel-heading h2 {
+  font-size: 28px;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+.assembly-report .panel-heading .panel-note {
+  padding: 8px 0 0;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.assembly-report > .panel-note {
+  padding: 16px 24px;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.assembly-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.assembly-live-table {
+  width: 100%;
+  min-width: 1120px;
+  border-collapse: separate;
+  border-spacing: 0;
+  text-align: left;
+}
+.assembly-live-table th,
+.assembly-live-table td {
+  padding: 18px 18px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.assembly-live-table thead th {
+  background: var(--nav);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+.assembly-th-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.assembly-th-icon svg {
+  flex: 0 0 auto;
+}
+.assembly-live-table tbody tr:nth-child(even) {
+  background: #f8fafb;
+}
+.assembly-live-table tbody th {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.assembly-live-table tbody td {
+  font-size: 17px;
+  line-height: 1.35;
+}
+.assembly-live-table tbody td strong {
+  display: block;
+  font-size: 20px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+.assembly-live-table tbody td small {
+  display: block;
+  max-width: 440px;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.4;
+  white-space: normal;
+}
+.assembly-live-table .assembly-coefficient {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.assembly-live-table .assembly-coefficient.is-positive {
+  color: #008c82;
+}
+.assembly-live-table .assembly-total {
+  color: var(--text);
+  font-size: 20px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+.assembly-live-table tfoot th,
+.assembly-live-table tfoot td {
+  padding-top: 19px;
+  padding-bottom: 19px;
+  background: #e7f6f3;
+  border-bottom: 0;
+  font-size: 18px;
+  font-weight: 750;
+  vertical-align: middle;
+}
+.assembly-live-table tfoot td:last-child {
+  font-size: 20px;
+}
