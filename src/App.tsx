@@ -52,6 +52,7 @@ import {
   PRINTERS,
 } from "./livePrinting";
 import { importFields, importRows } from "./importer";
+import { FBO_URL, useLiveAssembly } from "./liveAssembly";
 import {
   Badge,
   Button,
@@ -138,6 +139,7 @@ export function App() {
     readStorage("ritm-real-v1", emptyDataset()),
   );
   const live = useLivePrinting();
+  const assemblyLive = useLiveAssembly(date, period);
   const data = mode === "demo" ? demo : printingDataset(real, live.value);
   const [supplyFilter, setSupplyFilter] = useState("all");
   const [sources, setSources] = useState<Source[]>(() =>
@@ -223,6 +225,10 @@ export function App() {
     }
   };
   const refresh = () => {
+    if (mode === "imported" && page === "assembly") {
+      void assemblyLive.reload();
+      return;
+    }
     if (mode === "imported") {
       void live.reload();
       return;
@@ -238,6 +244,9 @@ export function App() {
       );
     }, 450);
   };
+  const assemblyRows = (assemblyLive.value?.rows || []).filter((row) => !query || (row.employee + " " + row.cutTypes.map((x) => x.name).join(" ") + " " + row.packTypes.map((x) => x.name).join(" ")).toLocaleLowerCase("ru").includes(query.toLocaleLowerCase("ru")));
+  const assemblyTotals = assemblyRows.reduce((sum, row) => ({ coefficient: sum.coefficient + row.coefficient, cut: sum.cut + row.cut, packed: sum.packed + row.packed, total: sum.total + row.total }), { coefficient: 0, cut: 0, packed: 0, total: 0 });
+  const activeSourceLoading = page === "assembly" ? assemblyLive.loading : live.loading;
   const contains = (value: string) =>
     value.toLocaleLowerCase("ru").includes(query.toLocaleLowerCase("ru"));
   const workPeople = data.employees.filter(
@@ -723,8 +732,8 @@ export function App() {
                 <span>Меню</span>
               </button>
               <h1>{TITLES[page]}</h1>
-              <Badge tone={mode === "demo" ? "warning" : "info"}>
-                {mode === "demo"
+              <Badge tone={mode === "demo" ? "warning" : page === "assembly" ? assemblyLive.error ? "warning" : assemblyLive.value ? "success" : "info" : "info"}>
+                {page === "assembly" && mode === "imported" ? assemblyLive.error ? "Ошибка FBO" : assemblyLive.value ? "FBO подключено" : "Подключаю FBO" : mode === "demo"
                   ? "Демо-данные"
                   : live.value
                     ? "Рабочие данные"
@@ -770,7 +779,7 @@ export function App() {
                 <>Показан демонстрационный пример на {shortDate(date)}.</>
               ) : (
                 <>
-                  {live.loading
+                  {page === "assembly" && mode === "imported" ? (assemblyLive.loading ? "Читаю подключённую таблицу FBO…" : assemblyLive.error ? assemblyLive.value ? "Не удалось обновить FBO · показаны последние данные" : "Таблица FBO недоступна" : assemblyLive.value ? "FBO «Итого» подключена · " + assemblyLive.value.rows.length + " сборщиков · обновлено " + new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" }).format(new Date(assemblyLive.value.updatedAt)) : "Подключаю FBO…") : live.loading
                     ? "Читаю рабочую таблицу…"
                     : live.error
                       ? live.value
@@ -797,9 +806,9 @@ export function App() {
               <option value="demo">Демонстрация</option>
               <option value="imported">Рабочие данные</option>
             </select>
-            <Button disabled={busy || live.loading} onClick={refresh}>
+            <Button disabled={busy || activeSourceLoading} onClick={refresh}>
               <ArrowsClockwise size={17} className={busy ? "spin" : ""} />
-              {busy || live.loading ? "Обновление" : "Обновить"}
+              {busy || activeSourceLoading ? "Обновление" : "Обновить"}
             </Button>
           </div>
         </div>
@@ -885,7 +894,7 @@ export function App() {
                         <div>
                           <strong>{s.name}</strong>
                           <small>
-                            {s.state === "imported"
+                            {s.id === "assembly" ? (assemblyLive.value ? "FBO подключено · " + assemblyLive.value.rows.length + " сборщиков" : assemblyLive.loading ? "Читаю FBO…" : "Таблица FBO недоступна") : s.state === "imported"
                               ? `Загружено ${s.rows} строк`
                               : s.url
                                 ? "Ссылка подготовлена. Чтение ещё не настроено."
@@ -904,7 +913,63 @@ export function App() {
             </div>
           </>
         )}
-        {page === "assembly" && (
+        {page === "assembly" && mode === "imported" && (
+          <>
+            <div className="metrics four">
+              {metric("Сборщики с выпуском", num(assemblyRows.length), Users)}
+              {metric("Общий коэффициент", num(assemblyTotals.coefficient, 3), ChartBar, "Сумма кэфов за выбранный период")}
+              {metric("Порезано", num(assemblyTotals.cut), Scissors, "Штук")}
+              {metric("Упаковано", num(assemblyTotals.packed), Package, num(assemblyTotals.total) + " шт. всего")}
+            </div>
+            <section className="panel">
+              <div className="panel-heading">
+                <div>
+                  <h2>Выпуск сборщиков · FBO итого</h2>
+                  <p className="panel-note">Коэффициент, количество штук и виды изделий загружаются из подключённой таблицы.</p>
+                </div>
+                <div className="assembly-actions">
+                  <Search label="Найти сборщика или изделие" value={query} onChange={setQuery} />
+                  <a className="button secondary" href={FBO_URL} target="_blank" rel="noreferrer">
+                    Открыть FBO <ArrowSquareOut size={16} />
+                  </a>
+                </div>
+              </div>
+              {assemblyLive.error && <Notice tone="warning">{assemblyLive.error}</Notice>}
+              {!assemblyRows.length && assemblyLive.loading ? (
+                <Busy label="Читаю FBO итого…" />
+              ) : !assemblyRows.length ? (
+                <Empty title="Нет выпуска за этот период">Проверь дату или выбери другой период.</Empty>
+              ) : (
+                <div className="assembly-table-wrap">
+                  <table className="assembly-live-table">
+                    <thead><tr>
+                      <th>Сборщик</th>
+                      <th>Общий кэф</th>
+                      <th>Порезал · шт. и виды</th>
+                      <th>Упаковал · шт. и виды</th>
+                      <th>Всего, шт.</th>
+                    </tr></thead>
+                    <tbody>{assemblyRows.map((row) => (
+                      <tr key={row.employee}>
+                        <th scope="row">{row.employee}</th>
+                        <td className="assembly-coefficient">{num(row.coefficient, 3)}</td>
+                        <td><strong>{num(row.cut)}</strong><small>{row.cutTypes.map((item) => item.name + " × " + num(item.quantity)).join(" · ") || "—"}</small></td>
+                        <td><strong>{num(row.packed)}</strong><small>{row.packTypes.map((item) => item.name + " × " + num(item.quantity)).join(" · ") || "—"}</small></td>
+                        <td className="assembly-total">{num(row.total)}</td>
+                      </tr>
+                    ))}</tbody>
+                    <tfoot><tr>
+                      <th>Итого</th><td>{num(assemblyTotals.coefficient, 3)}</td>
+                      <td>{num(assemblyTotals.cut)} шт.</td><td>{num(assemblyTotals.packed)} шт.</td><td>{num(assemblyTotals.total)}</td>
+                    </tr></tfoot>
+                  </table>
+                </div>
+              )}
+              <p className="panel-note">Данные по коэффициенту и видам взяты из «FBO итого». За неделю и месяц коэффициенты суммируются по дневным строкам источника.</p>
+            </section>
+          </>
+        )}
+        {page === "assembly" && mode === "demo" && (
           <>
             <div className="metrics three">
               {metric(
@@ -1962,7 +2027,7 @@ export function App() {
                     </span>
                     <Badge
                       tone={
-                        s.id === "printing"
+                        s.id === "assembly" ? (assemblyLive.value ? assemblyLive.error ? "warning" : "success" : assemblyLive.error ? "warning" : "neutral") : s.id === "printing"
                           ? live.value
                             ? live.error
                               ? "warning"
@@ -1975,7 +2040,7 @@ export function App() {
                             : "neutral"
                       }
                     >
-                      {s.id === "printing"
+                      {s.id === "assembly" ? (assemblyLive.value ? assemblyLive.error ? "Ошибка обновления" : "Подключено" : assemblyLive.loading ? "Читаю FBO…" : assemblyLive.error ? "Нет связи" : "Ожидает подключения") : s.id === "printing"
                         ? live.value
                           ? live.error
                             ? "Ошибка обновления"
@@ -2011,7 +2076,15 @@ export function App() {
                       </small>
                     </div>
                   )}
-                  {s.id === "printing" && (
+                  {s.id === "assembly" && (
+                    <div className="source-facts">
+                      <b>{assemblyLive.value ? assemblyLive.value.rows.length + " сборщиков · " + num(assemblyLive.value.rows.reduce((sum, row) => sum + row.total, 0)) + " шт." : assemblyLive.loading ? "Читаю FBO…" : "Ожидаю чтения FBO"}</b>
+                      {assemblyLive.value && <small>Последнее успешное чтение: {new Intl.DateTimeFormat("ru-RU", { dateStyle: "short", timeStyle: "short", timeZone: "Europe/Moscow" }).format(new Date(assemblyLive.value.updatedAt))} (Москва)</small>}
+                    </div>
+                  )}
+                  {s.id === "assembly" && assemblyLive.error && (
+                    <Notice tone="warning">{assemblyLive.error}</Notice>
+                  )}                  {s.id === "printing" && (
                     <div className="source-facts">
                       <b>
                         {live.value
@@ -2049,7 +2122,14 @@ export function App() {
                     </div>
                   )}
                   <div className="source-actions">
-                    {s.id === "printing" ? (
+                    {s.id === "assembly" ? (
+                      <>
+                        {sourceLink("assembly")}
+                        <Button disabled={assemblyLive.loading} onClick={() => void assemblyLive.reload()}>
+                          Обновить FBO
+                        </Button>
+                      </>
+                    ) : s.id === "printing" ? (
                       <>
                         {sourceLink("printing")}
                         <Button

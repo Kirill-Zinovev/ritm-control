@@ -1,8 +1,37 @@
 import { loadPrinting } from "./printing.js";
+import { loadAssembly } from "./assembly.js";
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname === "/api/printing") {
+    if (url.pathname === "/api/assembly") {
+      const headers = {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+      };
+      if (request.method !== "GET")
+        return new Response(
+          JSON.stringify({ ok: false, error: "method_not_allowed" }),
+          { status: 405, headers: { ...headers, allow: "GET" } },
+        );
+      try {
+        const date = url.searchParams.get("date") || undefined;
+        const period = url.searchParams.get("period") || undefined;
+        return new Response(
+          JSON.stringify(await loadAssembly(date, period)),
+          { headers },
+        );
+      } catch (error) {
+        console.error("assembly_source_error", error.message);
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error: "source_unavailable",
+            message: "Таблица FBO недоступна. Проверьте подключение.",
+          }),
+          { status: 502, headers },
+        );
+      }
+    }    if (url.pathname === "/api/printing") {
       const headers = {
         "content-type": "application/json; charset=utf-8",
         "cache-control": "no-store",

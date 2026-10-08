@@ -1697,3 +1697,16 @@ td small {
     display: none;
   }
 }
+
+.assembly-actions{display:flex;align-items:center;gap:12px}
+.assembly-actions .button{white-space:nowrap}
+.assembly-table-wrap{width:100%;overflow-x:auto}
+.assembly-live-table{width:100%;min-width:1120px;border-collapse:collapse;text-align:left}
+.assembly-live-table th,.assembly-live-table td{padding:14px 16px;border-bottom:1px solid var(--border,#e5e7eb);vertical-align:top}
+.assembly-live-table thead th{font-size:12px;color:var(--muted,#64748b);font-weight:600;background:#f8fafc}
+.assembly-live-table tbody th{font-weight:650;white-space:nowrap}
+.assembly-live-table td strong{display:block;font-size:16px}
+.assembly-live-table td small{display:block;margin-top:5px;max-width:420px;color:var(--muted,#64748b);line-height:1.5;white-space:normal}
+.assembly-live-table .assembly-coefficient{font-weight:700;color:#2563eb;white-space:nowrap}
+.assembly-live-table .assembly-total{font-weight:750}
+.assembly-live-table tfoot th,.assembly-live-table tfoot td{font-weight:750;background:#f1f5f9}
