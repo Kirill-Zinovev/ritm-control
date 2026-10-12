@@ -2646,3 +2646,776 @@ td small {
   white-space: normal;
   max-width: 300px;
 }
+.doctor-overview-metrics {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.doctor-check-actions,
+.doctor-fast-action,
+.doctor-problem-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.doctor-fast-action {
+  justify-content: space-between;
+  padding: 10px 0 2px;
+}
+.doctor-fast-action > span,
+.doctor-check-summary {
+  color: var(--muted);
+  font-size: 13px;
+}
+.doctor-check-summary {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+.doctor-queue {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface, #fff);
+}
+.doctor-queue .panel-heading {
+  padding: 0;
+}
+.doctor-queue .panel-heading h3 {
+  margin: 0;
+}
+.doctor-queue .panel-note {
+  margin: 4px 0 0;
+}
+.doctor-queue-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.doctor-queue-list li {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.doctor-queue-list li > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.doctor-queue-list small {
+  color: var(--muted);
+}
+.doctor-problems-list {
+  display: grid;
+  gap: 12px;
+}
+.doctor-problem-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface, #fff);
+}
+.doctor-problem-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+.doctor-problem-heading > div,
+.doctor-problem-values {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.doctor-problem-heading small,
+.doctor-problem-card p {
+  color: var(--muted);
+}
+.doctor-problem-values {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  overflow-wrap: anywhere;
+}
+.doctor-problem-actions {
+  padding-top: 2px;
+}
+.doctor-data-quality-summary {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--warning, #b45309) 28%, transparent);
+  border-radius: 10px;
+  background: color-mix(
+    in srgb,
+    var(--warning, #b45309) 7%,
+    var(--surface, #fff)
+  );
+  overflow-wrap: anywhere;
+}
+.doctor-data-quality-summary > strong {
+  color: var(--text, #1f2937);
+}
+.doctor-data-quality-summary > span {
+  color: var(--muted, #64748b);
+  font-size: 13px;
+}
+.doctor-source-recovery {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface, #fff);
+}
+.doctor-source-recovery h4,
+.doctor-source-recovery p {
+  margin: 0;
+}
+.doctor-source-recovery > strong {
+  color: var(--primary, #047857);
+  font-size: 13px;
+}
+.doctor-source-recovery small {
+  color: var(--muted, #64748b);
+  line-height: 1.45;
+}
+.doctor-source-confirmation {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 14px;
+}
+.doctor-source-confirmation input {
+  margin-top: 3px;
+}
+@media (max-width: 1200px) {
+  .doctor-overview-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.ai-advanced {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+.ai-advanced > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.ai-advanced[open] > :not(summary) {
+  margin-top: 16px;
+}
+
+/* Formula review tables stay readable without changing the data they expose. */
+.formula-intelligence {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+.formula-intelligence .panel-heading {
+  padding: 20px 22px 12px;
+}
+.formula-intelligence .panel-heading h2 {
+  font-size: 24px;
+}
+.formula-intelligence .panel-heading .panel-note {
+  padding: 5px 0 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.formula-intelligence > .notice {
+  margin: 0 20px;
+  padding: 14px 16px;
+  font-size: 14px;
+  line-height: 1.55;
+}
+.formula-intelligence .doctor-metrics {
+  gap: 14px;
+  margin: 0 20px;
+}
+.formula-intelligence .doctor-metrics > div {
+  min-width: 0;
+  gap: 9px;
+  padding: 16px;
+}
+.formula-intelligence .doctor-metrics span {
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.4;
+}
+.formula-intelligence .doctor-metrics strong {
+  font-size: 28px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.formula-intelligence .doctor-metrics small {
+  font-size: 13px;
+  line-height: 1.45;
+}
+.formula-intelligence .table-panel {
+  min-width: 0;
+  max-width: 100%;
+}
+.formula-intelligence .table-scroll {
+  max-width: 100%;
+  border-bottom: 1px solid var(--border);
+}
+.formula-intelligence table[aria-label="Покрытие формул по листам"] {
+  min-width: 1080px;
+  table-layout: fixed;
+  font-size: 14px;
+}
+.formula-intelligence table[aria-label="Покрытие формул по листам"] th,
+.formula-intelligence table[aria-label="Области формул для утверждения"] th {
+  padding: 13px 12px;
+  color: #4c5f74;
+  font-size: 13px;
+  line-height: 1.4;
+  vertical-align: bottom;
+}
+.formula-intelligence table[aria-label="Покрытие формул по листам"] td,
+.formula-intelligence table[aria-label="Области формул для утверждения"] td {
+  padding: 14px 12px;
+  font-size: 14px;
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.formula-intelligence
+  table[aria-label="Покрытие формул по листам"]
+  th:nth-child(1),
+.formula-intelligence
+  table[aria-label="Покрытие формул по листам"]
+  td:nth-child(1) {
+  width: 28%;
+}
+.formula-intelligence
+  table[aria-label="Покрытие формул по листам"]
+  th:nth-child(2),
+.formula-intelligence
+  table[aria-label="Покрытие формул по листам"]
+  td:nth-child(2) {
+  width: 9%;
+}
+.formula-intelligence
+  table[aria-label="Покрытие формул по листам"]
+  th:nth-child(3),
+.formula-intelligence
+  table[aria-label="Покрытие формул по листам"]
+  td:nth-child(3) {
+  width: 17%;
+}
+.formula-intelligence
+  table[aria-label="Покрытие формул по листам"]
+  th:nth-child(4),
+.formula-intelligence
+  table[aria-label="Покрытие формул по листам"]
+  td:nth-child(4) {
+  width: 10%;
+}
+.formula-intelligence
+  table[aria-label="Покрытие формул по листам"]
+  th:nth-child(5),
+.formula-intelligence
+  table[aria-label="Покрытие формул по листам"]
+  td:nth-child(5) {
+  width: 9%;
+}
+.formula-intelligence
+  table[aria-label="Покрытие формул по листам"]
+  th:nth-child(6),
+.formula-intelligence
+  table[aria-label="Покрытие формул по листам"]
+  td:nth-child(6) {
+  width: 14%;
+}
+.formula-intelligence
+  table[aria-label="Покрытие формул по листам"]
+  th:nth-child(7),
+.formula-intelligence
+  table[aria-label="Покрытие формул по листам"]
+  td:nth-child(7) {
+  width: 13%;
+}
+.formula-intelligence table[aria-label="Области формул для утверждения"] {
+  min-width: 1080px;
+  table-layout: fixed;
+  font-size: 14px;
+}
+.formula-intelligence
+  table[aria-label="Области формул для утверждения"]
+  th:nth-child(1),
+.formula-intelligence
+  table[aria-label="Области формул для утверждения"]
+  td:nth-child(1) {
+  width: 6%;
+}
+.formula-intelligence
+  table[aria-label="Области формул для утверждения"]
+  th:nth-child(2),
+.formula-intelligence
+  table[aria-label="Области формул для утверждения"]
+  td:nth-child(2) {
+  width: 22%;
+}
+.formula-intelligence
+  table[aria-label="Области формул для утверждения"]
+  th:nth-child(3),
+.formula-intelligence
+  table[aria-label="Области формул для утверждения"]
+  td:nth-child(3) {
+  width: 13%;
+}
+.formula-intelligence
+  table[aria-label="Области формул для утверждения"]
+  th:nth-child(4),
+.formula-intelligence
+  table[aria-label="Области формул для утверждения"]
+  td:nth-child(4) {
+  width: 15%;
+}
+.formula-intelligence
+  table[aria-label="Области формул для утверждения"]
+  th:nth-child(5),
+.formula-intelligence
+  table[aria-label="Области формул для утверждения"]
+  td:nth-child(5) {
+  width: 20%;
+}
+.formula-intelligence
+  table[aria-label="Области формул для утверждения"]
+  th:nth-child(6),
+.formula-intelligence
+  table[aria-label="Области формул для утверждения"]
+  td:nth-child(6) {
+  width: 24%;
+}
+.formula-intelligence td .ai-block {
+  max-width: none;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.formula-code-preview {
+  display: -webkit-box;
+  max-height: 4.5em;
+  overflow: hidden;
+  padding: 7px 9px;
+  border: 1px solid #e3e9ef;
+  border-radius: 5px;
+  background: #f7f9fb;
+  color: #31465c;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+.formula-code-full {
+  display: block;
+  max-height: min(42vh, 420px);
+  overflow: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #f7f9fb;
+  color: #243a50;
+  font-size: 14px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.formula-intelligence .ai-filters {
+  grid-template-columns: repeat(3, minmax(220px, 1fr));
+  gap: 16px;
+  margin: 0 20px;
+}
+.formula-intelligence .ai-filters select {
+  min-height: 44px;
+  font-size: 14px;
+}
+.formula-intelligence > .panel-note {
+  padding: 0 20px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.formula-intelligence .doctor-actions {
+  margin: 0 20px;
+}
+.formula-intelligence .doctor-actions .button {
+  min-height: 42px;
+  font-size: 14px;
+}
+.formula-subsection {
+  margin: 0 20px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #fbfcfd;
+}
+.formula-subsection > summary {
+  padding: 13px 15px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 650;
+}
+.formula-subsection[open] > .table-panel {
+  margin: 0 12px 12px;
+}
+.formula-intelligence table[aria-label="Исключения формульных снимков"] {
+  min-width: 900px;
+  table-layout: fixed;
+  font-size: 14px;
+}
+.formula-protection-preview {
+  display: grid;
+  gap: 18px;
+  margin: 18px 20px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #fbfcfd;
+}
+.formula-protection-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+.formula-protection-heading h3 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+.formula-protection-heading .panel-note {
+  margin: 0;
+  max-width: 780px;
+}
+.formula-protection-report {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.formula-protection-report .doctor-metrics {
+  margin: 0;
+}
+.formula-protection-report .table-panel {
+  margin: 0;
+}
+.formula-protection-report .formula-subsection {
+  margin: 0;
+}
+.formula-protection-preview .doctor-actions {
+  margin: 0;
+}
+.formula-protection-preview .formula-code-preview {
+  max-width: 420px;
+}
+@media (max-width: 1100px) {
+  .formula-intelligence .doctor-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .formula-intelligence .ai-filters {
+    grid-template-columns: 1fr;
+  }
+  .formula-protection-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+/* Compact owner dispatcher for live Table Doctor incidents. */
+.doctor-dispatcher-counts {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+.doctor-dispatcher-count {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 11px 13px;
+  border: 0;
+  border-right: 1px solid var(--border);
+  border-radius: 0;
+  color: var(--text);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.doctor-dispatcher-count:last-child {
+  border-right: 0;
+}
+.doctor-dispatcher-count:hover,
+.doctor-dispatcher-count:focus-visible {
+  background: #f3f7f8;
+}
+.doctor-dispatcher-count:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+.doctor-dispatcher-count[data-active="true"] {
+  box-shadow: inset 0 -3px 0 var(--primary);
+  background: #f4f8f7;
+}
+.doctor-dispatcher-count span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.3;
+}
+.doctor-dispatcher-count strong {
+  flex: 0 0 auto;
+  font-size: 19px;
+  font-variant-numeric: tabular-nums;
+}
+.doctor-dispatcher-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(200px, 1.35fr);
+  align-items: end;
+  gap: 10px;
+  margin-block: 14px;
+}
+.doctor-dispatcher-filters .field,
+.doctor-dispatcher-filters .search {
+  min-width: 0;
+  margin: 0;
+}
+.doctor-problems-list {
+  display: grid;
+  gap: 7px;
+}
+.doctor-problem-card {
+  display: grid;
+  gap: 8px;
+  padding: 10px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.doctor-problem-row {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.15fr) minmax(210px, 0.9fr) auto;
+  align-items: center;
+  gap: 12px 18px;
+  min-width: 0;
+}
+.doctor-problem-copy,
+.doctor-problem-state {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 9px;
+  min-width: 0;
+}
+.doctor-problem-copy > strong {
+  flex-basis: 100%;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.35;
+}
+.doctor-problem-product {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.doctor-problem-address {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.doctor-problem-state {
+  gap: 5px 7px;
+}
+.doctor-problem-kpi {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.doctor-problem-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+}
+.doctor-problem-actions .button {
+  min-height: 34px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.doctor-problem-details {
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+.doctor-problem-details > summary {
+  width: fit-content;
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.doctor-problem-details > summary:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+}
+.doctor-problem-details > dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 20px;
+  margin: 12px 0 4px;
+}
+.doctor-problem-details > dl > div {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  min-width: 0;
+}
+.doctor-problem-details dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+.doctor-problem-details dd,
+.doctor-problem-paths {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.doctor-problem-details dd code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.doctor-problem-errors,
+.doctor-problem-cell-list {
+  display: block;
+}
+.doctor-problem-errors {
+  color: var(--danger, #ae3131);
+}
+.doctor-problem-paths {
+  display: grid;
+  gap: 4px;
+  max-height: 180px;
+  overflow: auto;
+  margin-top: 8px;
+  padding-left: 18px;
+}
+.doctor-dispatcher-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.doctor-dispatcher-pagination .field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+.doctor-dispatcher-pagination .field select {
+  min-height: 34px;
+  padding: 5px 8px;
+}
+.doctor-dispatcher-pagination .button {
+  min-height: 34px;
+  padding: 5px 10px;
+}
+.doctor-incident-table {
+  margin-top: 4px;
+}
+.doctor-incident-table > summary {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 600;
+}
+.doctor-incident-table[open] > section {
+  margin-top: 10px;
+}
+@media (max-width: 1250px) {
+  .doctor-dispatcher-counts {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .doctor-dispatcher-count:nth-child(3n) {
+    border-right: 0;
+  }
+  .doctor-dispatcher-count:nth-child(n + 4) {
+    border-top: 1px solid var(--border);
+  }
+  .doctor-dispatcher-filters {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .doctor-problem-row {
+    grid-template-columns: minmax(0, 1fr) minmax(200px, 0.8fr);
+  }
+  .doctor-problem-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+}
+@media (max-width: 750px) {
+  .doctor-dispatcher-counts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .doctor-dispatcher-count:nth-child(3n) {
+    border-right: 1px solid var(--border);
+  }
+  .doctor-dispatcher-count:nth-child(2n) {
+    border-right: 0;
+  }
+  .doctor-dispatcher-count:nth-child(n + 3) {
+    border-top: 1px solid var(--border);
+  }
+  .doctor-dispatcher-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .doctor-problem-row {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+  .doctor-problem-actions {
+    grid-column: auto;
+  }
+  .doctor-problem-details > dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 480px) {
+  .doctor-dispatcher-filters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .doctor-dispatcher-count {
+    padding: 9px;
+  }
+}

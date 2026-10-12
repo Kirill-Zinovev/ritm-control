@@ -50,9 +50,12 @@ test("pending template differences are review-only and do not propose a known re
   assert.deepEqual(inspect("healthy", d).baseline, {});
 });
 test("REF and DIV/0 effective errors are detected even with a formula present", () => {
-  assert.match(inspect("ref").findings[0].observed, /REF/);
+  assert.match(inspect("ref").findings[0].observed.error, /REF/);
   assert.equal(inspect("ref").findings[0].type, "calculation_error");
-  assert.match(inspect("div_zero").findings[0].observed, /DIVIDE_BY_ZERO/);
+  assert.match(
+    inspect("div_zero").findings[0].observed.error,
+    /DIVIDE_BY_ZERO/,
+  );
   const grid = demoSpreadsheet();
   grid.sheets[0].data[1].rowData[1].values[6].userEnteredValue.formulaValue =
     "=#REF!";
@@ -159,6 +162,49 @@ test("full persistent lifecycle: healthy -> fault -> repeat -> repair request ->
   } finally {
     h.store.close();
     rmSync(h.dir, { recursive: true, force: true });
+  }
+});
+test("runDocument returns an explicit fresh completion contract for the requested source", async () => {
+  const h = harness();
+  try {
+    const document = structuredClone(DEMO_DOCUMENT);
+    document.id = "doctor-contract-test";
+    document.adapter = "google";
+    document.documentId = "a".repeat(30);
+    h.config.doctorDocuments = [document];
+    const spreadsheet = demoSpreadsheet("healthy"),
+      sourceSheet = spreadsheet.sheets[0],
+      doctor = new TableDoctor(h.store, h.config, {
+        now: () => now,
+        reader: {
+          configured: true,
+          metadata: async () => ({
+            spreadsheetId: document.documentId,
+            sheets: [
+              {
+                properties: sourceSheet.properties,
+                merges: [],
+              },
+            ],
+          }),
+          grid: async () => ({
+            spreadsheetId: document.documentId,
+            sheets: [sourceSheet],
+          }),
+        },
+      });
+    const result = await doctor.runDocument(document.id);
+    assert.equal(result.complete, true);
+    assert.equal(result.documentId, document.id);
+    assert.equal(result.documentRun.documentId, document.id);
+    assert.equal(result.documentRun.complete, true);
+    assert.equal(result.documentRun.status, "ok");
+    assert.equal(
+      result.documentRun.at,
+      result.documents[0].check.readVerifiedAt,
+    );
+  } finally {
+    h.clean();
   }
 });
 test("ignored issues stay ignored across repeated checks and local requests never edit production", async () => {
@@ -304,6 +350,100 @@ test("owner API protects private reads, manual scans, demo writes and local inci
     );
   } finally {
     await new Promise((r) => server.close(r));
+    h.clean();
+  }
+});
+test("incident recheck is authenticated, read-only, and limited to its real registered document", async () => {
+  const h = harness(),
+    document = structuredClone(DEMO_DOCUMENT),
+    calls = [];
+  document.id = "doctor-live-recheck";
+  document.documentId = "a".repeat(30);
+  document.adapter = "google";
+  document.enabled = true;
+  h.config.doctorDocuments = [document];
+  h.store.reconcile("doctor:data:" + document.id, [
+    {
+      ...inspect("number").findings[0],
+      kind: "table_doctor",
+      sourceId: document.id,
+      sourceName: document.name,
+      demonstration: false,
+      sourceUrl:
+        "https://docs.google.com/spreadsheets/d/" +
+        document.documentId +
+        "/edit#gid=1&range=G247",
+    },
+  ]);
+  const fixedFinding = {
+    ...inspect("number").findings[0],
+    kind: "table_doctor",
+    sourceId: "doctor-live-fixed",
+    sourceName: "Подтверждённый производственный документ",
+    demonstration: false,
+  };
+  h.store.reconcile("doctor:fixed", [fixedFinding]);
+  h.store.reconcile("doctor:fixed", [], { verified: true });
+  const demoFinding = {
+    ...inspect("number").findings[0],
+    kind: "table_doctor",
+    sourceId: "doctor-demo-fixed",
+    sourceName: "ДЕМОНСТРАЦИЯ · QA",
+    demonstration: true,
+  };
+  h.store.reconcile("doctor:demo-fixed", [demoFinding]);
+  h.store.reconcile("doctor:demo-fixed", [], { verified: true });
+  const incident = h.store.listIncidents({ status: "active" }).rows[0],
+    doctor = {
+      current: null,
+      runDocument(id) {
+        calls.push(id);
+        return Promise.resolve();
+      },
+    },
+    server = createAgentServer(h.store, h.config, { doctor });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = "http://127.0.0.1:" + server.address().port,
+    headers = { authorization: "Bearer " + h.config.ownerToken };
+  try {
+    assert.equal(
+      (
+        await fetch(base + "/api/intelligence/incidents/summary")
+      ).status,
+      401,
+    );
+    const summary = await fetch(
+      base + "/api/intelligence/incidents/summary",
+      { headers },
+    );
+    assert.equal(summary.status, 200);
+    assert.equal((await summary.json()).allProblems, 1);
+    const summaryBody = await (await fetch(
+      base + "/api/intelligence/incidents/summary",
+      { headers },
+    )).json();
+    assert.equal(summaryBody.fixed, 1);
+    const fixedListResponse = await fetch(
+      base + "/api/intelligence/incidents?status=fixed",
+      { headers },
+    );
+    assert.equal(fixedListResponse.status, 200);
+    const fixedList = await fixedListResponse.json();
+    assert.equal(fixedList.total, summaryBody.fixed);
+    assert.equal(fixedList.rows.length, 1);
+    assert.equal(fixedList.rows[0].demonstration, false);
+    const response = await fetch(
+      base + "/api/intelligence/incidents/" + incident.id + "/recheck",
+      { method: "POST", headers },
+    );
+    assert.equal(response.status, 202);
+    assert.deepEqual(calls, [document.id]);
+    assert.equal(
+      h.store.db.prepare("SELECT count(*) n FROM repair_requests").get().n,
+      0,
+    );
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
     h.clean();
   }
 });

@@ -1,5 +1,12 @@
+import { DiagnosticGovernance } from "./diagnosticGovernance.js";
+import { FormulaIntelligence } from "./formulaIntelligence.js";
+import { diagnoseDataQuality } from "./dataQuality.js";
+import { reviewDocument } from "./diagnosticReview.js";
+import { businessPreview } from "./businessDoctor.js";
+import { readDoctorSheet } from "./doctorRead.js";
 import { GoogleSheetsReader } from "./googleSheets.js";
 import { inspectDocument } from "./doctor.js";
+import { formulaInventory } from "./doctorInventory.js";
 import { DemoFixture } from "./doctorDemo.js";
 import { measureGrid, metricDelta, accessMessage } from "./doctorTelemetry.js";
 export class TableDoctor {
@@ -15,15 +22,84 @@ export class TableDoctor {
         retries: config.retries,
         minIntervalMs: config.googleMinIntervalMs ?? 2000,
       });
+    this.governance = new DiagnosticGovernance(store, config, { now });
+    this.formulas = new FormulaIntelligence(store, config, { now });
     this.fixture = new DemoFixture(config.dataDir);
     this.current = null;
+    this.fastCurrent = null;
+    this.scanTail = Promise.resolve();
+  }
+  enqueueScan(scan) {
+    const next = this.scanTail.catch(() => {}).then(scan);
+    this.scanTail = next;
+    return next;
   }
   run(signal) {
+    return this.runInspection(null, signal);
+  }
+  runDocument(documentId, signal) {
+    if (
+      !(this.config.doctorDocuments || []).some(
+        (document) =>
+          document.id === documentId &&
+          document.enabled &&
+          document.adapter === "google",
+      )
+    )
+      return Promise.reject(
+        new Error("Document is outside the real read scope"),
+      );
+    // A caller requesting a document check needs a fresh document-scoped result.
+    // Do not mistake an older/global in-flight scan's state snapshot for this run.
+    if (this.current)
+      return this.current
+        .catch(() => {})
+        .then(() => this.runDocument(documentId, signal));
+    const startedAt = this.now().toISOString();
+    return this.runInspection(documentId, signal).then((result) => {
+      const document = result.documents?.find((item) => item.id === documentId),
+        check = document?.check,
+        checkAt = check?.readVerifiedAt || null,
+        complete =
+          check?.status === "ok" &&
+          !check.errorCode &&
+          typeof checkAt === "string" &&
+          Number.isFinite(Date.parse(checkAt)) &&
+          Date.parse(checkAt) >= Date.parse(startedAt) - 1000;
+      return {
+        ...result,
+        complete,
+        documentId,
+        startedAt,
+        at: checkAt || this.now().toISOString(),
+        documentRun: {
+          documentId,
+          complete,
+          startedAt,
+          at: checkAt,
+          status: check?.status || "unavailable",
+          errorCode: check?.errorCode || null,
+        },
+      };
+    });
+  }
+  runInspection(documentId, signal) {
     if (this.current) return this.current;
-    this.current = this.inspect(signal).finally(() => {
+    this.current = this.enqueueScan(() =>
+      this.inspect(signal, documentId),
+    ).finally(() => {
       this.current = null;
     });
     return this.current;
+  }
+  runFast(signal) {
+    if (this.fastCurrent) return this.fastCurrent;
+    this.fastCurrent = this.enqueueScan(() =>
+      this.formulas.fastCheck(this.reader, signal, this.now()),
+    ).finally(() => {
+      this.fastCurrent = null;
+    });
+    return this.fastCurrent;
   }
   async setDemo(scenario, signal) {
     if (!this.config.doctorDemoEnabled) throw new Error("Demo disabled");
@@ -68,9 +144,16 @@ export class TableDoctor {
           : validReads.length
             ? "partial"
             : "awaiting_verification";
+    const review = this.governance.state();
+    const approved = new Set(
+      review.rules.filter((r) => r.approval === "approved").map((r) => r.id),
+    );
     return {
+      review,
+      formulaIntelligence: this.formulas.state(),
       ok: true,
       running: !!this.current,
+      fastRunning: !!this.fastCurrent,
       lastCheck: last,
       lastSuccessfulCheck:
         checks
@@ -88,6 +171,7 @@ export class TableDoctor {
       formulasRead: validReads.length
         ? validReads.reduce((a, c) => a + (c.formulasRead || 0), 0)
         : null,
+      kpiImpact: null, // Older audit includes sheets excluded from current monitoring.
       manualAudit: this.store.getSnapshot("doctor:manual-audit")?.value || null,
       demoEnabled: !!this.config.doctorDemoEnabled,
       documents: (this.config.doctorDocuments || [])
@@ -98,7 +182,59 @@ export class TableDoctor {
           department: d.department,
           demonstration: d.adapter === "fixture",
           purpose: d.purpose,
-          sheets: d.sheets.map((s) => ({ name: s.name, gid: s.gid })),
+          formulaRules: (
+            this.store.getSnapshot("doctor-inventory:" + d.id)?.value || []
+          ).filter((r) => d.sheets.some((s) => s.gid === r.gid)),
+          businessPreview: (() => {
+            const p = this.store.getSnapshot("doctor-business:" + d.id)?.value;
+            return p
+              ? {
+                  ...p,
+                  checks: p.checks.map((c) => {
+                    const rule = review.rules.find((r) => r.id === c.id);
+                    return rule
+                      ? {
+                          ...c,
+                          approval: rule.approval,
+                          rowsChecked: rule.rowsChecked,
+                          observations: rule.deviations,
+                        }
+                      : c;
+                  }),
+                }
+              : null;
+          })(),
+          sheets: d.sheets.map((s) => {
+            const check = checks.find((c) => c.id === d.id),
+              metric = check?.sheetMetrics?.find((m) => m.gid === s.gid);
+            return {
+              name: s.name,
+              gid: s.gid,
+              purpose: s.purpose || "",
+              lastCheck: metric?.readAt || null,
+              status: check?.status || "not_configured",
+              formulasRead: metric?.formulasRead ?? null,
+              displayedErrors: metric?.displayedErrors ?? null,
+              issueCount:
+                check?.status === "ok" ? (metric?.issueCount ?? 0) : null,
+              activeChecks: [
+                ...s.rules
+                  .filter((r) => r.approval === "approved")
+                  .map((r) => r.id),
+                ...(s.businessChecks || [])
+                  .filter((r) => approved.has(r.id))
+                  .map((r) => r.title),
+              ],
+              pendingChecks: [
+                ...s.rules
+                  .filter((r) => r.approval !== "approved")
+                  .map((r) => r.id),
+                ...(s.businessChecks || [])
+                  .filter((r) => !approved.has(r.id))
+                  .map((r) => r.title),
+              ],
+            };
+          }),
           pendingRules: d.sheets
             .flatMap((s) => s.rules)
             .filter((r) => r.approval !== "approved").length,
@@ -112,9 +248,9 @@ export class TableDoctor {
         })),
     };
   }
-  async inspect(signal) {
+  async inspect(signal, onlyDocumentId = null) {
     for (const document of (this.config.doctorDocuments || []).filter(
-      (d) => d.enabled,
+      (d) => d.enabled && (!onlyDocumentId || d.id === onlyDocumentId),
     )) {
       if (signal?.aborted) return this.state();
       const started = performance.now();
@@ -159,26 +295,27 @@ export class TableDoctor {
               (s) => s.properties.sheetId === schema.gid,
             );
             if (!existing) continue;
-            const rows = Math.min(
-                schema.maxRows,
-                existing.properties.gridProperties.rowCount,
-              ),
-              title = existing.properties.title.replaceAll("'", "''");
-            const payload = await this.reader.grid(
+            const sheet = await readDoctorSheet(
+              this.reader,
               document.documentId,
-              ["'" + title + "'!A1:" + schema.lastColumn + rows],
+              schema,
+              existing,
               signal,
+              { fullGrid: true },
             );
-            const sheet = payload.sheets.find(
-              (s) => s.properties.sheetId === schema.gid,
-            );
-            if (!sheet) throw new Error("Missing grid response");
             batches.push(sheet);
           }
           spreadsheet = {
             ...metadata,
             sheets: metadata.sheets.map((s) => ({
               ...s,
+              readBounds: batches.find(
+                (b) => b.properties.sheetId === s.properties.sheetId,
+              )?.readBounds,
+              readAt:
+                batches.find(
+                  (b) => b.properties.sheetId === s.properties.sheetId,
+                )?.readAt || null,
               data:
                 batches.find(
                   (b) => b.properties.sheetId === s.properties.sheetId,
@@ -187,6 +324,11 @@ export class TableDoctor {
           };
         }
         const readStats = measureGrid(document, spreadsheet);
+        this.store.snapshot(
+          "doctor-inventory:" + document.id,
+          formulaInventory(document, spreadsheet),
+          at,
+        );
         const diagnosticStart = performance.now();
         const previous =
           this.store.getSnapshot("doctor-baseline:" + document.id)?.value || {};
@@ -194,6 +336,135 @@ export class TableDoctor {
           baseline: previous,
           now: this.now(),
         });
+        const draft = result.complete
+          ? businessPreview(document, spreadsheet, this.now(), {
+              printingSnapshot: this.store.getSnapshot("printing-seasonal"),
+            })
+          : {
+              at: this.now().toISOString(),
+              checks: document.sheets.flatMap((s) =>
+                (s.businessChecks || []).map((r) => ({
+                  id: r.id,
+                  title: r.title,
+                  sheet: s.name,
+                  gid: s.gid,
+                  approval: r.approval,
+                  status: "blocked_structure",
+                  rowsChecked: 0,
+                  observations: 0,
+                  samples: [],
+                  metrics: {
+                    reason:
+                      "Структура не подтверждена; бизнес-выводы заблокированы",
+                  },
+                  limitations: r.limitations,
+                })),
+              ),
+              findings: [],
+            };
+        this.store.snapshot(
+          "doctor-business:" + document.id,
+          draft,
+          this.now().toISOString(),
+        );
+        if (result.complete && document.adapter === "google")
+          this.store.snapshot(
+            "doctor-review:" + document.id,
+            reviewDocument(document, spreadsheet, draft, this.now()),
+            this.now().toISOString(),
+          );
+        if (result.complete && document.adapter === "google")
+          result.findings = this.governance.reviewLegacy(
+            document,
+            result.findings,
+            at,
+          );
+        const priorDataQuality =
+            this.store.getSnapshot("doctor:source-values:" + document.id)
+              ?.value || null,
+          dataQuality = result.complete
+            ? diagnoseDataQuality(
+                document,
+                spreadsheet,
+                priorDataQuality,
+                this.now(),
+              )
+            : { findings: [], snapshot: priorDataQuality },
+          dataQualityErrors = new Set(
+            dataQuality.findings.flatMap((finding) =>
+              (finding.errorCells || []).map(
+                (cell) => cell.gid + ":" + cell.cell,
+              ),
+            ),
+          );
+        const formulaFindings = this.formulas.inspect(
+          document,
+          spreadsheet,
+          result.complete,
+          at,
+          { suppressCalculationCells: dataQualityErrors },
+        );
+        if (result.complete) {
+          this.store.snapshot(
+            "doctor:source-values:" + document.id,
+            dataQuality.snapshot,
+            at,
+          );
+          this.store.reconcile(
+            "doctor:data-quality:" + document.id,
+            dataQuality.findings,
+            {
+              verified: dataQuality.complete,
+              at,
+              resolution: document.dataQuality?.length
+                ? {
+                    cause: `Полный успешный read-only цикл не обнаружил активной ошибки в цепочке коэффициента. Пустой ${document.dataQuality[0].production.outputGuardColumn || "защитный признак"} означает, что ${document.dataQuality[0].production.errorColumns.join(", ")} в этой строке неприменимы; источник проверяется по вычисленному значению.`,
+                    evidence: {
+                      kind: "google_sheets_full_grid_read_only",
+                      ruleId: document.dataQuality[0].id,
+                      sourceSheet: document.dataQuality[0].source.sheet,
+                      sourceField: document.dataQuality[0].source.fieldLabel,
+                      sourceFieldColumn:
+                        document.dataQuality[0].source.fieldColumn,
+                      checkedAt: at,
+                      complete: dataQuality.complete,
+                    },
+                  }
+                : null,
+            },
+          );
+          const groupedCells = new Map();
+          for (const finding of dataQuality.findings)
+            for (const cell of finding.errorCells || []) {
+              const cells = groupedCells.get(cell.gid) || new Set();
+              cells.add(cell.cell);
+              groupedCells.set(cell.gid, cells);
+            }
+          for (const [gid, cells] of groupedCells)
+            this.store.reconcile(`doctor:formula:${document.id}:${gid}`, [], {
+              verified: true,
+              at,
+              onlyCells: cells,
+              onlyTypes: new Set(["calculation_error"]),
+            });
+        }
+        for (const metric of readStats.sheetMetrics) {
+          const sheet = spreadsheet.sheets.find(
+            (s) => s.properties.sheetId === metric.gid,
+          );
+          metric.readAt = sheet?.readAt || at;
+          metric.issueCount =
+            [...result.findings, ...formulaFindings].filter(
+              (f) => f.sheet === metric.name,
+            ).length +
+            dataQuality.findings.filter(
+              (finding) =>
+                finding.sheet === metric.name ||
+                finding.affectedCells?.some(
+                  (cell) => cell.sheet === metric.name,
+                ),
+            ).length;
+        }
         const diagnosticMs = Math.round(performance.now() - diagnosticStart);
         this.store.reconcile("doctor:data:" + document.id, result.findings, {
           verified: result.complete,
@@ -225,7 +496,10 @@ export class TableDoctor {
                 : null,
             errorCode: null,
             httpStatus: null,
-            issueCount: result.findings.length,
+            issueCount:
+              result.findings.length +
+              formulaFindings.length +
+              dataQuality.findings.length,
             lastSuccessfulAt: result.complete
               ? at
               : this.store.overview().checks.find((c) => c.id === document.id)
@@ -236,6 +510,29 @@ export class TableDoctor {
           },
           at,
         );
+        if (document.adapter === "google") {
+          const policyFindings =
+            this.governance.reconcile(document, result.complete, at) || [];
+          if (policyFindings.length) {
+            const current = this.store
+              .overview()
+              .checks.find((c) => c.id === document.id);
+            this.store.check(
+              document.id,
+              {
+                ...current,
+                issueCount: current.issueCount + policyFindings.length,
+                sheetMetrics: current.sheetMetrics.map((m) => ({
+                  ...m,
+                  issueCount:
+                    m.issueCount +
+                    policyFindings.filter((f) => f.sheet === m.name).length,
+                })),
+              },
+              at,
+            );
+          }
+        }
         if (result.complete && !common.demonstration)
           this.store.meta("doctorLastSuccessful", at);
         this.store.log(
@@ -246,7 +543,9 @@ export class TableDoctor {
             "; формул " +
             result.stats.checkedFormulas +
             ", проблем " +
-            result.findings.length,
+            (result.findings.length +
+              formulaFindings.length +
+              dataQuality.findings.length),
           null,
           at,
         );

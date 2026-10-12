@@ -37,8 +37,14 @@ const views = [
   ["history", "История"],
   ["settings", "Настройки"],
 ] as const;
+const primaryViews = [
+  ["doctor", "Контроль таблиц"],
+  ["history", "История"],
+  ["settings", "Настройки"],
+] as const;
 type View = (typeof views)[number][0];
 const eventNames: Record<string, string> = {
+  repair_blocked: "Исправление не подготовлено",
   manual_audit: "Ручной аудит Google Drive",
   doctor_check: "Table Doctor",
   doctor_unavailable: "Нет доступа к формулам",
@@ -155,7 +161,7 @@ function OwnerLogin({ onLogin }: { onLogin: () => void }) {
   );
 }
 export function AICenter() {
-  const [view, setView] = useState<View>("overview");
+  const [view, setView] = useState<View>("doctor");
   const [department, setDepartment] = useState(""),
     [source, setSource] = useState(""),
     [severity, setSeverity] = useState(""),
@@ -218,13 +224,25 @@ export function AICenter() {
           <Bot size={23} />
           <div>
             <strong>RITM Intelligence</strong>
-            <small>Мониторинг без открытого браузера · уровень 1</small>
+            <small>Контроль таблиц · уведомления · заявки на исправление</small>
           </div>
         </div>
         <div className="ai-toolbar-actions">
           <Badge tone={tone(state?.agent?.status || "not_configured")}>
             {statusLabel[state?.agent?.status || "not_configured"]}
           </Badge>
+          {state && (
+            <Badge
+              tone={
+                state.config.telegram === "configured" ? "neutral" : "warning"
+              }
+            >
+              Telegram:{" "}
+              {state.config.telegram === "configured"
+                ? "настроен"
+                : "не настроен"}
+            </Badge>
+          )}
           <Button
             disabled={live.loading}
             onClick={() => {
@@ -317,7 +335,7 @@ export function AICenter() {
             role="group"
             aria-label="Раздел AI Center"
           >
-            {views.map(([id, label]) => (
+            {primaryViews.map(([id, label]) => (
               <button
                 key={id}
                 className={view === id ? "selected" : ""}
@@ -328,6 +346,11 @@ export function AICenter() {
               </button>
             ))}
           </div>
+          {!primaryViews.some(([id]) => id === view) && (
+            <Button onClick={() => setView("doctor")}>
+              Вернуться к контролю таблиц
+            </Button>
+          )}
           {view === "doctor" && <TableDoctor />}
           {view === "overview" && (
             <>
@@ -733,6 +756,23 @@ export function AICenter() {
                     : "Приватный HTTPS-сервер"}
                 </Badge>
               </div>
+              <details className="ai-advanced">
+                <summary>
+                  Дополнительные инструменты и технические сведения
+                </summary>
+                <div className="doctor-actions">
+                  {views
+                    .filter(
+                      ([id]) =>
+                        !primaryViews.some(([primary]) => primary === id),
+                    )
+                    .map(([id, label]) => (
+                      <Button key={id} onClick={() => setView(id)}>
+                        {label}
+                      </Button>
+                    ))}
+                </div>
+              </details>
               <dl className="ai-details">
                 <div>
                   <dt>Интервал проверки</dt>
@@ -745,7 +785,14 @@ export function AICenter() {
                   <dt>Разрешённые действия</dt>
                   <dd>
                     Чтение, диагностика, журнал, рекомендации, настроенные
-                    уведомления. Исправления и деплой отключены.
+                    уведомления.{" "}
+                    {state.config.productionRepair ===
+                    "owner_confirmation_required"
+                      ? "Точечное восстановление утверждённых формул — только после отдельного подтверждения владельца. Автоматические исправления и деплой отключены."
+                      : state.config.testRepair &&
+                          state.config.testRepair !== "disabled"
+                        ? "Тестовая G247: отдельное подтверждение после проверки изоляции. Производственные исправления и деплой отключены."
+                        : "Исправления и деплой отключены."}
                   </dd>
                 </div>
                 <div>

@@ -32,12 +32,15 @@ export class GoogleSheetsReader {
     this.minIntervalMs = minIntervalMs;
     this.sleep = sleep;
     this.nextReadAt = 0;
-    this.queue = Promise.resolve();
+    this.readQueue = [];
+    this.reading = false;
+    this.readSequence = 0;
     this.metrics = {
       readRequests: 0,
       oauthRequests: 0,
       retries: 0,
       responseBytes: 0,
+      maxResponseBytes: 0,
       statuses: {},
     };
     this.authorizedAt = null;
@@ -50,23 +53,57 @@ export class GoogleSheetsReader {
   }
   async perform(url, options) {
     const read = new URL(url).hostname === "sheets.googleapis.com";
-    const perform = async () => {
-      if (read) {
-        const wait = Math.max(0, this.nextReadAt - this.now());
-        if (wait) await this.sleep(wait, undefined, { signal: options.signal });
-        this.nextReadAt = this.now() + this.minIntervalMs;
-      }
-      if (options.signal?.aborted)
-        throw new SheetsAccessError("request_cancelled");
-      this.metrics[read ? "readRequests" : "oauthRequests"]++;
-      const response = await this.fetcher(url, options);
+    const { ritmPriority = 0, ...fetchOptions } = options;
+    if (!read) {
+      this.metrics.oauthRequests++;
+      const response = await this.fetcher(url, fetchOptions);
       this.metrics.statuses[response.status] =
         (this.metrics.statuses[response.status] || 0) + 1;
       return response;
-    };
-    const pending = this.queue.then(perform);
-    this.queue = pending.catch(() => {});
-    return pending;
+    }
+    return new Promise((resolve, reject) => {
+      this.readQueue.push({
+        url,
+        options: fetchOptions,
+        priority: Number(ritmPriority) || 0,
+        sequence: this.readSequence++,
+        resolve,
+        reject,
+      });
+      this.readQueue.sort(
+        (a, b) => b.priority - a.priority || a.sequence - b.sequence,
+      );
+      void this.drainReads();
+    });
+  }
+  async drainReads() {
+    if (this.reading) return;
+    this.reading = true;
+    try {
+      while (this.readQueue.length) {
+        const task = this.readQueue.shift();
+        try {
+          const wait = Math.max(0, this.nextReadAt - this.now());
+          if (wait)
+            await this.sleep(wait, undefined, {
+              signal: task.options.signal,
+            });
+          if (task.options.signal?.aborted)
+            throw new SheetsAccessError("request_cancelled");
+          this.nextReadAt = this.now() + this.minIntervalMs;
+          this.metrics.readRequests++;
+          const response = await this.fetcher(task.url, task.options);
+          this.metrics.statuses[response.status] =
+            (this.metrics.statuses[response.status] || 0) + 1;
+          task.resolve(response);
+        } catch (error) {
+          task.reject(error);
+        }
+      }
+    } finally {
+      this.reading = false;
+      if (this.readQueue.length) void this.drainReads();
+    }
   }
   async request(url, options) {
     for (let attempt = 0; attempt <= this.retries; attempt++) {
@@ -191,13 +228,14 @@ export class GoogleSheetsReader {
     };
     return this.cached.token;
   }
-  async get(documentId, params, signal) {
+  async get(documentId, params, signal, priority = 0) {
     if (!/^[A-Za-z0-9_-]{20,100}$/.test(documentId))
       throw new SheetsAccessError("invalid_document");
     const token = await this.accessToken(signal),
       url = new URL(
         "https://sheets.googleapis.com/v4/spreadsheets/" + documentId,
       );
+    url.searchParams.set("prettyPrint", "false");
     for (const [k, values] of Object.entries(params))
       for (const v of Array.isArray(values) ? values : [values])
         url.searchParams.append(k, v);
@@ -208,6 +246,7 @@ export class GoogleSheetsReader {
       signal: AbortSignal.any(
         [signal, AbortSignal.timeout(this.timeoutMs)].filter(Boolean),
       ),
+      ritmPriority: priority,
     });
     if (!response.ok) {
       if (response.status === 401) this.cached = null;
@@ -215,6 +254,10 @@ export class GoogleSheetsReader {
     }
     const text = await response.text();
     this.metrics.responseBytes += Buffer.byteLength(text);
+    this.metrics.maxResponseBytes = Math.max(
+      this.metrics.maxResponseBytes,
+      Buffer.byteLength(text),
+    );
     if (text.length > 12000000)
       throw new SheetsAccessError("response_too_large");
     let value;
@@ -227,7 +270,7 @@ export class GoogleSheetsReader {
       throw new SheetsAccessError("invalid_sheets_response");
     return value;
   }
-  metadata(id, signal) {
+  metadata(id, signal, priority = 0) {
     return this.get(
       id,
       {
@@ -235,9 +278,16 @@ export class GoogleSheetsReader {
           "spreadsheetId,properties(title,locale,timeZone),sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)),merges),namedRanges",
       },
       signal,
-    );
+      priority,
+    ).then((metadata) => {
+      // The response requested the full `merges` field. Google omits it when a
+      // sheet has no merged ranges, so normalize that case for structural checks.
+      for (const sheet of metadata.sheets || [])
+        if (!Array.isArray(sheet.merges)) sheet.merges = [];
+      return metadata;
+    });
   }
-  grid(id, ranges, signal) {
+  grid(id, ranges, signal, priority = 0) {
     if (
       !Array.isArray(ranges) ||
       !ranges.length ||
@@ -253,9 +303,10 @@ export class GoogleSheetsReader {
       {
         ranges,
         fields:
-          "spreadsheetId,properties(title,locale,timeZone),sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)),data(startRow,startColumn,rowData(values(userEnteredValue,effectiveValue,formattedValue))))",
+          "spreadsheetId,properties(title,locale,timeZone),sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)),merges,data(startRow,startColumn,rowData(values(userEnteredValue,effectiveValue))))",
       },
       signal,
+      priority,
     );
   }
 }

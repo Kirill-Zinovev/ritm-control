@@ -1,4 +1,5 @@
 import { SHEET_ID, SUPPLY_SHEETS } from "../worker/printing.js";
+import { validateContext } from "./doctorContext.js";
 import { FBO_SOURCE_ID } from "../worker/assembly.js";
 export const DEFAULT_DOCTOR_DOCUMENTS = [
   {
@@ -79,6 +80,13 @@ export const DEFAULT_DOCTOR_DOCUMENTS = [
           { cell: "O3", value: "Кол-во" },
           { cell: "AF1", value: "UID" },
         ],
+        context: {
+          startRow: 4,
+          columns: ["E", "F", "H", "I", "J", "O", "AF"],
+          activeColumns: ["E", "O"],
+          errorColumns: ["F", "H", "I", "J", "M", "O"],
+          emptyLookupNAColumns: ["F", "H", "I", "J", "M", "O"],
+        },
         rules: [
           {
             id: "planned-area",
@@ -196,12 +204,31 @@ export function validateDoctorDocuments(documents) {
         s.maxRows > 10000 ||
         !columns.test(s.lastColumn) ||
         doctorColumnIndex(s.lastColumn) >= 18278 ||
-        s.maxRows * (doctorColumnIndex(s.lastColumn) + 1) > 100000 ||
+        s.maxRows * (doctorColumnIndex(s.lastColumn) + 1) > 500000 ||
+        (s.chunkRows !== undefined &&
+          (!Number.isInteger(s.chunkRows) ||
+            s.chunkRows < 1 ||
+            s.chunkRows > s.maxRows)) ||
+        Math.min(s.maxRows, s.chunkRows || s.maxRows) *
+          (doctorColumnIndex(s.lastColumn) + 1) >
+          100000 ||
         !Array.isArray(s.rules) ||
         !Array.isArray(s.headers)
       )
         throw new Error("Invalid Table Doctor sheet");
       gids.add(s.gid);
+      validateContext(s.context, s);
+      if (
+        s.businessChecks &&
+        (!Array.isArray(s.businessChecks) ||
+          s.businessChecks.length > 30 ||
+          s.businessChecks.some(
+            (r) => !r.id || !r.title || r.approval !== "pending",
+          ))
+      )
+        throw new Error(
+          "New business checks require explicit pending proposals",
+        );
       for (const h of s.headers)
         if (!cell.test(h.cell) || typeof h.value !== "string")
           throw new Error("Invalid approved header");

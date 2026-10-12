@@ -23,8 +23,102 @@ export type Incident = {
   observed?: unknown;
   recommendation?: string;
   previousFormula?: string | null;
+  baselineVersion?: string;
+  formulaRegionId?: string;
+  category?: string;
+  sourceField?: string;
+  sourceFieldColumn?: string;
+  sourceCell?: string;
+  sourceState?: string;
+  lifecycleState?: string;
+  resolutionCause?: string;
+  resolutionAt?: string;
+  resolutionEvidence?: unknown;
+  kpiImpactVerified?: boolean;
+  impactEvidence?: {
+    verified?: boolean;
+    summary?: string;
+    value?: number;
+  } | null;
+  recoveryStatus?: string;
+  recoveryNote?: string;
+  recoveryCandidate?: {
+    status: string;
+    value: Record<string, unknown>;
+    observedAt: string;
+    confirmation: string;
+    evidence: string;
+  } | null;
+  affectedCells?: {
+    gid: number;
+    sheet: string;
+    cell: string;
+    error: string | null;
+  }[];
+  errorCells?: {
+    gid: number;
+    sheet: string;
+    cell: string;
+    error: string;
+  }[];
+  dependencyPaths?: { outputCell: string; cells: string[] }[];
+  rowContext?: {
+    row: number;
+    state: string;
+    cells: Record<
+      string,
+      { value: unknown; formula: string | null; error: string | null }
+    >;
+  } | null;
   monitorStatus?: string;
   repairRequested?: boolean;
+  sourceRecoveryOperation?: {
+    id: string;
+    requestId: string;
+    incidentId: string;
+    status:
+      | "repairing"
+      | "checking"
+      | "written_unverified"
+      | "verified"
+      | "already_restored"
+      | "blocked"
+      | "needs_review"
+      | "uncertain";
+    createdAt: string;
+    updatedAt: string;
+    owner: string;
+    target: {
+      documentId: string;
+      sheetId: number;
+      sheet: string;
+      cell: string;
+    };
+    approvedValue: Record<string, unknown>;
+    before: unknown;
+    after: unknown;
+    result: {
+      phase?: string;
+      message?: string;
+      code?: string;
+      resolutionCause?: string;
+      writeSucceeded?: boolean;
+      timing?: {
+        startedAt?: string;
+        totalMs?: number;
+        stages?: Record<
+          string,
+          {
+            label?: string;
+            status?: string;
+            durationMs?: number;
+            attempts?: number;
+            maxAttempts?: number;
+          }
+        >;
+      };
+    } | null;
+  } | null;
   type: string;
   severity: string;
   sourceId: string;
@@ -101,7 +195,9 @@ export type AgentStatus = {
   config: {
     intervalSeconds: number;
     permissionLevel: number;
-    writesEnabled: false;
+    writesEnabled: boolean;
+    productionRepair?: string;
+    testRepair?: string;
     sources: SourceDefinition[];
     apiBase: string | null;
     model: string | null;
@@ -126,6 +222,14 @@ export type PageResult<T> = {
   limit: number;
   total: number;
 };
+export type IncidentSummary = {
+  allProblems: number;
+  critical: number;
+  missingSource: number;
+  calculationError: number;
+  needsReview: number;
+  fixed: number;
+};
 export function timeLabel(value?: string | null) {
   if (!value || !Number.isFinite(Date.parse(value))) return "Нет проверки";
   return new Intl.DateTimeFormat("ru-RU", {
@@ -135,6 +239,10 @@ export function timeLabel(value?: string | null) {
   }).format(new Date(value));
 }
 export const statusLabel: Record<string, string> = {
+  active: "Активные проблемы",
+  excepted: "Допустимое исключение",
+  rule_paused: "Правило отозвано",
+  out_of_scope: "Вне области мониторинга",
   verified: "Чтение подтверждено",
   awaiting_verification: "Ожидает проверки подключения",
   new: "Новая проблема",

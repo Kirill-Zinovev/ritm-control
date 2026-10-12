@@ -3,6 +3,7 @@ import { randomBytes, timingSafeEqual, createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { publicConfig } from "./config.js";
+import { isTailscaleReadOrigin } from "./productionRepair.js";
 import { summarizeAssembly } from "../worker/assembly.js";
 import { todayMoscow } from "./adapters.js";
 const sessionCookie = "ritm_owner";
@@ -21,7 +22,13 @@ function bounded(value, fallback, max) {
 export function createAgentServer(
   store,
   config,
-  { now = () => Date.now(), doctor = null, signal } = {},
+  {
+    now = () => Date.now(),
+    doctor = null,
+    repair = null,
+    sourceRecovery = null,
+    signal,
+  } = {},
 ) {
   if (config.ownerToken.length < 32)
     throw new Error(
@@ -58,12 +65,15 @@ export function createAgentServer(
     }
     return true;
   }
-  async function body(req) {
+  async function body(req, maxBytes = 8192) {
     let text = "";
     for await (const chunk of req) {
       text += chunk.toString();
-      if (Buffer.byteLength(text) > 8192)
-        throw new Error("Request body too large");
+      if (Buffer.byteLength(text) > maxBytes) {
+        const error = new Error("Request body too large");
+        error.status = 413;
+        throw error;
+      }
     }
     return JSON.parse(text);
   }
@@ -158,7 +168,9 @@ export function createAgentServer(
         sessions.set(hash(cookie), now() + 8 * 3600000);
         store.log(
           "owner_login",
-          "Владелец вошёл в локальный AI Center; Google Sheets доступны только для чтения",
+          repair
+            ? "Владелец вошёл в AI Center; каждая запись требует отдельного подтверждения"
+            : "Владелец вошёл в локальный AI Center; Google Sheets доступны только для чтения",
         );
         send(
           res,
@@ -203,12 +215,528 @@ export function createAgentServer(
           );
           return;
         }
+        if (
+          pathname.startsWith("/api/intelligence/test-repair") ||
+          pathname.startsWith("/api/intelligence/formula-repair")
+        ) {
+          const production = pathname.startsWith(
+            "/api/intelligence/formula-repair",
+          );
+          const base = production
+            ? "/api/intelligence/formula-repair"
+            : "/api/intelligence/test-repair";
+          const port = production ? 4318 : 4319;
+          // Owner cookie login AND exact loopback Origin are required. Bearer-only
+          // clients, proxies, cross-site requests and public origins cannot repair.
+          const hasSession = req.headers.cookie?.includes("ritm_owner=");
+          if (
+            !repair ||
+            config.port !== port ||
+            !!repair.production !== production ||
+            (config.publicOrigin &&
+              (!production || !isTailscaleReadOrigin(config.publicOrigin))) ||
+            !localHost ||
+            !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(
+              req.socket.remoteAddress,
+            ) ||
+            Object.keys(req.headers).some(
+              (h) => h.startsWith("x-forwarded-") || h === "forwarded",
+            ) ||
+            (!origin && req.method !== "GET") ||
+            (origin &&
+              ![
+                "http://127.0.0.1:" + port,
+                "http://localhost:" + port,
+              ].includes(origin)) ||
+            !hasSession ||
+            req.headers.authorization
+          ) {
+            send(res, 403, {
+              ok: false,
+              error: "test_repair_forbidden",
+              message:
+                "Исправление доступно только владельцу в локальном AI Center",
+            });
+            return;
+          }
+          if (req.method === "GET" && pathname === base) {
+            const incidentId = url.searchParams.get("incidentId") || "";
+            if (!/^[a-f0-9]{64}$/.test(incidentId)) {
+              send(res, 400, { ok: false });
+              return;
+            }
+            send(res, 200, { ok: true, ...repair.state(incidentId) });
+            return;
+          }
+          if (
+            production &&
+            repair.queueState &&
+            req.method === "GET" &&
+            pathname === base + "/queue"
+          ) {
+            send(res, 200, { ok: true, ...repair.queueState() });
+            return;
+          }
+          if (
+            production &&
+            req.method === "GET" &&
+            pathname === base + "/source-recovery"
+          ) {
+            const incidentId = url.searchParams.get("incidentId") || "";
+            if (!sourceRecovery || !/^[a-f0-9]{64}$/.test(incidentId)) {
+              send(res, sourceRecovery ? 400 : 503, {
+                ok: false,
+                error: sourceRecovery
+                  ? "invalid_incident_id"
+                  : "source_recovery_unavailable",
+              });
+              return;
+            }
+            send(res, 200, {
+              ok: true,
+              ...sourceRecovery.state(incidentId),
+            });
+            return;
+          }
+          if (
+            production &&
+            req.method === "POST" &&
+            pathname === base + "/source-recovery"
+          ) {
+            if (!sourceRecovery) {
+              send(res, 503, {
+                ok: false,
+                error: "source_recovery_unavailable",
+                message: "Восстановление исходных данных не настроено.",
+              });
+              return;
+            }
+            if (
+              !String(req.headers["content-type"] || "").startsWith(
+                "application/json",
+              )
+            ) {
+              send(res, 415, { ok: false, error: "json_required" });
+              return;
+            }
+            let payload;
+            try {
+              payload = await body(req, 4096);
+            } catch {
+              send(res, 400, {
+                ok: false,
+                error: "invalid_request",
+                message: "Некорректное подтверждение точечной записи.",
+              });
+              return;
+            }
+            if (
+              !payload ||
+              Object.keys(payload).sort().join(",") !==
+                "explicitWriteApproval,incidentId" ||
+              !/^[a-f0-9]{64}$/.test(payload.incidentId || "") ||
+              payload.explicitWriteApproval !== true
+            ) {
+              send(res, 400, {
+                ok: false,
+                error: "source_write_confirmation_required",
+                message:
+                  "Подтвердите только точный адрес и значение из карточки инцидента.",
+              });
+              return;
+            }
+            try {
+              const operation = sourceRecovery.startForIncident(
+                payload.incidentId,
+                payload,
+              );
+              send(res, 202, { ok: true, operation });
+            } catch (error) {
+              store.log(
+                "source_recovery_blocked",
+                error.code || "source_recovery_failed",
+                payload.incidentId,
+              );
+              send(res, error.status || 409, {
+                ok: false,
+                error: error.code || "source_recovery_failed",
+                message: error.message || "Восстановление не запущено.",
+              });
+            }
+            return;
+          }
+          const confirm = pathname.match(
+            new RegExp("^" + base + "/([a-f0-9-]{36})/confirm$"),
+          );
+          if (
+            req.method === "POST" &&
+            (pathname === base + "/propose" || confirm)
+          ) {
+            if (
+              !String(req.headers["content-type"] || "").startsWith(
+                "application/json",
+              )
+            ) {
+              send(res, 415, { ok: false, error: "json_required" });
+              return;
+            }
+            let payload;
+            try {
+              payload = await body(req);
+            } catch {
+              send(res, 400, { ok: false, message: "Некорректный запрос" });
+              return;
+            }
+            try {
+              let result;
+              if (confirm) result = await repair.confirm(confirm[1], payload);
+              else {
+                if (
+                  !payload ||
+                  Object.keys(payload).some(
+                    (k) =>
+                      !["incidentId", "direction", "previousId"].includes(k),
+                  ) ||
+                  !/^[a-f0-9]{64}$/.test(payload.incidentId || "") ||
+                  (payload.direction !== undefined &&
+                    !["repair", "rollback"].includes(payload.direction))
+                ) {
+                  send(res, 400, {
+                    ok: false,
+                    message:
+                      "Подмена адреса или неизвестные параметры запрещены",
+                  });
+                  return;
+                }
+                result = await repair.prepare(
+                  payload.incidentId,
+                  payload.direction || "repair",
+                  payload.previousId || null,
+                );
+              }
+              send(res, 200, result);
+            } catch (e) {
+              const incidentId =
+                payload?.incidentId ||
+                (confirm
+                  ? store.db
+                      .prepare(
+                        "SELECT incident_id FROM test_repair_proposals WHERE id=?",
+                      )
+                      .get(confirm[1])?.incident_id
+                  : null);
+              store.log(
+                "repair_blocked",
+                e.code || "repair_unavailable",
+                incidentId || null,
+              );
+              send(res, e.status || 503, {
+                ok: false,
+                error: e.code || "repair_unavailable",
+                message: e.code
+                  ? e.message
+                  : "Действие не выполнено; проверьте журнал",
+              });
+            }
+            return;
+          }
+          send(res, 405, { ok: false, message: "Действие не разрешено" });
+          return;
+        }
+        if (pathname.startsWith("/api/intelligence/doctor/formulas")) {
+          if (!doctor?.formulas) {
+            send(res, 503, {
+              ok: false,
+              message: "Formula Intelligence не настроен",
+            });
+            return;
+          }
+          try {
+            const region = pathname.match(
+              /^\/api\/intelligence\/doctor\/formulas\/regions\/([a-f0-9]{64})$/,
+            );
+            if (req.method === "GET" && region) {
+              const version = url.searchParams.get("version") || "";
+              if (!/^[a-f0-9]{64}$/.test(version)) {
+                send(res, 400, { ok: false });
+                return;
+              }
+              send(res, 200, {
+                ok: true,
+                ...doctor.formulas.region(region[1], version, {
+                  page: bounded(url.searchParams.get("p"), 0, 100000),
+                  size: [10, 20, 50].includes(
+                    Number(url.searchParams.get("limit")),
+                  )
+                    ? Number(url.searchParams.get("limit"))
+                    : 20,
+                  search: (url.searchParams.get("search") || "").slice(0, 200),
+                }),
+              });
+              return;
+            }
+            if (
+              req.method !== "POST" ||
+              !origin ||
+              !config.allowedOrigins.includes(origin) ||
+              !req.headers.cookie?.includes("ritm_owner=") ||
+              req.headers.authorization
+            ) {
+              send(res, 403, {
+                ok: false,
+                message:
+                  "Решение доступно только владельцу в защищённом AI Center",
+              });
+              return;
+            }
+            if (
+              !String(req.headers["content-type"] || "").startsWith(
+                "application/json",
+              )
+            ) {
+              send(res, 415, { ok: false });
+              return;
+            }
+            const action = pathname.slice(
+              "/api/intelligence/doctor/formulas/".length,
+            );
+            const payload = await body(req, 256 * 1024);
+            if (doctor.current) {
+              send(res, 409, {
+                ok: false,
+                message: "Дождитесь завершения проверки",
+              });
+              return;
+            }
+            const keys =
+              action === "approve"
+                ? ["regions", "acknowledged"]
+                : action === "prepare"
+                  ? []
+                  : action === "bulk-approve"
+                    ? ["previewId", "acknowledged"]
+                    : action === "revoke"
+                      ? ["id", "reason"]
+                      : action === "exceptions"
+                        ? ["incidentId", "reason", "expiresAt"]
+                        : action === "exceptions/revoke"
+                          ? ["id"]
+                          : [];
+            if (
+              !payload ||
+              typeof payload !== "object" ||
+              Array.isArray(payload) ||
+              Object.keys(payload).some((k) => !keys.includes(k))
+            ) {
+              send(res, 400, {
+                ok: false,
+                message: "Подмена адреса запрещена",
+              });
+              return;
+            }
+            let result;
+            if (action === "prepare") {
+              if (doctor.run) await doctor.run(signal);
+              result = doctor.formulas.prepareProtection();
+            } else if (action === "bulk-approve") {
+              if (doctor.run) await doctor.run(signal);
+              result = doctor.formulas.approveProtectionPreview(payload);
+            } else if (action === "approve") {
+              result = doctor.formulas.approve(payload);
+            } else if (action === "revoke") {
+              result = doctor.formulas.revoke(payload);
+            } else if (action === "exceptions") {
+              result = doctor.formulas.addException(payload);
+            } else if (action === "exceptions/revoke") {
+              result = doctor.formulas.revokeException(payload.id);
+            }
+            if (!result) {
+              send(res, 404, { ok: false });
+              return;
+            }
+            send(res, 200, result);
+          } catch (e) {
+            send(res, e.status || 503, {
+              ok: false,
+              message: e.status
+                ? e.message
+                : "Действие не выполнено; проверьте журнал",
+            });
+          }
+          return;
+        }
+        if (
+          req.method === "POST" &&
+          (pathname.startsWith("/api/intelligence/doctor/rules/") ||
+            pathname.startsWith("/api/intelligence/doctor/exceptions"))
+        ) {
+          // A cookie owner session and exact configured Origin are mandatory for decisions.
+          // Approval only changes local diagnostic policy; it grants no Google write permission.
+          if (
+            !doctor?.governance ||
+            !origin ||
+            !config.allowedOrigins.includes(origin) ||
+            !req.headers.cookie?.includes("ritm_owner=") ||
+            req.headers.authorization
+          ) {
+            send(res, 403, {
+              ok: false,
+              message:
+                "Решение доступно владельцу в защищённом AI Center после завершения проверки.",
+            });
+            return;
+          }
+          if (
+            !String(req.headers["content-type"] || "").startsWith(
+              "application/json",
+            )
+          ) {
+            send(res, 415, { ok: false, message: "Требуется JSON" });
+            return;
+          }
+          let payload;
+          try {
+            payload = await body(req);
+          } catch {
+            send(res, 400, { ok: false, message: "Некорректный запрос" });
+            return;
+          }
+          if (doctor.current) {
+            send(res, 409, {
+              ok: false,
+              message: "Проверка ещё выполняется; дождитесь полного снимка.",
+            });
+            return;
+          }
+          const rule = pathname.match(
+            /^\/api\/intelligence\/doctor\/rules\/(fbo-sum|supply-area|catalog-sum|daily-journal)\/(approve|revoke)$/,
+          );
+          const revoke = pathname.match(
+            /^\/api\/intelligence\/doctor\/exceptions\/([a-f0-9]{64})\/revoke$/,
+          );
+          const keys = rule
+            ? ["version", "acknowledged"]
+            : revoke
+              ? []
+              : ["observationId", "evidenceVersion", "reason", "expiresAt"];
+          if (
+            !payload ||
+            typeof payload !== "object" ||
+            Array.isArray(payload) ||
+            Object.keys(payload).some((k) => !keys.includes(k))
+          ) {
+            send(res, 400, {
+              ok: false,
+              message: "Подмена области или неизвестные параметры запрещены.",
+            });
+            return;
+          }
+          try {
+            let result;
+            if (rule)
+              result = doctor.governance.decide({
+                ruleId: rule[1],
+                decision: rule[2],
+                ...payload,
+              });
+            else if (revoke)
+              result = doctor.governance.revokeException(revoke[1]);
+            else if (pathname === "/api/intelligence/doctor/exceptions")
+              result = doctor.governance.addException(payload);
+            else {
+              send(res, 404, { ok: false, message: "Действие не найдено" });
+              return;
+            }
+            send(res, 200, result);
+          } catch (e) {
+            send(res, e.status || 503, {
+              ok: false,
+              message: e.status
+                ? e.message
+                : "Решение не сохранено; проверьте журнал.",
+            });
+          }
+          return;
+        }
         if (req.method === "POST") {
+          const recheck = pathname.match(
+            /^\/api\/intelligence\/incidents\/([a-f0-9]{64})\/recheck$/,
+          );
+          if (recheck) {
+            const incident = store.getIncident(recheck[1]),
+              document = config.doctorDocuments.find(
+                (item) =>
+                  item.id === incident?.sourceId &&
+                  item.enabled &&
+                  item.adapter === "google",
+              );
+            if (
+              !doctor ||
+              !incident ||
+              incident.monitorStatus !== "open" ||
+              incident.demonstration ||
+              !document
+            ) {
+              send(res, 409, {
+                ok: false,
+                message: "Проблему нельзя повторно проверить в текущем состоянии.",
+              });
+              return;
+            }
+            if (doctor.current) {
+              send(res, 409, {
+                ok: false,
+                message: "Проверка уже выполняется. Повторите после её завершения.",
+              });
+              return;
+            }
+            void doctor
+              .runDocument(document.id, signal)
+              .catch(() =>
+                store.log("doctor_error", "Ошибка повторной проверки проблемы"),
+              );
+            send(res, 202, {
+              ok: true,
+              running: true,
+              sourceId: document.id,
+            });
+            return;
+          }
           const action = pathname.match(
             /^\/api\/intelligence\/incidents\/([a-f0-9]{64})\/(request-repair|ignore)$/,
           );
           if (action) {
-            const incident = store.incidentAction(action[1], action[2]);
+            let requestDetails = null;
+            if (
+              action[2] === "request-repair" &&
+              req.headers["content-type"] &&
+              (Number(req.headers["content-length"] || 0) > 0 ||
+                req.headers["transfer-encoding"])
+            ) {
+              if (
+                !String(req.headers["content-type"]).startsWith(
+                  "application/json",
+                )
+              ) {
+                send(res, 415, { ok: false, message: "Ожидался JSON-запрос" });
+                return;
+              }
+              try {
+                requestDetails = await body(req, 16 * 1024);
+              } catch {
+                send(res, 400, {
+                  ok: false,
+                  message: "Некорректное подтверждение",
+                });
+                return;
+              }
+            }
+            const incident = store.incidentAction(
+              action[1],
+              action[2],
+              new Date(now()).toISOString(),
+              requestDetails,
+            );
             send(
               res,
               incident ? 200 : 409,
@@ -233,6 +761,26 @@ export function createAgentServer(
               .run(signal)
               .catch(() => store.log("doctor_error", "Ошибка ручной проверки"));
             send(res, 202, { ok: true, running: true });
+            return;
+          }
+          if (pathname === "/api/intelligence/doctor/fast") {
+            if (!doctor) {
+              send(res, 503, {
+                ok: false,
+                message: "Table Doctor не настроен",
+              });
+              return;
+            }
+            void doctor
+              .runFast(signal)
+              .catch(() =>
+                store.log("doctor_fast_error", "Ошибка быстрой проверки"),
+              );
+            send(res, 202, {
+              ok: true,
+              running: true,
+              mode: "protected_formulas",
+            });
             return;
           }
           if (
@@ -297,7 +845,12 @@ export function createAgentServer(
             res,
             doctor ? 200 : 503,
             doctor
-              ? doctor.state()
+              ? {
+                  ...doctor.state(),
+                  testRepairEnabled: !!repair && !repair.production,
+                  productionRepairEnabled: !!repair?.production,
+                  repairQueue: repair?.production ? repair.queueState() : null,
+                }
               : { ok: false, message: "Table Doctor не настроен" },
           );
           return;
@@ -348,6 +901,10 @@ export function createAgentServer(
             ? Number(url.searchParams.get("limit"))
             : 20,
         };
+        if (pathname === "/api/intelligence/incidents/summary") {
+          send(res, 200, { ok: true, ...store.incidentSummary() });
+          return;
+        }
         if (pathname === "/api/intelligence/incidents") {
           send(res, 200, {
             ok: true,
@@ -358,10 +915,13 @@ export function createAgentServer(
                 80,
               ),
               source: (url.searchParams.get("source") || "").slice(0, 80),
+              sheet: (url.searchParams.get("sheet") || "").slice(0, 200),
               severity: (url.searchParams.get("severity") || "").slice(0, 20),
               status: (url.searchParams.get("status") || "").slice(0, 20),
               kind: (url.searchParams.get("kind") || "").slice(0, 40),
               type: (url.searchParams.get("type") || "").slice(0, 60),
+              group: (url.searchParams.get("group") || "").slice(0, 40),
+              includeDemonstrations: false,
               search: (url.searchParams.get("q") || "").slice(0, 120),
             }),
           });

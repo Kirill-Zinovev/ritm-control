@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
 import { doctorColumnIndex } from "./doctorRegistry.js";
+import {
+  rowContext,
+  errorContext,
+  scanContextErrors,
+} from "./doctorContext.js";
 const scalar = (c) =>
   c?.effectiveValue?.numberValue ??
   c?.effectiveValue?.stringValue ??
@@ -81,8 +86,17 @@ export function inspectDocument(
       approvedFormulas: 0,
       checkedCells: 0,
       sheets: 0,
+      classifications: {
+        normal: 0,
+        suspicious: 0,
+        confirmed_formula: 0,
+        business_review: 0,
+      },
+      expectedNA: 0,
     },
     missingSheets = [];
+  const schemaImpact = (sheet) =>
+    document.sheets.find((s) => s.gid === sheet.gid)?.context?.impact;
   const add = (
     sheet,
     cell,
@@ -95,8 +109,30 @@ export function inspectDocument(
     confirmed = true,
   ) => {
     const demo = document.adapter === "fixture";
+    const formulaViolation =
+      confirmed &&
+      rule?.kind === "formula" &&
+      [
+        "formula_missing",
+        "formula_number",
+        "formula_mismatch",
+        "invalid_reference",
+      ].includes(type);
+    const category = formulaViolation
+      ? "confirmed_formula"
+      : [
+            "business_rule",
+            "invalid_number",
+            "invalid_date",
+            "missing_uid",
+            "duplicate_uid",
+          ].includes(type)
+        ? "business_review"
+        : "suspicious";
+    stats.classifications[category]++;
     findings.push({
       kind: "table_doctor",
+      category,
       demonstration: demo,
       sourceId: document.id,
       sourceName: document.name,
@@ -104,10 +140,7 @@ export function inspectDocument(
       sheet: sheet.name,
       cell,
       type,
-      severity:
-        type === "calculation_error" || type === "structure_changed"
-          ? "critical"
-          : "warning",
+      severity: type === "structure_changed" ? "critical" : "warning",
       title:
         {
           formula_missing: "Обязательная формула отсутствует",
@@ -126,7 +159,10 @@ export function inspectDocument(
       observed,
       expected: expected ?? null,
       cause: reason,
-      impact: rule?.impact || "Полнота контроля источника нарушена",
+      impact:
+        rule?.impact ||
+        schemaImpact(sheet) ||
+        "Полнота контроля источника нарушена",
       recommendation,
       verification: confirmed ? "rule_confirmed" : "needs_review",
       initialStatus: confirmed ? "new" : "review",
@@ -204,6 +240,13 @@ export function inspectDocument(
       complete = false;
       continue;
     }
+    const contextErrors = scanContextErrors(schema, sheet, get);
+    const handledErrors = new Set();
+    for (const observation of contextErrors.filter((x) => x.normal)) {
+      stats.expectedNA++;
+      stats.classifications.normal++;
+      handledErrors.add(observation.column + observation.row);
+    }
     for (const rule of schema.rules) {
       const seen = new Map(),
         hash = signature(rule);
@@ -220,7 +263,11 @@ export function inspectDocument(
         const exception = (rule.exceptions || []).find(
           (e) => (!e.rows || e.rows.includes(row)) && matches(e.when, get, row),
         );
-        if (exception && !exception.templates) continue;
+        if (exception && !exception.templates) {
+          stats.classifications.normal++;
+          handledErrors.add(rule.column + row);
+          continue;
+        }
         const c = get(rule.column, row),
           address = rule.column + row,
           value = scalar(c),
@@ -237,16 +284,41 @@ export function inspectDocument(
           (t) => formula(t, row),
         );
         if (error) {
+          if (handledErrors.has(address)) continue;
+          handledErrors.add(address);
+          const assessment = errorContext(schema, get, row, rule.column, c);
+          const violation =
+            approved &&
+            rule.kind === "formula" &&
+            templates.length &&
+            !templates.includes(actual.trim());
           add(
             schema,
             address,
-            "calculation_error",
-            error.type + ": " + (error.message || ""),
-            templates[0],
+            violation ? "formula_mismatch" : "calculation_error",
+            {
+              formula: actual || null,
+              error: error.type,
+              message: error.message || "",
+            },
+            violation ? templates.join(" или ") : null,
             rule,
-            "Подтверждена ошибка вычисления; причину ссылки или деления нужно проверить",
-            "Проверить входные значения и ссылки",
+            assessment.reason ||
+              "Ошибка результата не доказывает повреждение формулы; проверить входные данные.",
+            violation
+              ? "Проверить изменение утверждённой формулы; автоматическая запись запрещена"
+              : "Проверить бизнес-логику столбца и допустимые исключения",
+            !!violation,
           );
+          const finding = findings.at(-1);
+          finding.rowContext = assessment.context;
+          finding.category = violation
+            ? "confirmed_formula"
+            : "business_review";
+          if (!violation) {
+            stats.classifications.suspicious--;
+            stats.classifications.business_review++;
+          }
           continue;
         }
         if (actual.includes("#REF!")) {
@@ -259,6 +331,9 @@ export function inspectDocument(
             rule,
             "В формуле есть недействительная ссылка",
             "Проверить удалённый диапазон",
+            approved &&
+              templates.length > 0 &&
+              !templates.includes(actual.trim()),
           );
           continue;
         }
@@ -426,7 +501,38 @@ export function inspectDocument(
             approved,
           );
         }
+        if (
+          !findings.some((f) => f.sheet === schema.name && f.cell === address)
+        )
+          stats.classifications.normal++;
       }
+    }
+    for (const observation of contextErrors) {
+      const address = observation.column + observation.row;
+      if (handledErrors.has(address)) continue;
+      const error = observation.cell.effectiveValue.errorValue;
+      add(
+        schema,
+        address,
+        "calculation_error",
+        {
+          formula: observation.cell.userEnteredValue?.formulaValue || null,
+          error: error.type,
+          message: error.message || "",
+        },
+        null,
+        null,
+        observation.reason,
+        "Проверить контекст строки; не удалять формулу",
+        false,
+      );
+      findings.at(-1).rowContext = observation.context;
+    }
+    for (const finding of findings.filter(
+      (f) => f.sheet === schema.name && f.cell && !f.rowContext,
+    )) {
+      const row = Number(finding.cell.match(/\d+$/)?.[0]);
+      finding.rowContext = rowContext(schema, get, row);
     }
   }
   if (document.freshness) {

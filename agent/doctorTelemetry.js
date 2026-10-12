@@ -11,19 +11,22 @@ export function measureGrid(document, spreadsheet) {
     );
     if (!sheet) continue;
     let cells = 0,
-      formulas = 0;
+      formulas = 0,
+      displayedErrors = 0;
     for (const grid of sheet.data || [])
       for (const row of grid.rowData || [])
         for (const cell of row.values || []) {
           cells++;
+          if (cell.effectiveValue?.errorValue) displayedErrors++;
           if (cell.userEnteredValue?.formulaValue) formulas++;
           if (cell.userEnteredValue || cell.effectiveValue) populatedCells++;
         }
     returnedCells += cells;
     formulasRead += formulas;
     const area =
-      Math.min(schema.maxRows, sheet.properties.gridProperties.rowCount) *
-      (doctorColumnIndex(schema.lastColumn) + 1);
+      (sheet.readBounds?.rows ??
+        Math.min(schema.maxRows, sheet.properties.gridProperties.rowCount)) *
+      (sheet.readBounds?.columns ?? doctorColumnIndex(schema.lastColumn) + 1);
     requestedCells += area;
     sheetMetrics.push({
       gid: schema.gid,
@@ -31,6 +34,7 @@ export function measureGrid(document, spreadsheet) {
       requestedCells: area,
       returnedCells: cells,
       formulasRead: formulas,
+      displayedErrors,
     });
   }
   return {
@@ -53,6 +57,7 @@ export function metricDelta(before, after) {
     oauthRequests: after.oauthRequests - before.oauthRequests,
     retries: after.retries - before.retries,
     responseBytes: after.responseBytes - before.responseBytes,
+    maxResponseBytes: after.maxResponseBytes || null,
     statuses,
   };
 }

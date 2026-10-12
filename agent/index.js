@@ -1,3 +1,4 @@
+import { nextFastCheckDelay, nextScheduledCheck } from "./schedule.js";
 process.umask(0o077);
 import { randomUUID } from "node:crypto";
 import {
@@ -11,6 +12,13 @@ import path from "node:path";
 import { loadConfig } from "./config.js";
 import { IncidentStore } from "./store.js";
 import { TableDoctor } from "./doctorService.js";
+import { TestRepairService } from "./testRepair.js";
+import { TestSheetsWriter } from "./testSheetsWriter.js";
+import {
+  ProductionRepairService,
+  ProductionSheetsWriter,
+} from "./productionRepair.js";
+import { SourceRecoveryService } from "./sourceRecovery.js";
 import { Monitor } from "./monitor.js";
 import { createAgentServer } from "./server.js";
 import { flushTelegram } from "./telegram.js";
@@ -24,10 +32,39 @@ if (!store.acquire(owner)) {
     "Другой процесс агента уже владеет этой базой; повторите запуск после истечения аренды (90 секунд).",
   );
 }
+store.setMonitoringScope(config.doctorDocuments, config.sources);
 store.recoverNotifications();
 const controller = new AbortController(),
   monitor = new Monitor(store, config),
   doctor = new TableDoctor(store, config);
+const productionWriter = config.productionRepairEnabled
+  ? new ProductionSheetsWriter({
+      credentialsFile: config.productionWriterCredentialsFile,
+      writerEmail: config.productionWriterEmail,
+    })
+  : null;
+const repair = config.testWriterCredentialsFile
+  ? new TestRepairService(store, config, {
+      reader: doctor.reader,
+      writer: new TestSheetsWriter({
+        credentialsFile: config.testWriterCredentialsFile,
+      }),
+      doctor,
+    })
+  : productionWriter
+    ? new ProductionRepairService(store, config, {
+        reader: doctor.reader,
+        writer: productionWriter,
+        doctor,
+      })
+    : null;
+const sourceRecovery = productionWriter
+  ? new SourceRecoveryService(store, config, {
+      reader: doctor.reader,
+      writer: productionWriter,
+      doctor,
+    })
+  : null;
 mkdirSync(config.dataDir, { recursive: true });
 const logPath = path.join(config.dataDir, "agent.log");
 function log(event) {
@@ -40,7 +77,9 @@ function log(event) {
 }
 let server,
   timer,
+  fastTimer,
   current,
+  fastCurrent,
   stopped = false;
 function heartbeat() {
   if (!store.acquire(owner)) {
@@ -79,13 +118,48 @@ async function tick() {
     }
   }
 }
+function scheduleFast(delayMs) {
+  clearTimeout(fastTimer);
+  if (!stopped)
+    fastTimer = setTimeout(() => void fastLoop(), Math.max(0, delayMs));
+}
+async function fastLoop() {
+  if (stopped || !doctor) return;
+  const started = Date.now();
+  fastCurrent = doctor.runFast(controller.signal);
+  let nextDelay = config.fastCheckIntervalMs;
+  try {
+    const result = await fastCurrent;
+    const notificationState = await flushTelegram(store, config.telegram, {
+      signal: controller.signal,
+    });
+    store.meta("notifications", notificationState);
+    store.meta("doctorFastCheck", result);
+    log("fast_check_completed");
+    nextDelay = nextFastCheckDelay(
+      started,
+      Date.now(),
+      config.fastCheckIntervalMs,
+    );
+  } catch {
+    if (!controller.signal.aborted) {
+      store.log("doctor_fast_error", "Ошибка быстрой проверки");
+      log("fast_check_error");
+    }
+  } finally {
+    fastCurrent = null;
+    scheduleFast(nextDelay);
+  }
+}
 async function stop() {
   if (stopped) return;
   stopped = true;
   clearInterval(pulse);
   clearTimeout(timer);
+  clearTimeout(fastTimer);
   controller.abort();
   if (current) await current;
+  if (fastCurrent) await fastCurrent;
   if (doctor.current) await doctor.current;
   store.meta("agent", {
     status: "stopped",
@@ -108,12 +182,15 @@ try {
   if (!process.argv.includes("--once")) {
     server = createAgentServer(store, config, {
       doctor,
+      repair,
+      sourceRecovery,
       signal: controller.signal,
     });
     await new Promise((resolve, reject) => {
       server.once("error", reject);
       server.listen(config.port, "127.0.0.1", resolve);
     });
+    if (repair?.production) repair.startQueue();
     console.log(
       "RITM Intelligence: http://127.0.0.1:" +
         config.port +
@@ -121,6 +198,7 @@ try {
     );
   }
   async function loop() {
+    const cycleStartedAt = Date.now();
     current = tick();
     await current;
     current = null;
@@ -142,14 +220,17 @@ try {
       return;
     }
     if (!stopped) {
-      store.meta(
-        "nextCheckAt",
-        new Date(Date.now() + config.intervalMs).toISOString(),
+      const nextAt = nextScheduledCheck(
+        cycleStartedAt,
+        Date.now(),
+        config.intervalMs,
       );
+      store.meta("nextCheckAt", new Date(nextAt).toISOString());
       heartbeat();
-      timer = setTimeout(() => void loop(), config.intervalMs);
+      timer = setTimeout(() => void loop(), Math.max(0, nextAt - Date.now()));
     }
   }
+  scheduleFast(1000);
   await loop();
 } catch (error) {
   await stop();

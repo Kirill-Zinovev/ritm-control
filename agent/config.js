@@ -1,4 +1,7 @@
+import { PRODUCTION_DOCTOR_DOCUMENTS } from "./productionRegistry.js";
 import fs from "node:fs";
+import { validateTestRepairConfig } from "./testRepair.js";
+import { validateProductionRepairConfig } from "./productionRepair.js";
 import path from "node:path";
 import os from "node:os";
 import {
@@ -88,11 +91,16 @@ export function loadConfig(env = process.env) {
             .readFileSync(path.resolve(env.RITM_DOCTOR_REGISTRY), "utf8")
             .replace(/^\uFEFF/, ""),
         )
-      : DEFAULT_DOCTOR_DOCUMENTS,
+      : PRODUCTION_DOCTOR_DOCUMENTS,
   );
   if (env.RITM_DOCTOR_DEMO_ENABLED === "true")
     doctorDocuments.push(validateDoctorDocuments([DEMO_DOCUMENT])[0]);
-  return {
+  const config = {
+    testWriterCredentialsFile: env.RITM_TEST_WRITER_CREDENTIALS_FILE || "",
+    productionRepairEnabled: env.RITM_PRODUCTION_REPAIR_ENABLED === "true",
+    productionWriterCredentialsFile:
+      env.RITM_PRODUCTION_WRITER_CREDENTIALS_FILE || "",
+    productionWriterEmail: env.RITM_PRODUCTION_WRITER_EMAIL || "",
     doctorDocuments,
     googleCredentialsFile: env.RITM_GOOGLE_CREDENTIALS_FILE || "",
     doctorDemoEnabled: env.RITM_DOCTOR_DEMO_ENABLED === "true",
@@ -102,6 +110,8 @@ export function loadConfig(env = process.env) {
     allowedOrigins,
     intervalMs:
       number(env, "RITM_CHECK_INTERVAL_SECONDS", 600, 60, 86400) * 1000,
+    fastCheckIntervalMs:
+      number(env, "RITM_FAST_CHECK_INTERVAL_SECONDS", 120, 60, 600) * 1000,
     timeoutMs: number(env, "RITM_REQUEST_TIMEOUT_SECONDS", 25, 1, 120) * 1000,
     retries: number(env, "RITM_REQUEST_RETRIES", 2, 0, 5),
     googleMinIntervalMs: number(
@@ -129,11 +139,20 @@ export function loadConfig(env = process.env) {
     llmEnabled: false,
     staticDir: path.resolve("dist/client"),
   };
+  validateTestRepairConfig(config);
+  validateProductionRepairConfig(config);
+  return config;
 }
 export function publicConfig(config) {
   return {
-    permissionLevel: 1,
-    writesEnabled: false,
+    permissionLevel: config.productionRepairEnabled ? 2 : 1,
+    writesEnabled: !!config.productionRepairEnabled,
+    productionRepair: config.productionRepairEnabled
+      ? "owner_confirmation_required"
+      : "not_configured",
+    testRepair: config.testWriterCredentialsFile
+      ? "requires_verified_isolation_and_owner_confirmation"
+      : "disabled",
     intervalSeconds: config.intervalMs / 1000,
     apiBase: config.apiBase || null,
     model: config.model,
