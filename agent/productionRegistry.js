@@ -2,6 +2,15 @@ import {
   DEFAULT_DOCTOR_DOCUMENTS,
   validateDoctorDocuments,
 } from "./doctorRegistry.js";
+import {
+  ROLL_PRINTING_SHEET,
+  ROLL_PRINTING_SHEET_ID,
+} from "../worker/printing.js";
+export const PRODUCTION_REPAIR_DOCUMENT_IDS = [
+  "doctor-fbo",
+  "doctor-shop-one",
+  "doctor-printing",
+];
 const proposal = (
   id,
   title,
@@ -172,6 +181,7 @@ export const PRODUCTION_DOCTOR_DOCUMENTS = (() => {
           articleColumn: "A",
           operationColumns: ["W", "X", "Y", "Z", "AA", "AR", "AU"],
           errorColumns: ["AP"],
+          dependencyColumns: ["B", "C"],
           outputType: "number",
           outputGuardColumn: "AN",
         },
@@ -188,5 +198,195 @@ export const PRODUCTION_DOCTOR_DOCUMENTS = (() => {
       },
     ],
   };
-  return validateDoctorDocuments([fbo, shop, printing]);
+  const rollPrinting = {
+    id: "doctor-roll-printing",
+    documentId: ROLL_PRINTING_SHEET_ID,
+    name: "OZON РУЛОННАЯ ПЕЧАТЬ",
+    department: "Печать",
+    enabled: true,
+    adapter: "google",
+    freshness: null,
+    purpose:
+      "Только чтение трёх рабочих вкладок; факт выпуска считается по журналу, сводка не дублирует KPI",
+    sheets: [
+      {
+        gid: ROLL_PRINTING_SHEET.gid,
+        name: ROLL_PRINTING_SHEET.name,
+        maxRows: 969,
+        lastColumn: "AF",
+        headers: [
+          { cell: "E4", value: "Артикул" },
+          { cell: "O4", value: "Кол-во" },
+          { cell: "AC1", value: "UID" },
+        ],
+        context: {
+          startRow: 5,
+          columns: [
+            "E",
+            "F",
+            "G",
+            "H",
+            "I",
+            "J",
+            "K",
+            "L",
+            "M",
+            "O",
+            "P",
+            "Q",
+            "R",
+          ],
+          activeColumns: ["E"],
+          errorColumns: [
+            "E",
+            "F",
+            "G",
+            "H",
+            "I",
+            "J",
+            "K",
+            "L",
+            "M",
+            "O",
+            "P",
+            "Q",
+            "R",
+          ],
+          emptyLookupNAColumns: [],
+          emptyRowPropagatedNAColumns: ["J", "K", "P"],
+          ignoreCalculationErrorsWhenInactive: true,
+          suppressErrorsWithSameRowErrorDependency: true,
+          impact:
+            "Ошибка в активной строке рулонной печати может исказить план; влияние на выпуск сверяется с журналом",
+        },
+        rules: [
+          {
+            id: "roll-planned-area",
+            kind: "formula",
+            column: "J",
+            startRow: 5,
+            endRow: 969,
+            when: { column: "E", notEmpty: true },
+            approval: "pending",
+            templates: ["=F{row}*H{row}*I{row}*O{row}"],
+            exceptions: [],
+            impact:
+              "Искажение плановой площади; формула обнаружена при подключении и требует утверждения владельцем",
+          },
+          {
+            id: "roll-order-uid",
+            kind: "unique",
+            column: "AC",
+            startRow: 5,
+            endRow: 969,
+            when: { column: "E", notEmpty: true },
+            approval: "approved",
+            exceptions: [],
+            impact: "Нарушение связи поставки с журналом выпуска",
+          },
+          {
+            id: "roll-order-quantity",
+            kind: "integer",
+            column: "O",
+            startRow: 5,
+            endRow: 969,
+            when: { column: "E", notEmpty: true },
+            approval: "approved",
+            minimum: 0,
+            exceptions: [],
+            impact: "Некорректное количество заказа",
+          },
+        ],
+        businessChecks: [
+          proposal(
+            "roll-order-links",
+            "Связность UID заказа с журналом выпуска",
+            {},
+            "Проверять только после полного чтения обоих листов; не выполнять запись",
+          ),
+        ],
+      },
+      {
+        gid: 126956215,
+        name: "Журнал выпуска",
+        maxRows: 996,
+        lastColumn: "Z",
+        headers: [
+          { cell: "A1", value: "ID записи" },
+          { cell: "D1", value: "Операция" },
+          { cell: "H1", value: "UID заказа" },
+          { cell: "J1", value: "Сделано" },
+          { cell: "L1", value: "Выпуск м²" },
+        ],
+        rules: [
+          ...[
+            { id: "roll-entry-id", kind: "unique", column: "A" },
+            { id: "roll-production-date", kind: "date", column: "B" },
+            { id: "roll-order-required", kind: "required", column: "H" },
+            {
+              id: "roll-completed-pieces",
+              kind: "integer",
+              column: "J",
+              minimum: 1,
+            },
+            {
+              id: "roll-actual-area",
+              kind: "number",
+              column: "L",
+              minimum: 0.000001,
+            },
+          ].map((rule) => ({
+            ...rule,
+            startRow: 2,
+            endRow: 996,
+            when: { column: "D", equals: "Печать" },
+            approval: "approved",
+            exceptions: [],
+            impact:
+              "Невалидная запись может быть исключена из фактического KPI рулонной печати",
+          })),
+        ],
+        businessChecks: [
+          proposal(
+            "roll-journal-order-match",
+            "Связь записи печати с вкладкой заказа",
+            {},
+            "Учитывать исходное имя листа OZON МОСКВА как подтверждённый псевдоним; не считать QUERY отдельной записью",
+          ),
+        ],
+      },
+      {
+        gid: 2053830156,
+        name: "Выпуск по дням",
+        maxRows: 1000,
+        lastColumn: "Z",
+        headers: [
+          { cell: "A1", value: "Дата" },
+          { cell: "B1", value: "Сотрудник" },
+          { cell: "C1", value: "Операция" },
+          { cell: "D1", value: "Сделано, шт." },
+          { cell: "E1", value: "Выпуск, м²" },
+        ],
+        context: {
+          startRow: 2,
+          columns: ["A", "B", "C", "D", "E"],
+          activeColumns: ["A", "B", "C"],
+          errorColumns: ["A", "B", "C", "D", "E"],
+          emptyLookupNAColumns: [],
+          impact:
+            "Сводка используется только для сверки с журналом и не суммируется повторно в KPI",
+        },
+        rules: [],
+        businessChecks: [
+          proposal(
+            "roll-daily-summary",
+            "Сверка дневной сводки с журналом выпуска",
+            {},
+            "Проверка остаётся информационной до подтверждения правил группировки; сводка не является источником факта",
+          ),
+        ],
+      },
+    ],
+  };
+  return validateDoctorDocuments([fbo, shop, printing, rollPrinting]);
 })();

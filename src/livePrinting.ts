@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Dataset, Roll } from "./model";
 export const PRINTING_URL =
   "https://docs.google.com/spreadsheets/d/1eNdUuk-2l83Pgv95LyqYKuOOfhAsEMm5tKLbhWBJiC4/edit";
+export const ROLL_PRINTING_URL =
+  "https://docs.google.com/spreadsheets/d/1hojhKS4Av_yy5sUMJcsoeJ_MQRU3V5g9P-fP61PO6Cs/edit#gid=119710351";
 export const PRINTERS = [
   { id: "printer-dmitry", name: "Дмитрий" },
   { id: "printer-pavel", name: "Павел" },
@@ -19,6 +21,11 @@ export type LiveEvent = {
   sheetName: string;
   sheetId: number;
   source: string;
+  sourceId?: string;
+  sourceName?: string;
+  site?: string;
+  spreadsheetId?: string;
+  sourceUrl?: string;
 };
 export type LiveOrder = {
   uid: string;
@@ -28,18 +35,45 @@ export type LiveOrder = {
   article: string;
   quantity: number;
   plannedArea: number;
+  printProgress?: number | null;
+  cutProgress?: number | null;
+  remainingPrint?: number | null;
+  sourceId?: string;
+  sourceName?: string;
+  site?: string;
+  spreadsheetId?: string;
+  sourceUrl?: string;
 };
 export type LivePrinting = {
   ok: true;
   schemaVersion: 2;
   updatedAt: string;
   stale?: boolean;
+  sourceStatus?: string;
+  refreshFailed?: boolean;
+  staleReason?: string | null;
   sourceUpdatedAt?: string | null;
   quality?: { status: string; invalidRecords: number };
   events: LiveEvent[];
+  cutEvents?: LiveEvent[];
   supplies: LiveOrder[];
   issues: { source: string; row: number; message: string }[];
-  sheets: { sheetId: number; name: string }[];
+  sheets: {
+    sheetId: number;
+    name: string;
+    sourceId?: string;
+    sourceName?: string;
+    spreadsheetId?: string;
+    spreadsheetUrl?: string;
+  }[];
+  sources?: {
+    id: string;
+    name: string;
+    spreadsheetId: string;
+    spreadsheetUrl: string;
+    journalName: string;
+    journalUrl: string;
+  }[];
 };
 export function printingDataset(
   base: Dataset,
@@ -54,8 +88,10 @@ export function printingDataset(
     article: e.article,
     quantity: e.quantity,
     area: e.area,
-    site: "Красное здание",
+    site: e.site || "Красное здание",
     source: e.sheetName,
+    sourceId: e.sourceId,
+    sheetId: e.sheetId,
   }));
   return {
     ...base,
@@ -66,7 +102,7 @@ export function printingDataset(
     rolls,
   };
 }
-export function useLivePrinting(enabled = true) {
+export function useLivePrinting(enabled = true, refreshSource = false) {
   const [value, setValue] = useState<LivePrinting | null>(null),
     [loading, setLoading] = useState(false),
     [error, setError] = useState("");
@@ -78,13 +114,16 @@ export function useLivePrinting(enabled = true) {
     setLoading(true);
     setError("");
     try {
-      const r = await fetch("/api/printing", {
+      const r = await fetch(
+        refreshSource ? "/api/printing?refresh=1" : "/api/printing",
+        {
         cache: "no-store",
         signal: AbortSignal.any([
           controller.signal,
           AbortSignal.timeout(45000),
         ]),
-      });
+        },
+      );
       const j = await r.json();
       if (
         !r.ok ||
@@ -102,18 +141,34 @@ export function useLivePrinting(enabled = true) {
             !Number.isFinite(e.quantity),
         )
       )
+        throw new Error(j.message || "Таблица временно недоступна.");
+      const cutEvents = Array.isArray(j.cutEvents) ? j.cutEvents : [];
+      if (
+        cutEvents.some(
+          (e: LiveEvent) =>
+            !e?.id ||
+            !e.uid ||
+            !Number.isSafeInteger(e.quantity) ||
+            e.quantity <= 0 ||
+            !Number.isFinite(e.area),
+        )
+      )
         throw new Error("source");
-      if (!controller.signal.aborted) setValue(j);
-    } catch {
+      if (!controller.signal.aborted) setValue({ ...j, cutEvents });
+    } catch (cause) {
       if (!controller.signal.aborted)
-        setError("Таблица временно недоступна. Нажмите «Обновить».");
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : "Таблица временно недоступна. Нажмите «Обновить».",
+        );
     } finally {
       if (active.current === controller) {
         active.current = null;
         setLoading(false);
       }
     }
-  }, []);
+  }, [refreshSource]);
   useEffect(() => {
     if (!enabled) return;
     void reload();

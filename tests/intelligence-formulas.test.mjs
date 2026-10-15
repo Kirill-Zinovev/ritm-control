@@ -95,6 +95,33 @@ function setup(file = ":memory:") {
     });
   return { store, config, fi, scan, approve, setTime: (v) => (now = v) };
 }
+test("fast checks monitor unprotected historical addresses and preserve original candidate until restored", async () => {
+  const s = setup();
+  try {
+    s.scan(grid());
+    let current = grid([["M11", 1]]);
+    const reader = {
+      async metadata(documentId) { return { spreadsheetId: documentId, sheets: current.sheets.map(({ properties }) => ({ properties, merges: [] })) }; },
+      async grid(documentId) { return { ...current, spreadsheetId: documentId }; },
+    };
+    const first = await s.fi.fastCheck(reader);
+    assert.equal(first.protectedCells, 0);
+    assert.equal(first.historicalCheckedCells, 1);
+    assert.equal(first.violations, 1);
+    const incident = s.store.listIncidents({ status: "active" }).rows[0];
+    assert.equal(incident.type, "formula_history_change");
+    assert.equal(incident.expected.candidateFormula, "=C11/D11");
+    s.scan(current); // update latest snapshot while damaged
+    await s.fi.fastCheck(reader);
+    assert.equal(s.store.getIncident(incident.id).expected.candidateFormula, "=C11/D11");
+    current = grid();
+    for (let cycle = 0; cycle < 2; cycle++) {
+      assert.equal((await s.fi.fastCheck(reader)).violations, 0);
+      assert.equal(s.store.getIncident(incident.id).monitorStatus, "resolved");
+    }
+    assert.equal(s.store.db.prepare("SELECT count(*) AS n FROM formula_protected").get().n, 0);
+  } finally { s.store.close(); }
+});
 test("discovery groups relative families but preserves absolute references, string literals and individual formulas", () => {
   assert.equal(
     formulaFamily('=IF(C11="A11";$D$2;C11)', "M11"),

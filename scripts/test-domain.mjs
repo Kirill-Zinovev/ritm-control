@@ -6,7 +6,11 @@ for (const file of [
   "src/demo",
   "src/importer",
   "src/csv",
+  "src/supplySpreadsheet",
+  "src/liveSupplyProgress",
   "tests/domain.test",
+  "tests/supply-workflow.test",
+  "tests/live-supply-progress.test",
 ]) {
   mkdirSync(".checks/" + file.slice(0, file.lastIndexOf("/")), {
     recursive: true,
@@ -28,7 +32,12 @@ for (const file of [
 }
 const result = spawnSync(
   process.execPath,
-  ["--test", ".checks/tests/domain.test.mjs"],
+  [
+    "--test",
+    ".checks/tests/domain.test.mjs",
+    ".checks/tests/supply-workflow.test.mjs",
+    ".checks/tests/live-supply-progress.test.mjs",
+  ],
   {
     stdio: "inherit",
   },

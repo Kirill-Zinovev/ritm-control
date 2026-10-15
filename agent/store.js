@@ -3,6 +3,63 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { ownerSourceCandidate } from "./sourceCandidate.js";
+import { incidentBaseFilters } from "./incidentFilters.js";
+import { groupActiveIncidents } from "./incidentGrouping.js";
+
+const FORMULA_REPAIR_TYPES = new Set([
+  "formula_number",
+  "formula_text",
+  "formula_missing",
+  "formula_mismatch",
+]);
+
+function approvedFormulaCandidate(db, row, incident) {
+  if (!row.scope.startsWith("doctor:formula:")) return null;
+  const blocked = (reason) => ({
+    status: "blocked",
+    kind: "approved_formula",
+    reason,
+  });
+  if (row.status !== "open" || ["ignored", "excepted"].includes(row.workflow) || incident.demonstration)
+    return blocked("Инцидент закрыт, проигнорирован или является демонстрационным.");
+  if (!FORMULA_REPAIR_TYPES.has(incident.type))
+    return blocked("Этот тип отклонения не поддерживает безопасную замену формулы.");
+  if (incident.verification !== "rule_confirmed")
+    return blocked("Нарушение формулы не подтверждено текущим правилом.");
+  if (!incident.sourceId || !Number.isInteger(incident.gid) || !/^[A-Z]{1,3}\d{1,7}$/.test(incident.cell || ""))
+    return blocked("Для этой формулы не указан полный точный адрес в Google Sheets.");
+  if (!incident.baselineVersion || !incident.formulaRegionId)
+    return blocked("В инциденте нет версии утверждённого эталона.");
+  const table = db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='formula_protected'")
+    .get();
+  if (!table) return blocked("Таблица утверждённых формул пока не загружена.");
+  const baseline = db
+    .prepare(
+      "SELECT formula,version,region_id FROM formula_protected WHERE source_id=? AND gid=? AND cell=?",
+    )
+    .get(incident.sourceId, incident.gid, incident.cell);
+  if (!baseline)
+    return blocked("Утверждённый эталон этой ячейки удалён или не найден.");
+  if (
+    baseline.version !== incident.baselineVersion ||
+    baseline.region_id !== incident.formulaRegionId ||
+    baseline.formula !== incident.expected ||
+    typeof baseline.formula !== "string" ||
+    !baseline.formula.startsWith("=")
+  )
+    return blocked("Версия эталона изменилась или не совпадает с инцидентом; нужна новая проверка.");
+  return {
+    status: "candidate",
+    kind: "approved_formula",
+    value: { formulaValue: baseline.formula },
+    version: baseline.version,
+    evidence: `Утверждённая формула Formula Intelligence · версия ${baseline.version.slice(0, 12)}`,
+    regionId: baseline.region_id,
+  };
+}
+
 export function fingerprint(scope, finding) {
   return createHash("sha256")
     .update(
@@ -54,6 +111,8 @@ export class IncidentStore {
       "CREATE TABLE IF NOT EXISTS repair_requests (id TEXT PRIMARY KEY,incident_id TEXT NOT NULL,generation INTEGER NOT NULL,at TEXT NOT NULL,status TEXT NOT NULL,payload TEXT NOT NULL);" +
         "CREATE TABLE IF NOT EXISTS source_recovery_operations (id TEXT PRIMARY KEY,request_id TEXT NOT NULL,incident_id TEXT NOT NULL,generation INTEGER NOT NULL,status TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,owner TEXT NOT NULL,target TEXT NOT NULL,approved_value TEXT NOT NULL,authorization TEXT NOT NULL,before_value TEXT,after_value TEXT,result TEXT);" +
         "CREATE INDEX IF NOT EXISTS source_recovery_incident ON source_recovery_operations(incident_id,created_at);" +
+        "CREATE TABLE IF NOT EXISTS roll_supply_operations (id TEXT PRIMARY KEY,action TEXT NOT NULL,status TEXT NOT NULL,request_hash TEXT NOT NULL,payload TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,result TEXT);" +
+        "CREATE INDEX IF NOT EXISTS roll_supply_operations_updated ON roll_supply_operations(updated_at DESC);" +
         "PRAGMA user_version=3;",
     );
   }
@@ -111,6 +170,57 @@ export class IncidentStore {
         "INSERT INTO metadata VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
       )
       .run(key, JSON.stringify(value));
+  }
+  rollSupplyOperation(id) {
+    const row = this.db
+      .prepare("SELECT * FROM roll_supply_operations WHERE id=?")
+      .get(id);
+    return row
+      ? {
+          id: row.id,
+          action: row.action,
+          status: row.status,
+          requestHash: row.request_hash,
+          payload: JSON.parse(row.payload),
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+          result: row.result ? JSON.parse(row.result) : null,
+        }
+      : null;
+  }
+  beginRollSupplyOperation(id, action, requestHash, payload, at) {
+    const existing = this.rollSupplyOperation(id);
+    if (existing) return existing;
+    this.db
+      .prepare(
+        "INSERT INTO roll_supply_operations(id,action,status,request_hash,payload,created_at,updated_at,result) VALUES(?,?, 'writing', ?, ?, ?, ?, NULL)",
+      )
+      .run(id, action, requestHash, JSON.stringify(payload), at, at);
+    return this.rollSupplyOperation(id);
+  }
+  updateRollSupplyOperation(id, status, result, at) {
+    this.db
+      .prepare(
+        "UPDATE roll_supply_operations SET status=?,updated_at=?,result=? WHERE id=?",
+      )
+      .run(status, at, JSON.stringify(result || {}), id);
+    return this.rollSupplyOperation(id);
+  }
+  recentRollSupplyOperations(limit = 20) {
+    return this.db
+      .prepare(
+        "SELECT id,action,status,payload,created_at,updated_at,result FROM roll_supply_operations ORDER BY created_at DESC LIMIT ?",
+      )
+      .all(Math.max(1, Math.min(100, Number(limit) || 20)))
+      .map((row) => ({
+        id: row.id,
+        action: row.action,
+        status: row.status,
+        payload: JSON.parse(row.payload),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        result: row.result ? JSON.parse(row.result) : null,
+      }));
   }
   acquire(owner, now = Date.now(), ttl = 90000) {
     this.db.exec("BEGIN IMMEDIATE");
@@ -344,8 +454,8 @@ export class IncidentStore {
     page = 0,
     limit = 20,
   } = {}) {
-    const clauses = [],
-      params = [],
+    const { clauses, params } = incidentBaseFilters({ department, source, sheet, severity, kind, type, search, includeDemonstrations });
+    const
       hasRepairProposals = !!this.db
         .prepare(
           "SELECT 1 FROM sqlite_master WHERE type='table' AND name='test_repair_proposals'",
@@ -354,21 +464,6 @@ export class IncidentStore {
       verifiedRepair = hasRepairProposals
         ? "EXISTS (SELECT 1 FROM test_repair_proposals rp WHERE rp.incident_id=incidents.id AND rp.status='verified' AND json_extract(rp.payload,'$.direction')='repair' AND CAST(json_extract(rp.payload,'$.generation') AS INTEGER)=incidents.generation)"
         : "0";
-    for (const [name, val] of [
-      ["department", department],
-      ["sourceId", source],
-      ["sheet", sheet],
-      ["severity", severity],
-      ["kind", kind],
-      ["type", type],
-    ]) {
-      if (val) {
-        clauses.push("json_extract(payload,'$." + name + "')=?");
-        params.push(val);
-      }
-    }
-    if (!includeDemonstrations)
-      clauses.push("COALESCE(json_extract(payload,'$.demonstration'),0)=0");
     if (status === "fixed") {
       clauses.push(
         "status='resolved' AND (json_extract(payload,'$.type')='data_quality_root_cause' OR (json_extract(payload,'$.verification')='rule_confirmed' AND json_extract(payload,'$.type') IN ('formula_missing','formula_number','formula_text','formula_mismatch','calculation_error')) OR " +
@@ -394,30 +489,35 @@ export class IncidentStore {
       clauses.push(
         "(json_extract(payload,'$.sourceState')='insufficient_data' OR json_extract(payload,'$.sourceState')='restored_pending_recalculation' OR json_extract(payload,'$.recoveryStatus')='needs_review' OR json_extract(payload,'$.verification')!='rule_confirmed')",
       );
-    if (search) {
-      clauses.push(
-        "(instr(COALESCE(ritm_fold(json_extract(payload,'$.observed.productKey')),''),ritm_fold(?))>0 OR ritm_fold(COALESCE(json_extract(payload,'$.cell'),''))=ritm_fold(?) OR ritm_fold(COALESCE(json_extract(payload,'$.sourceCell'),''))=ritm_fold(?) OR instr(COALESCE(ritm_fold(json_extract(payload,'$.title')),''),ritm_fold(?))>0 OR instr(COALESCE(ritm_fold(json_extract(payload,'$.sourceName')),''),ritm_fold(?))>0 OR instr(COALESCE(ritm_fold(json_extract(payload,'$.sheet')),''),ritm_fold(?))>0)",
-      );
-      params.push(search, search, search, search, search, search);
-    }
     const where = clauses.length ? " WHERE " + clauses.join(" AND ") : "";
+    const order =
+      (status === "fixed"
+          ? " ORDER BY COALESCE(json_extract(payload,'$.resolutionAt'),resolved_at,last_seen) DESC,"
+          : " ORDER BY") +
+      " CASE json_extract(payload,'$.severity') WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, CASE WHEN json_extract(payload,'$.kpiImpactVerified')=1 OR json_extract(payload,'$.impactEvidence.verified')=1 THEN 0 WHEN " +
+      calculationError +
+      " THEN 1 WHEN json_extract(payload,'$.sourceState')='missing' THEN 2 WHEN json_extract(payload,'$.sourceState') IN ('restored_pending_recalculation','insufficient_data') THEN 3 WHEN json_extract(payload,'$.verification')='rule_confirmed' THEN 4 ELSE 5 END, CASE json_extract(payload,'$.severity') WHEN 'critical' THEN 0 WHEN 'high' THEN 1 ELSE 2 END, last_seen DESC,id";
+    if (status === "active") {
+      const matched = this.db
+          .prepare("SELECT * FROM incidents" + where + order)
+          .all(...params)
+          .map((row) => this.incident(row)),
+        grouped = groupActiveIncidents(matched),
+        total = grouped.length,
+        safePage = Math.min(page, Math.max(0, Math.ceil(total / limit) - 1));
+      return {
+        total,
+        page: safePage,
+        limit,
+        rows: grouped.slice(safePage * limit, (safePage + 1) * limit),
+      };
+    }
     const total = this.db
       .prepare("SELECT count(*) AS n FROM incidents" + where)
       .get(...params).n;
     const safePage = Math.min(page, Math.max(0, Math.ceil(total / limit) - 1));
     const rows = this.db
-      .prepare(
-        "SELECT * FROM incidents" +
-          where +
-          (status === "active"
-            ? " ORDER BY COALESCE(json_extract(payload,'$.activeSince'),first_seen) DESC,"
-            : status === "fixed"
-              ? " ORDER BY COALESCE(json_extract(payload,'$.resolutionAt'),resolved_at,last_seen) DESC,"
-              : " ORDER BY last_seen DESC,") +
-          " CASE WHEN json_extract(payload,'$.kpiImpactVerified')=1 OR json_extract(payload,'$.impactEvidence.verified')=1 THEN 0 WHEN " +
-          calculationError +
-          " THEN 1 WHEN json_extract(payload,'$.sourceState')='missing' THEN 2 WHEN json_extract(payload,'$.sourceState') IN ('restored_pending_recalculation','insufficient_data') THEN 3 WHEN json_extract(payload,'$.verification')='rule_confirmed' THEN 4 ELSE 5 END, CASE json_extract(payload,'$.severity') WHEN 'critical' THEN 0 WHEN 'high' THEN 1 ELSE 2 END, last_seen DESC,id LIMIT ? OFFSET ?",
-      )
+      .prepare("SELECT * FROM incidents" + where + order + " LIMIT ? OFFSET ?")
       .all(...params, limit, safePage * limit);
     return {
       total,
@@ -426,10 +526,12 @@ export class IncidentStore {
       rows: rows.map((r) => this.incident(r)),
     };
   }
-  incidentSummary() {
-    const calculationError =
-        "(json_extract(payload,'$.type')='calculation_error' OR json_extract(payload,'$.sourceState')='dependent_formula_error' OR (json_type(payload,'$.errorCells')='array' AND json_array_length(payload,'$.errorCells')>0))",
-      active = "status='open' AND COALESCE(workflow,'')!='ignored'",
+  incidentSummary(filters = {}) {
+    const { clauses, params } = incidentBaseFilters({
+      ...filters,
+      includeDemonstrations: false,
+    });
+    const active = "status='open' AND COALESCE(workflow,'')!='ignored'",
       hasRepairProposals = !!this.db
         .prepare(
           "SELECT 1 FROM sqlite_master WHERE type='table' AND name='test_repair_proposals'",
@@ -438,35 +540,43 @@ export class IncidentStore {
       verifiedRepair = hasRepairProposals
         ? "EXISTS (SELECT 1 FROM test_repair_proposals rp WHERE rp.incident_id=incidents.id AND rp.status='verified' AND json_extract(rp.payload,'$.direction')='repair' AND CAST(json_extract(rp.payload,'$.generation') AS INTEGER)=incidents.generation)"
         : "0",
-      row = this.db
+      activeRows = this.db
         .prepare(
-          "SELECT " +
-            "COALESCE(SUM(CASE WHEN " +
-            active +
-            " THEN 1 ELSE 0 END),0) AS allProblems," +
-            "COALESCE(SUM(CASE WHEN " +
-            active +
-            " AND json_extract(payload,'$.severity')='critical' THEN 1 ELSE 0 END),0) AS critical," +
-            "COALESCE(SUM(CASE WHEN " +
-            active +
-            " AND json_extract(payload,'$.sourceState')='missing' THEN 1 ELSE 0 END),0) AS missingSource," +
-            "COALESCE(SUM(CASE WHEN " +
-            active +
-            " AND " +
-            calculationError +
-            " THEN 1 ELSE 0 END),0) AS calculationError," +
-            "COALESCE(SUM(CASE WHEN " +
-            active +
-            " AND (json_extract(payload,'$.sourceState') IN ('insufficient_data','restored_pending_recalculation') OR json_extract(payload,'$.recoveryStatus')='needs_review' OR json_extract(payload,'$.verification')!='rule_confirmed') THEN 1 ELSE 0 END),0) AS needsReview," +
-            "COALESCE(SUM(CASE WHEN status='resolved' AND (json_extract(payload,'$.type')='data_quality_root_cause' OR (json_extract(payload,'$.verification')='rule_confirmed' AND json_extract(payload,'$.type') IN ('formula_missing','formula_number','formula_text','formula_mismatch','calculation_error')) OR " +
-            verifiedRepair +
-            ") THEN 1 ELSE 0 END),0) AS fixed " +
-            "FROM incidents WHERE COALESCE(json_extract(payload,'$.demonstration'),0)=0",
+          "SELECT * FROM incidents WHERE " +
+            [...clauses, active].join(" AND "),
         )
-        .get();
-    return Object.fromEntries(
-      Object.entries(row).map(([key, value]) => [key, Number(value) || 0]),
-    );
+        .all(...params)
+        .map((row) => this.incident(row)),
+      groupedActive = groupActiveIncidents(activeRows),
+      fixed = this.db
+        .prepare(
+          "SELECT COALESCE(SUM(CASE WHEN status='resolved' AND (json_extract(payload,'$.type')='data_quality_root_cause' OR (json_extract(payload,'$.verification')='rule_confirmed' AND json_extract(payload,'$.type') IN ('formula_missing','formula_number','formula_text','formula_mismatch','calculation_error')) OR " +
+            verifiedRepair +
+            ") THEN 1 ELSE 0 END),0) AS fixed FROM incidents WHERE " +
+            clauses.join(" AND "),
+        )
+        .get(...params).fixed;
+    return {
+      allProblems: groupedActive.length,
+      critical: groupedActive.filter((item) => item.severity === "critical").length,
+      missingSource: groupedActive.filter((item) => item.sourceState === "missing").length,
+      calculationError: groupedActive.filter(
+        (item) =>
+          item.type === "calculation_error" ||
+          item.sourceState === "dependent_formula_error" ||
+          (item.errorCells || []).length > 0,
+      ).length,
+      needsReview: groupedActive.filter(
+        (item) =>
+          ["insufficient_data", "restored_pending_recalculation"].includes(
+            item.sourceState,
+          ) ||
+          item.recoveryStatus === "needs_review" ||
+          (item.verification != null &&
+            item.verification !== "rule_confirmed"),
+      ).length,
+      fixed: Number(fixed) || 0,
+    };
   }
   incident(row) {
     const repairRequest = this.db
@@ -481,8 +591,13 @@ export class IncidentStore {
             )
             .get(repairRequest.id)
         : null;
+    const payload = JSON.parse(row.payload);
+    const proposed = ownerSourceCandidate(this, row, payload);
+    const formulaProposal = proposed ? null : approvedFormulaCandidate(this.db, row, payload);
     return {
-      ...JSON.parse(row.payload),
+      ...payload,
+      ...(proposed ? { recoveryCandidate: proposed } : formulaProposal?.status === "candidate" ? { recoveryCandidate: formulaProposal } : {}),
+      ...(formulaProposal ? { repairAvailability: formulaProposal } : {}),
       id: row.id,
       status: row.workflow || row.status,
       monitorStatus: row.status,
@@ -659,6 +774,56 @@ export class IncidentStore {
       }
       this.db.exec("COMMIT");
       return this.getIncident(id);
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  bulkIgnoreIncidents(ids, at = new Date().toISOString()) {
+    if (
+      !Array.isArray(ids) ||
+      !ids.length ||
+      ids.length > 50 ||
+      new Set(ids).size !== ids.length
+    )
+      return null;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const rows = ids.map((id) =>
+          this.db.prepare("SELECT * FROM incidents WHERE id=?").get(id),
+        ),
+        eligible = rows.every((row) => {
+          if (!row || row.status !== "open" || row.workflow === "ignored")
+            return false;
+          const payload = JSON.parse(row.payload);
+          return (
+            payload.kind === "table_doctor" &&
+            !payload.demonstration &&
+            payload.type !== "data_quality_root_cause"
+          );
+        });
+      if (!eligible) {
+        this.db.exec("ROLLBACK");
+        return null;
+      }
+      for (const row of rows) {
+        this.db
+          .prepare("UPDATE incidents SET workflow='ignored' WHERE id=?")
+          .run(row.id);
+        this.db
+          .prepare(
+            "UPDATE outbox SET status='cancelled' WHERE incident_id=? AND status='pending'",
+          )
+          .run(row.id);
+        this.log(
+          "incident_ignored",
+          "Владелец игнорирует проблему; таблица не изменена",
+          row.id,
+          at,
+        );
+      }
+      this.db.exec("COMMIT");
+      return ids.length;
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;

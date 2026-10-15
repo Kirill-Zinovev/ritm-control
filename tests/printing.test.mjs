@@ -4,7 +4,11 @@ import {
   parseCsv,
   indexOrders,
   collectJournalPrinting,
+  collectJournalCutting,
   SUPPLY_SHEETS,
+  ROLL_PRINTING_SHEET,
+  ROLL_PRINTING_SHEET_ID,
+  PRINTING_SOURCES,
   loadPrinting,
 } from "../worker/printing.js";
 const o = {
@@ -82,6 +86,35 @@ test("cutting does not enter printing KPI", () => {
   const j = log();
   j[3] = "Резка";
   assert.equal(calc([j]).events.length, 0);
+  const cut = collectJournalCutting(ix, [j], { eventIdPrefix: "cut:" });
+  assert.equal(cut.events.length, 1);
+  assert.equal(cut.events[0].id, "cut:j1");
+  assert.equal(cut.events[0].quantity, 40);
+  assert.equal(cut.events[0].area, 7.04);
+});
+test("cutting progress uses its quantity and does not require output area", () => {
+  const j = log(25, 0);
+  j[3] = "Резка";
+  const cut = collectJournalCutting(ix, [j]);
+  assert.equal(cut.events.length, 1);
+  assert.equal(cut.events[0].quantity, 25);
+  assert.equal(cut.events[0].area, 0);
+  assert.equal(cut.issues.length, 0);
+});
+test("Lukman is recognized as a cutter and remains invalid as a printer", () => {
+  const j = log(150, 15.84, "Лукман", "AUTO_CUT_13277008", "13.10.2026");
+  j[3] = "Резка";
+  const cut = collectJournalCutting(ix, [j]);
+  assert.equal(cut.issues.length, 0);
+  assert.equal(cut.events.length, 1);
+  assert.equal(cut.events[0].employee, "Лукман");
+  assert.equal(cut.events[0].quantity, 150);
+  assert.equal(cut.events[0].area, 15.84);
+
+  j[3] = "Печать";
+  const print = collectJournalPrinting(ix, [j]);
+  assert.equal(print.events.length, 0);
+  assert.equal(print.issues[0].message, "Неизвестный сотрудник");
 });
 test("multiple partial records of the same physical roll count separately", () => {
   const r = calc([log(40, 7.04), log(60, 10.56, "Павел", "j2")]);
@@ -138,13 +171,146 @@ test("all orders indexed with independent UID per sheet and no invented facts", 
   assert.ok(Math.abs(index.orders[0].plannedArea - 2.112) < 1e-9);
   assert.equal(collectJournalPrinting(index, []).events.length, 0);
 });
+test("roll supply progress uses T/U/X values and ignores rows without article E", () => {
+  const rows = [
+    Array(33).fill(""),
+    Array(33).fill(""),
+    Array(33).fill(""),
+    Array(33).fill(""),
+  ];
+  rows[0][29] = "UID";
+  rows[3][4] = "Артикул";
+  rows[3][14] = "Кол-во";
+  const inactive = Array(33).fill("");
+  inactive[19] = "999";
+  inactive[20] = "999";
+  inactive[23] = "999";
+  inactive[29] = "inactive";
+  const active = Array(33).fill("");
+  active[4] = "ROLL-ART";
+  active[14] = "100";
+  active[19] = "83";
+  active[20] = "45";
+  active[23] = "17";
+  active[29] = "roll-001";
+  const index = indexOrders([
+    {
+      gid: ROLL_PRINTING_SHEET.gid,
+      name: ROLL_PRINTING_SHEET.name,
+      rows: [...rows, inactive, active],
+      headerRow: 4,
+      dataStartRow: 5,
+      uidHeaderRow: 1,
+      sourceId: "roll-printing",
+    },
+  ]);
+  assert.equal(index.orders.length, 1);
+  assert.equal(index.orders[0].printProgress, 83);
+  assert.equal(index.orders[0].cutProgress, 45);
+  assert.equal(index.orders[0].remainingPrint, 17);
+});
+test("X shows half the print run when T is empty; cutting stays unknown without U", () => {
+  const rows = [
+    Array(33).fill(""),
+    Array(33).fill(""),
+    Array(33).fill(""),
+    Array(33).fill(""),
+  ];
+  rows[0][28] = "UID";
+  rows[3][4] = "Артикул";
+  rows[3][14] = "Кол-во";
+  const active = Array(33).fill("");
+  active[4] = "ROLL-EMPTY-PROGRESS";
+  active[14] = "100";
+  active[23] = "50";
+  active[28] = "roll-empty-progress";
+  const index = indexOrders([
+    {
+      gid: ROLL_PRINTING_SHEET.gid,
+      name: ROLL_PRINTING_SHEET.name,
+      rows: [...rows, active],
+      headerRow: 4,
+      dataStartRow: 5,
+      uidHeaderRow: 1,
+      sourceId: "roll-printing",
+    },
+  ]);
+  assert.equal(index.orders[0].printProgress, 50);
+  assert.equal(index.orders[0].cutProgress, null);
+  assert.equal(index.orders[0].remainingPrint, 50);
+});
+test("percentage progress is converted to pieces and respects a zero percent value", () => {
+  const rows = [
+    Array(33).fill(""),
+    Array(33).fill(""),
+    Array(33).fill(""),
+    Array(33).fill(""),
+  ];
+  rows[0][28] = "UID";
+  rows[3][4] = "Артикул";
+  rows[3][14] = "Кол-во";
+  const active = Array(33).fill("");
+  active[4] = "ROLL-PERCENT";
+  active[14] = "300";
+  active[19] = "50%";
+  active[20] = "0%";
+  active[23] = "150";
+  active[28] = "roll-percent";
+  const index = indexOrders([
+    {
+      gid: ROLL_PRINTING_SHEET.gid,
+      name: ROLL_PRINTING_SHEET.name,
+      rows: [...rows, active],
+      headerRow: 4,
+      dataStartRow: 5,
+      uidHeaderRow: 1,
+      sourceId: "roll-printing",
+    },
+  ]);
+
+  assert.equal(index.orders[0].printProgress, 150);
+  assert.equal(index.orders[0].cutProgress, 0);
+  assert.equal(index.orders[0].remainingPrint, 150);
+});
+test("displayed block progress bars in CSV are read as T and U percentages", () => {
+  const rows = [
+    Array(33).fill(""),
+    Array(33).fill(""),
+    Array(33).fill(""),
+    Array(33).fill(""),
+  ];
+  rows[0][28] = "UID";
+  rows[3][4] = "Артикул";
+  rows[3][14] = "Кол-во";
+  const active = Array(33).fill("");
+  active[4] = "KS0002.A7665";
+  active[14] = "300";
+  active[19] = "█████░░░░░ 50%";
+  active[20] = "█████░░░░░ 50%";
+  active[23] = "150";
+  active[28] = "roll-progress-bar";
+  const index = indexOrders([
+    {
+      gid: ROLL_PRINTING_SHEET.gid,
+      name: ROLL_PRINTING_SHEET.name,
+      rows: [...rows, active],
+      headerRow: 4,
+      dataStartRow: 5,
+      uidHeaderRow: 1,
+      sourceId: "roll-printing",
+    },
+  ]);
+  assert.equal(index.orders[0].printProgress, 150);
+  assert.equal(index.orders[0].cutProgress, 150);
+});
 test("source failure cannot appear as empty KPI", async () =>
   assert.rejects(() =>
     loadPrinting(async () => new Response("denied", { status: 403 })),
   ));
 
-test("live loader reads the journal and all supplies without adding system rolls", async () => {
+test("live loader combines both printing sources without double-counting summaries", async () => {
   const seen = [];
+  const sheetIds = [];
   const csv = (rows) =>
     rows
       .map((r) =>
@@ -171,15 +337,33 @@ test("live loader reads the journal and all supplies without adding system rolls
       return j;
     }),
   ];
-  const r = await loadPrinting(async (url) => {
-    const gid = Number(new URL(url).searchParams.get("gid"));
-    seen.push(gid);
-    if (gid === 725126844) return new Response(csv(journal));
-    const supply = SUPPLY_SHEETS.find(([id]) => id === gid);
-    assert.ok(
-      supply,
-      "No source outside supplies and journal may contribute to KPI",
-    );
+  const rollJournalHeaders = [...headers];
+  rollJournalHeaders[9] = "Сделано";
+  rollJournalHeaders[11] = "Выпуск м²";
+  const rollJournalRow = log(
+    100,
+    17.6,
+    "Дмитрий",
+    "AUTO_PRINT_roll-001",
+    "07.10.2026",
+  );
+  rollJournalRow[4] = "OZON МОСКВА";
+  rollJournalRow[7] = "roll-001";
+  rollJournalRow[12] = "07.10.2026 17:30:00";
+  const historicalRow = log(20, 2, "Дмитрий", "R2_LEGACY_PRINT_old", "29.07.2026");
+  historicalRow[4] = "OZON МОСКВА";
+  historicalRow[6] = "HIST-ART";
+  historicalRow[7] = "closed-order-uid";
+  const incompleteRow = log(0, 0, "Дмитрий", "AUTO_PRINT_incomplete", "12.10.2026");
+  incompleteRow[4] = "OZON МОСКВА";
+  incompleteRow[6] = "INCOMPLETE-ART";
+  incompleteRow[7] = "incomplete-uid";
+  const rollCutRow = log(25, 0, "Дмитрий", "AUTO_CUT_roll-001", "07.10.2026");
+  rollCutRow[3] = "Резка";
+  rollCutRow[4] = "OZON МОСКВА";
+  rollCutRow[7] = "roll-001";
+  const rollJournal = [rollJournalHeaders, rollJournalRow, historicalRow, incompleteRow, rollCutRow];
+  const makeOldSupply = (gid) => {
     const rows = [Array(32).fill(""), [], Array(32).fill("")];
     rows[0][31] = "UID";
     rows[2][4] = "Артикул";
@@ -191,15 +375,75 @@ test("live loader reads the journal and all supplies without adding system rolls
       row[31] = o.uid;
       rows.push(row);
     }
-    return new Response(csv(rows));
-  });
-  assert.equal(seen.length, SUPPLY_SHEETS.length + 1);
+    return rows;
+  };
+  const makeRollSupply = () => {
+    const rows = [Array(32).fill(""), Array(32).fill(""), Array(32).fill(""), Array(32).fill("")];
+    rows[0][28] = "UID";
+    rows[3][4] = "Артикул";
+    rows[3][14] = "Кол-во";
+    const row = Array(32).fill("");
+    row[4] = "ROLL-ART";
+    row[5] = "0.22";
+    row[7] = "0.4";
+    row[8] = "2";
+    row[9] = "17.6";
+    row[14] = "100";
+    row[19] = "83";
+    row[20] = "45";
+    row[23] = "17";
+    row[28] = "roll-001";
+    rows.push(row);
+    return rows;
+  };
+  const r = await loadPrinting(async (url) => {
+    const gid = Number(new URL(url).searchParams.get("gid"));
+    const spreadsheetId = new URL(url).pathname.split("/")[3];
+    seen.push(gid);
+    sheetIds.push(spreadsheetId);
+    if (spreadsheetId === ROLL_PRINTING_SHEET_ID && gid === 126956215)
+      return new Response(csv(rollJournal));
+    if (spreadsheetId === ROLL_PRINTING_SHEET_ID && gid === ROLL_PRINTING_SHEET.gid)
+      return new Response(csv(makeRollSupply()));
+    if (spreadsheetId === ROLL_PRINTING_SHEET_ID && gid === 99887766)
+      return new Response(csv(makeRollSupply()));
+    if (spreadsheetId !== ROLL_PRINTING_SHEET_ID && gid === 725126844)
+      return new Response(csv(journal));
+    const supply = SUPPLY_SHEETS.find(([id]) => id === gid);
+    assert.ok(
+      supply,
+      "No source outside supplies and journal may contribute to KPI",
+    );
+    return new Response(csv(makeOldSupply(gid)));
+  }, { additionalSheets: [{ gid: 99887766, name: "Рулонная поставка тест" }] });
+  assert.equal(seen.length, SUPPLY_SHEETS.length + 4);
+  assert.equal(new Set(sheetIds).size, 2);
   assert.ok(!seen.includes(86586324));
-  assert.equal(r.events.length, 3);
-  assert.equal(Number(total(r).toFixed(3)), 31.68);
-  assert.deepEqual(
-    r.events.map((e) => e.roll),
-    ["д74", "д75", "д76"],
-  );
-  assert.deepEqual(r.issues, []);
+  assert.ok(!seen.includes(2053830156), "Derived daily summary must not be counted");
+  assert.equal(r.events.length, 5);
+  assert.equal(r.cutEvents.length, 1);
+  assert.equal(r.cutEvents[0].quantity, 25);
+  assert.equal(r.cutEvents[0].area, 0);
+  assert.equal(Number(total(r).toFixed(3)), 51.28);
+  assert.deepEqual(r.events.slice(0, 3).map((e) => e.roll), ["д74", "д75", "д76"]);
+  const rollEvent = r.events[3];
+  assert.equal(rollEvent.sourceId, "roll-printing");
+  assert.equal(rollEvent.site, "OZON РУЛОННАЯ ПЕЧАТЬ");
+  assert.equal(rollEvent.uid, `${ROLL_PRINTING_SHEET.gid}::roll-001`);
+  assert.equal(rollEvent.sourceUrl, `https://docs.google.com/spreadsheets/d/${ROLL_PRINTING_SHEET_ID}/edit#gid=${ROLL_PRINTING_SHEET.gid}`);
+  assert.equal(r.supplies.length, 3);
+  const rollOrder = r.supplies.find((order) => order.sourceId === "roll-printing");
+  assert.equal(rollOrder.printProgress, 83);
+  assert.equal(rollOrder.cutProgress, 45);
+  assert.equal(rollOrder.remainingPrint, 17);
+  assert.equal(r.sheets.length, SUPPLY_SHEETS.length + 2);
+  assert.ok(r.sheets.some((sheet) => sheet.sheetId === 99887766));
+  assert.equal(r.sources.length, PRINTING_SOURCES.length);
+  const historicEvent = r.events[4];
+  assert.equal(historicEvent.article, "HIST-ART");
+  assert.equal(historicEvent.uid, "closed-order-uid");
+  assert.equal(historicEvent.sheetId, ROLL_PRINTING_SHEET.gid);
+  assert.equal(r.issues.length, 1);
+  assert.equal(r.issues[0].code, "invalid_record");
+  assert.match(r.issues[0].message, /Нет количества или площади/);
 });

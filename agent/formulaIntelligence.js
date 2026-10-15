@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { digest, gridViews, scalar } from "./diagnosticGrid.js";
 import { doctorColumnIndex } from "./doctorRegistry.js";
 import { formulaReferences } from "./formulaReferences.js";
+import { observedFormulaCells } from "./formulaHistory.js";
 
 const letters = (n) => {
   let s = "";
@@ -544,7 +545,12 @@ export class FormulaIntelligence {
     this.store.snapshot("formula-metrics:" + document.id, metrics, at);
     return findings;
   }
-  async fastCheck(reader, signal, at = new Date()) {
+  async fastCheck(
+    reader,
+    signal,
+    at = new Date(),
+    { metadataByDocument = new Map() } = {},
+  ) {
     const started = performance.now(),
       before = reader.telemetry?.() || {};
     const documents = [];
@@ -557,7 +563,18 @@ export class FormulaIntelligence {
     )) {
       let metadataSheets = null,
         metadataError = null;
-      if (typeof reader.metadata === "function") {
+      const reusedMetadata = metadataByDocument.get(document.id);
+      if (reusedMetadata) {
+        if (reusedMetadata.spreadsheetId !== document.documentId)
+          metadataError = new Error("spreadsheet_mismatch");
+        else
+          metadataSheets = new Map(
+            (reusedMetadata.sheets || []).map((sheet) => [
+              sheet.properties.sheetId,
+              sheet,
+            ]),
+          );
+      } else if (typeof reader.metadata === "function") {
         const metadataStarted = performance.now();
         metadataReadRequests++;
         try {
@@ -601,7 +618,16 @@ export class FormulaIntelligence {
             "SELECT cell,formula,merge_signature,region_id,version FROM formula_protected WHERE source_id=? AND gid=? ORDER BY cell",
           )
           .all(document.id, schema.gid);
-        if (!protectedCells.length) continue;
+        const historicalCells = observedFormulaCells(this.store.db, document.id, schema.gid, protectedCells);
+        const monitoredCells = [...protectedCells, ...historicalCells];
+        if (!monitoredCells.length) {
+          const meta = metadataSheets?.get(schema.gid), valid = meta?.properties.title === schema.name;
+          sheets.push({ sourceId: document.id, document: document.name, gid: schema.gid, sheet: schema.name,
+            status: valid ? "ok" : "degraded", checkedCells: 0, protectedCells: 0, historicalCheckedCells: 0,
+            matchingCells: 0, violations: 0, readRequests: 0, at: at.toISOString(),
+            errorCode: valid ? null : "sheet_metadata_unavailable" });
+          continue;
+        }
         const startedSheet = performance.now();
         let requestCount = 0;
         try {
@@ -610,7 +636,7 @@ export class FormulaIntelligence {
             throw new Error("sheet_metadata_missing");
           if (metadataSheet && metadataSheet.properties.title !== schema.name)
             throw new Error("sheet_mismatch");
-          const protectedBounds = protectedCells.reduce(
+          const protectedBounds = monitoredCells.reduce(
               (bounds, p) => {
                 const [col, row] = point(p.cell);
                 return {
@@ -629,7 +655,7 @@ export class FormulaIntelligence {
                 doctorColumnIndex(schema.lastColumn) + 1,
                 protectedBounds.columns,
               );
-          const ordered = protectedCells
+          const ordered = monitoredCells
             .map((p) => ({ p, col: point(p.cell)[0], row: point(p.cell)[1] }))
             .sort((a, b) => a.col - b.col || a.row - b.row);
           const chunks = new Map();
@@ -796,6 +822,21 @@ export class FormulaIntelligence {
               formulaRegionId: p.region_id,
             });
           }
+          for (const p of historicalCells) {
+            const native = cellViews.get(p.cell) || {};
+            if (native.userEnteredValue?.formulaValue === p.formula) continue;
+            findings.push({ kind: "table_doctor", sourceId: document.id, sourceName: document.name,
+              department: document.department, sheet: schema.name, gid: schema.gid, cell: p.cell,
+              row: point(p.cell)[1] + 1, type: "formula_history_change", severity: "warning",
+              title: "Формула изменена относительно сохранённой версии",
+              observed: { entered: native.userEnteredValue || null, result: scalar(native) },
+              expected: { candidateFormula: p.formula, confidence: "unapproved_history" },
+              cause: "Подтверждён факт изменения; прежняя формула требует проверки владельцем.",
+              impact: "Влияние на KPI не подтверждено",
+              recommendation: "Проверьте прежнюю формулу в предложении восстановления. Запись требует вашего явного разрешения.",
+              verification: "needs_review", initialStatus: "review", category: "suspicious",
+              sourceUrl: link(document.documentId, schema.gid, p.cell) });
+          }
           comparisonDurationMs += performance.now() - comparisonStarted;
           const standaloneFindings = findings.filter(
             (finding) =>
@@ -808,7 +849,7 @@ export class FormulaIntelligence {
             {
               verified: true,
               at: at.toISOString(),
-              onlyCells: new Set(protectedCells.map((p) => p.cell)),
+              onlyCells: new Set(monitoredCells.map((p) => p.cell)),
             },
           );
           sheets.push({
@@ -825,8 +866,11 @@ export class FormulaIntelligence {
               : metadataError?.code || "structure_metadata_unavailable",
             checkedCells: protectedCells.length,
             protectedCells: protectedCells.length,
-            matchingCells: protectedCells.length - findings.length,
-            violations: findings.length,
+            historicalCheckedCells: historicalCells.length,
+            matchingCells: protectedCells.length - findings.filter((f) => f.type !== "formula_history_change").length,
+            historicalMatchingCells: historicalCells.length - findings.filter((f) => f.type === "formula_history_change").length,
+            violations: standaloneFindings.length,
+            groupedCalculationErrors: findings.length - standaloneFindings.length,
             readRequests: requestCount,
             durationMs: Math.round(performance.now() - startedSheet),
             at: at.toISOString(),
@@ -918,6 +962,7 @@ export class FormulaIntelligence {
         protectedCells: documents
           .flatMap((d) => d.sheets)
           .reduce((n, s) => n + (s.protectedCells || 0), 0),
+        historicalCheckedCells: documents.flatMap((d) => d.sheets).reduce((n, s) => n + (s.historicalCheckedCells || 0), 0),
         violations: documents
           .flatMap((d) => d.sheets)
           .reduce((n, s) => n + (s.violations || 0), 0),

@@ -55,6 +55,7 @@ export function MonitoringSheets({
   documents: {
     id: string;
     name: string;
+    demonstration?: boolean;
     sourceUrl: string | null;
     sheets: ScopeSheet[];
     businessPreview?: BusinessDraft | null;
@@ -62,6 +63,11 @@ export function MonitoringSheets({
   source: string;
   sheet: string;
 }) {
+  const productionDocuments = documents.filter((d) => !d.demonstration),
+    monitoredSheetCount = productionDocuments.reduce(
+      (count, document) => count + document.sheets.length,
+      0,
+    );
   const rows = documents
     .filter((d) => !source || source === d.id)
     .flatMap((d) =>
@@ -79,10 +85,12 @@ export function MonitoringSheets({
     <section className="panel">
       <div className="panel-heading">
         <h2>Производственные листы под контролем</h2>
-        <Badge>3 документа · 7 листов</Badge>
+        <Badge>
+          {productionDocuments.length} документа · {monitoredSheetCount} листов
+        </Badge>
       </div>
       <p className="panel-note">
-        Инциденты создаются только в указанной области. Зависимые вкладки
+        Инциденты создаются только в зарегистрированных вкладках. Зависимые вкладки
         продолжают участвовать в расчётах KPI. Исключённые проблемы сохраняются
         со статусом «Вне области мониторинга».
       </p>

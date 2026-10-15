@@ -25,4 +25,5 @@ export {
   ArrowRight,
   LoaderCircle as CircleNotch,
   Search as MagnifyingGlass,
+  Trash2 as Trash,
 } from "lucide-react";

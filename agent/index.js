@@ -19,9 +19,16 @@ import {
   ProductionSheetsWriter,
 } from "./productionRepair.js";
 import { SourceRecoveryService } from "./sourceRecovery.js";
+import {
+  RollSupplyManagementService,
+  RollSupplySheetsWriter,
+} from "./rollSupply.js";
 import { Monitor } from "./monitor.js";
 import { createAgentServer } from "./server.js";
 import { flushTelegram } from "./telegram.js";
+import { RITMAssistant } from "./assistant.js";
+import { TelegramAssistant } from "./telegramAssistant.js";
+import { LocalSecretStore } from "./secretStore.js";
 
 const config = loadConfig(),
   store = new IncidentStore(config.dbPath),
@@ -35,8 +42,11 @@ if (!store.acquire(owner)) {
 store.setMonitoringScope(config.doctorDocuments, config.sources);
 store.recoverNotifications();
 const controller = new AbortController(),
-  monitor = new Monitor(store, config),
-  doctor = new TableDoctor(store, config);
+  doctor = new TableDoctor(store, config),
+  monitor = new Monitor(store, config, { googleReader: doctor.reader });
+// The process owns the exclusive database lease above; only now is a persisted
+// run from a dead prior agent safe to classify as interrupted.
+doctor.recoverInterruptedRun();
 const productionWriter = config.productionRepairEnabled
   ? new ProductionSheetsWriter({
       credentialsFile: config.productionWriterCredentialsFile,
@@ -65,6 +75,42 @@ const sourceRecovery = productionWriter
       doctor,
     })
   : null;
+const secretStore = new LocalSecretStore(config.dataDir);
+const localSecrets = await secretStore.read();
+config.assistant = {
+  provider: localSecrets.provider || "openai",
+  model: localSecrets.model || process.env.RITM_AI_MODEL || (localSecrets.provider === "anthropic" ? "claude-sonnet-4-6" : "gpt-4o-mini"),
+  apiKey: localSecrets.llmApiKeys?.[localSecrets.provider || "openai"] || localSecrets.llmApiKey || "",
+  spendLimitUsd: Number(localSecrets.spendLimitUsd) || 5,
+  dailyRequestLimit: Number(localSecrets.dailyRequestLimit) || 50,
+};
+if (localSecrets.llmApiKey && !localSecrets.llmApiKeys?.openai) {
+  localSecrets.llmApiKeys ||= {};
+  localSecrets.llmApiKeys.openai = localSecrets.llmApiKey;
+}
+if (!config.telegram.token) config.telegram.token = localSecrets.telegramToken || "";
+const assistant = new RITMAssistant({ store, config, doctor, sourceRecovery });
+assistant.attachProductionRepair(repair);
+const savedTelegramOwner = store.db.prepare("SELECT chat_id FROM assistant_owner WHERE id=1").get();
+if (savedTelegramOwner) config.telegram.chatId = savedTelegramOwner.chat_id;
+const telegramAssistant = new TelegramAssistant({ assistant, store });
+if (config.telegram.token && !process.argv.includes("--once")) await telegramAssistant.setToken(config.telegram.token);
+assistant.recoverCheckSubscriptions();
+const rollSupplyService = new RollSupplyManagementService(store, {
+  writer: productionWriter
+    ? new RollSupplySheetsWriter({ credentialWriter: productionWriter })
+    : null,
+  refresh: async () => {
+    const source = config.sources.find(
+      (item) => item.adapter === "printing" && item.enabled,
+    );
+    if (!source) throw new Error("Printing monitor is not configured");
+    const result = await monitor.source(source, controller.signal);
+    if (!result.ok || result.partial)
+      throw new Error("Printing snapshot could not be refreshed cleanly");
+    return result;
+  },
+});
 mkdirSync(config.dataDir, { recursive: true });
 const logPath = path.join(config.dataDir, "agent.log");
 function log(event) {
@@ -99,12 +145,14 @@ store.log("agent_started", "Локальный агент запущен в ре
 log("agent_started");
 async function tick() {
   try {
+    await rollSupplyService.syncRegisteredSheets();
     await Promise.all([
       monitor.run(controller.signal),
       doctor.run(controller.signal),
     ]);
     const notificationState = await flushTelegram(store, config.telegram, {
       signal: controller.signal,
+      telegramAssistant,
     });
     store.meta("notifications", notificationState);
     log("check_completed");
@@ -132,6 +180,7 @@ async function fastLoop() {
     const result = await fastCurrent;
     const notificationState = await flushTelegram(store, config.telegram, {
       signal: controller.signal,
+      telegramAssistant,
     });
     store.meta("notifications", notificationState);
     store.meta("doctorFastCheck", result);
@@ -174,6 +223,7 @@ async function stop() {
     server.closeAllConnections();
     await closed;
   }
+  await telegramAssistant.stop();
   store.close();
 }
 process.once("SIGINT", () => void stop());
@@ -184,6 +234,16 @@ try {
       doctor,
       repair,
       sourceRecovery,
+      rollSupplyService,
+      assistant,
+      secretStore,
+      telegramAssistant,
+      refreshPrinting: async () => {
+        const source = config.sources.find(
+          (item) => item.adapter === "printing" && item.enabled,
+        );
+        return source ? monitor.source(source, controller.signal) : { ok: false };
+      },
       signal: controller.signal,
     });
     await new Promise((resolve, reject) => {

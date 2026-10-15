@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
+import { digest } from "./diagnosticGrid.js";
+import { ownerSourceCandidate, sourceCandidateKey } from "./sourceCandidate.js";
 import {
   approvedTarget,
   validateProductionRepairConfig,
@@ -230,11 +232,16 @@ export class SourceRecoveryService {
     );
   }
 
-  context(incidentId, { allowNewRequest = false } = {}) {
+  context(incidentId, { allowNewRequest = false, draftCandidate = null } = {}) {
     const row = this.db
         .prepare("SELECT * FROM incidents WHERE id=?")
         .get(incidentId),
       incident = row && this.store.incident(row);
+    if (row && incident) {
+      const supplied = draftCandidate || ownerSourceCandidate(this.store, row, incident, this.now());
+      if (supplied) incident.recoveryCandidate = supplied;
+      else if (incident.recoveryCandidate?.origin === "owner_proposal") delete incident.recoveryCandidate;
+    }
     if (
       !row ||
       row.status !== "open" ||
@@ -328,7 +335,7 @@ export class SourceRecoveryService {
       !snapshot ||
       !sourceCell ||
       sourceCell.currentOrigin !== "entered" ||
-      !lastKnown ||
+      (candidate.origin !== "owner_proposal" && !lastKnown) ||
       !Number.isFinite(freshness) ||
       ageMs < -5000 ||
       ageMs > this.config.snapshotMaxAgeMs ||
@@ -342,13 +349,18 @@ export class SourceRecoveryService {
             ? sourceCell.current
             : undefined,
       }) ||
-      !equal(lastKnown.value, candidate.value) ||
-      lastKnown.at !== candidate.observedAt
+      (candidate.origin !== "owner_proposal" &&
+        (!equal(lastKnown.value, candidate.value) || lastKnown.at !== candidate.observedAt))
     )
       fail(
         "source_snapshot_stale",
         "Нет свежего успешного снимка, который подтверждает, что заявленное значение остаётся последним известным для пустой ячейки.",
       );
+    if (candidate.origin === "owner_proposal" &&
+        (candidate.expiresAt <= this.now() || candidate.owner !== "authenticated_local_owner" ||
+         sourceCell.key !== incident.observed?.productKey ||
+         (!draftCandidate && !equal(this.store.getSnapshot(sourceCandidateKey(incidentId) + ":" + candidate.version)?.value?.candidate, candidate))))
+      fail("source_candidate_stale", "Предложенное владельцем значение устарело; записи не было.");
     const paths = incident.dependencyPaths || [],
       outputColumns = new Set(rule.production.errorColumns || []),
       productionRows = new Set();
@@ -409,10 +421,40 @@ export class SourceRecoveryService {
     };
   }
 
+  async proposeValue(incidentId, value) {
+    if (typeof value !== "string" || !value.trim() || value !== value.trim() || value.length > 200 || value.startsWith("="))
+      fail("source_candidate_invalid", "Укажите точный непустой Вид как текст.", 400);
+    const row = this.db.prepare("SELECT * FROM incidents WHERE id=?").get(incidentId),
+      incident = row && this.store.incident(row);
+    if (!incident || incident.sourceState !== "missing" || incident.repairRequested || incident.sourceRecoveryOperation)
+      fail("source_candidate_unavailable", "Источник не пуст или для инцидента уже есть операция/заявка.");
+    const at = this.timestamp(), candidate = {
+      status: "candidate", origin: "owner_proposal", owner: "authenticated_local_owner",
+      value: { stringValue: value }, observedAt: at, expiresAt: this.now() + 10 * 60000,
+      confirmation: `Подтверждаю ${incident.cell}: ${value}`,
+      evidence: "Значение предложено владельцем; прежнее значение этой ячейки не подтверждено снимком.",
+    };
+    candidate.version = digest({ incidentId, generation: row.generation, candidate });
+    const context = this.context(incidentId, { allowNewRequest: true, draftCandidate: candidate });
+    const live = await this.readLive(context);
+    const checked = this.validateBefore(context, live);
+    if (checked.alreadyRestored) fail("source_already_restored", "Источник уже заполнен; запись не предлагается.");
+    const fresh = this.db.prepare("SELECT generation,status FROM incidents WHERE id=?").get(incidentId);
+    if (fresh.generation !== row.generation || fresh.status !== "open") fail("source_incident_stale", "Инцидент изменился во время чтения.");
+    const proposed = { generation: row.generation, sourceId: incident.sourceId, gid: incident.gid,
+      cell: incident.cell, productKey: incident.observed?.productKey, expiresAt: candidate.expiresAt, candidate };
+    this.store.snapshot(sourceCandidateKey(incidentId) + ":" + candidate.version, proposed, at);
+    this.store.snapshot(sourceCandidateKey(incidentId), proposed, at);
+    this.store.log("source_value_proposed", `Владелец предложил ${incident.sheet}!${incident.cell} = ${value}; разрешения на запись нет`, incidentId, at);
+    return { candidate, message: "Предложение проверено. Для записи подтвердите точный адрес и значение." };
+  }
+
   async readLive(context) {
     const quote = (name) => "'" + name.replaceAll("'", "''") + "'!",
       ranges = [
         `${quote(context.sourceSheet.name)}A${context.incident.row}:Q${context.incident.row}`,
+        ...(context.incident.lookupEvidence?.some((e) => e.selection === "first_match")
+          ? [`${quote(context.sourceSheet.name)}${context.rule.source.keyColumn}1:${context.rule.source.keyColumn}${context.rule.source.maxRows || 3000}`] : []),
         ...context.productionRows.map(
           (row) => `${quote(context.productionSheet.name)}A${row}:AU${row}`,
         ),
@@ -537,6 +579,14 @@ export class SourceRecoveryService {
         "source_product_changed",
         "Артикул строки каталога изменился после создания заявки; восстановление отменено.",
       );
+    if (context.incident.lookupEvidence?.some((e) => e.selection === "first_match")) {
+      let firstRow = null;
+      for (let row = 1; row <= (context.rule.source.maxRows || 3000); row++) {
+        const key = valueOf(cellAt(live.source, context.rule.source.keyColumn + row));
+        if (typeof key === "string" && key.toLocaleLowerCase("ru-RU") === context.productKey.toLocaleLowerCase("ru-RU")) { firstRow = row; break; }
+      }
+      if (firstRow !== context.incident.row) fail("source_lookup_changed", "Первая строка VLOOKUP изменилась; восстановление отменено.");
+    }
     const formulas = {};
     for (const row of context.productionRows) {
       const current = live.productionCells[row];
@@ -618,11 +668,10 @@ export class SourceRecoveryService {
     return rows;
   }
 
-  startForIncident(incidentId, payload = {}) {
+  startForIncident(incidentId, payload = {}, authorizationSource = null) {
     if (
       payload.explicitWriteApproval !== true ||
-      Object.keys(payload).sort().join(",") !==
-        "explicitWriteApproval,incidentId" ||
+      Object.keys(payload).some((key) => !["explicitWriteApproval", "incidentId", "candidateVersion"].includes(key)) ||
       payload.incidentId !== incidentId
     )
       fail(
@@ -654,6 +703,24 @@ export class SourceRecoveryService {
     }
     const context = this.context(incidentId, { allowNewRequest: true }),
       at = this.timestamp();
+    const candidateFingerprint = digest({
+      incidentId,
+      generation: context.incidentRow.generation,
+      candidate: context.candidate,
+    });
+    const telegramAuthorization = ["telegram_owner_https", "telegram_owner_button", "telegram_mini_app"].includes(authorizationSource?.source);
+    if (
+      telegramAuthorization &&
+      (!/^[a-f0-9]{64}$/.test(authorizationSource.expectedCandidateFingerprint || "") ||
+        authorizationSource.expectedCandidateFingerprint !== candidateFingerprint)
+    )
+      fail(
+        "source_candidate_version_changed",
+        "Предложение изменилось с момента показа защищённого подтверждения; запись отменена.",
+      );
+    if ((context.candidate.origin === "owner_proposal" && payload.candidateVersion !== context.candidate.version) ||
+        (payload.candidateVersion && payload.candidateVersion !== context.candidate.version))
+      fail("source_candidate_version_changed", "Подтверждение относится к другому предложению; записи не было.");
     const id = randomUUID(),
       target = {
         documentId: context.target.documentId,
@@ -663,9 +730,18 @@ export class SourceRecoveryService {
       },
       authorization = {
         at,
-        owner: "authenticated_local_owner",
+        owner: telegramAuthorization ? "linked_telegram_owner" : "authenticated_local_owner",
         purpose: "explicit_source_value_write",
-        source: "owner_confirmation_action",
+        source: telegramAuthorization
+          ? authorizationSource.source
+          : "owner_confirmation_action",
+        ...(telegramAuthorization
+          ? {
+              channel: "telegram",
+              actor: String(authorizationSource.actor || "").slice(0, 80),
+              candidateFingerprint,
+            }
+          : {}),
         target,
         value: context.candidate.value,
       };
@@ -687,7 +763,12 @@ export class SourceRecoveryService {
           "Сейчас выполняется другое исправление; операция исходных данных не запущена.",
         );
       const fresh = this.context(incidentId, { allowNewRequest: true });
-      if (fresh.requestId !== context.requestId)
+      const freshCandidateFingerprint = digest({
+        incidentId,
+        generation: fresh.incidentRow.generation,
+        candidate: fresh.candidate,
+      });
+      if (fresh.requestId !== context.requestId || freshCandidateFingerprint !== candidateFingerprint)
         fail("source_request_stale", "Заявка изменилась перед запуском.");
       if (!fresh.requestRow) {
         const requestPayload = JSON.stringify({

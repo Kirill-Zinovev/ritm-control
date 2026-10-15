@@ -1,5 +1,9 @@
 import { loadAssembly } from "../worker/assembly.js";
-import { loadPrinting, parseCsv } from "../worker/printing.js";
+import {
+  loadPrinting,
+  parseCsv,
+  ROLL_PRINTING_SHEET_ID,
+} from "../worker/printing.js";
 import { parseNonnegative, parseDay } from "../worker/assemblyDiagnostics.js";
 import { sourceTimestamp } from "../worker/timestamps.js";
 export function todayMoscow(now = new Date()) {
@@ -68,10 +72,41 @@ export function inspectGeneric(rows, sheet) {
   }
   return issues;
 }
-export async function loadSource(source, fetcher, now = new Date()) {
+export async function loadSource(
+  source,
+  fetcher,
+  now = new Date(),
+  options = {},
+) {
   if (source.adapter === "assembly")
     return loadAssembly(todayMoscow(now), "day", fetcher);
-  if (source.adapter === "printing") return loadPrinting(fetcher);
+  if (source.adapter === "printing") {
+    const authenticatedFetcher = options.googleReader
+      ? async (url, init = {}) => {
+          const parsed = new URL(url),
+            documentMatch = parsed.pathname.match(
+              /^\/spreadsheets\/d\/([A-Za-z0-9_-]+)\/export$/,
+            );
+          if (
+            parsed.hostname !== "docs.google.com" ||
+            !documentMatch ||
+            ![source.documentId, ROLL_PRINTING_SHEET_ID].includes(
+              documentMatch[1],
+            ) ||
+            parsed.searchParams.get("format") !== "csv" ||
+            !/^\d+$/.test(parsed.searchParams.get("gid") || "")
+          )
+            throw new Error("Unapproved printing export URL");
+          const token = await options.googleReader.accessToken(init.signal),
+            headers = new Headers(init.headers);
+          headers.set("authorization", "Bearer " + token);
+          return fetcher(url, { ...init, headers });
+        }
+      : fetcher;
+    return loadPrinting(authenticatedFetcher, {
+      additionalSheets: options.printingAdditionalSheets || [],
+    });
+  }
   const exports = await Promise.all(
     source.sheets
       .filter((s) => s.status !== "not_configured")

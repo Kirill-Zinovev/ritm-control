@@ -31,11 +31,29 @@ export type FormulaState = {
     status: string;
     durationMs: number;
     readRequests: number;
+    apiReadRequests?: number;
+    dataAcquisitionMs?: number;
+    comparisonMs?: number;
     retries: number;
     responseBytes: number;
     checkedCells: number;
     protectedCells: number;
     violations: number;
+    dataQuality?: {
+      status: string;
+      readRequests: number;
+      findings: number;
+      documents: {
+        sourceId: string;
+        name: string;
+        status: string;
+        complete: boolean;
+        findings: number | null;
+        readRequests: number;
+        durationMs: number;
+        errorCode: string | null;
+      }[];
+    };
     documents: {
       sourceId: string;
       name: string;
@@ -384,7 +402,7 @@ export function FormulaIntelligence({
           <div>
             <h3>Массовая защита формул</h3>
             <p className="panel-note">
-              Подготовка запускает новую проверку семи листов только на чтение.
+              Подготовка запускает новую проверку всех зарегистрированных листов только на чтение.
               Она ничего не утверждает и не записывает в Google Sheets.
             </p>
           </div>

@@ -2,8 +2,12 @@
 import { randomUUID } from "node:crypto";
 import { TestRepairService } from "./testRepair.js";
 import { TestSheetsWriter, RepairError } from "./testSheetsWriter.js";
-import { PRODUCTION_DOCTOR_DOCUMENTS } from "./productionRegistry.js";
+import {
+  PRODUCTION_DOCTOR_DOCUMENTS,
+  PRODUCTION_REPAIR_DOCUMENT_IDS,
+} from "./productionRegistry.js";
 import { digest, gridViews } from "./diagnosticGrid.js";
+import { historicalFormulaEvidence } from "./formulaHistory.js";
 const same = (a, b) => digest(a) === digest(b);
 const fail = (code, message, status = 409) => {
   throw new RepairError(code, message, status);
@@ -16,7 +20,9 @@ const input = (v) =>
   "(пусто)";
 export function approvedTarget(target) {
   const doc = PRODUCTION_DOCTOR_DOCUMENTS.find(
-    (d) => d.documentId === target?.documentId,
+    (d) =>
+      PRODUCTION_REPAIR_DOCUMENT_IDS.includes(d.id) &&
+      d.documentId === target?.documentId,
   );
   const tab = doc?.sheets.find(
     (s) => s.gid === target?.sheetId && s.name === target?.sheet,
@@ -459,6 +465,8 @@ export class ProductionRepairService extends TestRepairService {
     this.production = true;
     this.queueRunning = false;
     this.checkRunning = false;
+    this.queueWake = null;
+    this.queuePollMs = 1000;
   }
   event(id, incidentId, type, payload) {
     const at = new Date(this.now()).toISOString();
@@ -469,6 +477,7 @@ export class ProductionRepairService extends TestRepairService {
       .run(id, at, type, JSON.stringify(payload));
     const labels = {
       repair_queued: "Исправление поставлено в очередь",
+      repair_waiting: "Подтверждённое исправление ожидает завершения другой операции; записи ещё не было",
       repair_cell_verified: "Google Sheets подтвердил формулу после записи",
       repair_postcheck_failed: "Повторная проверка требует решения владельца",
       repair_proposed: "Подготовлено точечное исправление; записи не было",
@@ -517,20 +526,42 @@ export class ProductionRepairService extends TestRepairService {
         confirmation: p.confirmation,
         resultAt: result?.at || null,
         errorCode: result?.errorCode || null,
-        message: result?.message || null,
+        message:
+          result?.errorCode === "repair_operation_conflict"
+            ? `Попытка для ${JSON.parse(row.payload).target.cell} остановлена до записи: на тот момент завершалась проверка исходных данных. Таблица не менялась; требуется подготовить новое предложение.`
+            : result?.message || null,
       };
     });
+    for (const row of this.db.prepare("SELECT * FROM source_recovery_operations ORDER BY created_at DESC LIMIT 100").all()) {
+      const target = JSON.parse(row.target), result = row.result ? JSON.parse(row.result) : null;
+      if (!target.documentId || !target.sheet || !target.cell) continue;
+      items.push({
+        id: row.id,
+        incidentId: row.incident_id,
+        status: row.status === "repairing" ? "executing" : row.status,
+        createdAt: row.created_at,
+        sourceName: this.config.doctorDocuments.find((doc) => doc.documentId === target.documentId)?.name || "Производственный источник",
+        direction: "source_recovery",
+        target,
+        resultAt: result?.verifiedAt || (row.status === "verified" ? row.updated_at : result?.at) || null,
+        errorCode: result?.errorCode || result?.code || null,
+        message: result?.resolutionCause || result?.message || null,
+        writeSucceeded: result?.writeSucceeded === true,
+      });
+    }
+    items.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     return {
       awaitingConfirmation: items.filter((x) => x.status === "pending").length,
       queued: items.filter((x) => x.status === "queued").length,
       executing: items.filter((x) => x.status === "executing").length,
       checking: items.filter((x) => x.status === "checking").length,
       needsDecision: items.filter((x) =>
-        ["needs_review", "uncertain"].includes(x.status),
+        ["needs_review", "uncertain", "written_unverified", "blocked"].includes(x.status),
       ).length,
       fixedToday: items.filter(
         (x) =>
           x.status === "verified" &&
+          (x.direction !== "source_recovery" || x.writeSucceeded) &&
           x.resultAt &&
           new Intl.DateTimeFormat("en-CA", {
             timeZone: "Europe/Moscow",
@@ -540,6 +571,35 @@ export class ProductionRepairService extends TestRepairService {
           }).format(new Date(x.resultAt)) === today,
       ).length,
       items,
+    };
+  }
+  async waitForProposal(id, { timeoutMs = 15 * 60_000, pollMs = 750 } = {}) {
+    const deadline = this.now() + timeoutMs;
+    while (this.now() < deadline) {
+      const row = this.db
+        .prepare("SELECT status,payload,result FROM test_repair_proposals WHERE id=?")
+        .get(id);
+      if (!row) fail("proposal_not_found", "Предложение не найдено", 404);
+      const result = row.result ? JSON.parse(row.result) : null;
+      if (["verified", "needs_review", "uncertain", "blocked", "cancelled", "superseded", "written_unverified"].includes(row.status))
+        return {
+          status: row.status,
+          target: JSON.parse(row.payload).target,
+          message: result?.message || result?.error || null,
+          result,
+        };
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
+    const row = this.db
+      .prepare("SELECT status,payload,result FROM test_repair_proposals WHERE id=?")
+      .get(id);
+    if (!row) fail("proposal_not_found", "Предложение не найдено", 404);
+    return {
+      status: "timed_out",
+      target: JSON.parse(row.payload).target,
+      message: "Срок ожидания ответа очереди истёк; повторная запись не запускалась.",
+      currentStatus: row.status,
+      result: row.result ? JSON.parse(row.result) : null,
     };
   }
   incident(id, open) {
@@ -556,6 +616,13 @@ export class ProductionRepairService extends TestRepairService {
       cell: i?.cell,
     };
     approvedTarget(target);
+    if (i?.type === "formula_history_change" && !i.demonstration &&
+        (!open || (row.status === "open" && !["ignored", "excepted"].includes(i.status)))) {
+      const protectedCell = this.db.prepare("SELECT 1 FROM formula_protected WHERE source_id=? AND gid=? AND cell=?").get(doc.id, sheet.gid, i.cell);
+      const baseline = !protectedCell && historicalFormulaEvidence(this.db, i, row.first_seen, sheet.gid);
+      if (!baseline) fail("history_unverified", "Предыдущая формула не подтверждена неизменяемой версией; запись недоступна.", 403);
+      return { generation: row.generation, incident: i, baseline, target };
+    }
     if (
       !i ||
       i.demonstration ||
@@ -785,6 +852,8 @@ export class ProductionRepairService extends TestRepairService {
         to,
         expectedResult: null,
         baselineVersion: baseline.version,
+        historyApprovalRequired: baseline.historyApprovalRequired === true,
+        restoreEvidence: baseline.historyApprovalRequired ? { kind: "unapproved_history", observedAt: baseline.observedAt } : { kind: "approved_baseline" },
         policyVersion: digest({ baseline, target }),
         createdAt: new Date(this.now()).toISOString(),
         expiresAt: this.now() + 10 * 60000,
@@ -879,7 +948,7 @@ export class ProductionRepairService extends TestRepairService {
     void this.finishChecks();
   }
   async confirm(id, payload) {
-    const allowed = ["version", "confirmation", "exclusiveEditingAcknowledged"];
+    const allowed = ["version", "confirmation", "exclusiveEditingAcknowledged", "historyCandidateApproved"];
     if (
       !payload ||
       typeof payload !== "object" ||
@@ -896,6 +965,8 @@ export class ProductionRepairService extends TestRepairService {
       .get(id);
     if (!row) fail("proposal_not_found", "Предложение не найдено", 404);
     const p = JSON.parse(row.payload);
+    if (p.historyApprovalRequired && payload.historyCandidateApproved !== true)
+      fail("history_approval_required", "Нужно явно подтвердить правильность прежней формулы и разрешить её запись.", 403);
     if (
       payload.version !== row.version ||
       payload.confirmation !== p.confirmation
@@ -970,6 +1041,7 @@ export class ProductionRepairService extends TestRepairService {
         version: p.version,
         confirmation: payload.confirmation,
         exclusiveEditingAcknowledged: true,
+        historyCandidateApproved: payload.historyCandidateApproved === true,
       });
       this.event(id, p.incidentId, "repair_queued", {
         target,
@@ -991,7 +1063,12 @@ export class ProductionRepairService extends TestRepairService {
   }
   async drainQueue() {
     if (this.queueRunning) return;
+    if (this.queueWake) {
+      clearTimeout(this.queueWake);
+      this.queueWake = null;
+    }
     this.queueRunning = true;
+    let deferred = false;
     try {
       while (true) {
         const row = this.db
@@ -1000,7 +1077,15 @@ export class ProductionRepairService extends TestRepairService {
           )
           .get();
         if (!row) break;
-        await this.executeQueued(row);
+        if (this.sourceRecoveryActive()) {
+          this.deferQueued(row);
+          deferred = true;
+          break;
+        }
+        if (await this.executeQueued(row) === "deferred") {
+          deferred = true;
+          break;
+        }
       }
     } finally {
       this.queueRunning = false;
@@ -1012,8 +1097,31 @@ export class ProductionRepairService extends TestRepairService {
           )
           .get()
       )
-        void this.drainQueue();
+        if (deferred) {
+          this.queueWake = setTimeout(() => {
+            this.queueWake = null;
+            void this.drainQueue();
+          }, this.queuePollMs);
+          this.queueWake.unref?.();
+        } else void this.drainQueue();
     }
+  }
+  sourceRecoveryActive() {
+    return this.production && !!this.db.prepare(
+      "SELECT 1 FROM source_recovery_operations WHERE status IN ('repairing','checking') LIMIT 1",
+    ).get();
+  }
+  deferQueued(row) {
+    const previous = row.result ? JSON.parse(row.result) : null;
+    if (previous?.phase === "waiting_before_write") return;
+    const result = {
+      at: new Date(this.now()).toISOString(),
+      phase: "waiting_before_write",
+      message: "В очереди: ожидает завершения восстановления исходных данных. Записи этой формулы ещё не было.",
+    };
+    this.db.prepare("UPDATE test_repair_proposals SET result=? WHERE id=? AND status='queued'")
+      .run(JSON.stringify(result), row.id);
+    this.event(row.id, row.incident_id, "repair_waiting", { reason: "source_recovery_active" });
   }
   async executeQueued(row) {
     const p = JSON.parse(row.payload);
@@ -1030,7 +1138,8 @@ export class ProductionRepairService extends TestRepairService {
         !approval ||
         approval.version !== row.version ||
         approval.confirmation !== p.confirmation ||
-        approval.exclusiveEditingAcknowledged !== true
+        approval.exclusiveEditingAcknowledged !== true ||
+        (p.historyApprovalRequired && approval.historyCandidateApproved !== true)
       )
         fail(
           "confirmation_stale",
@@ -1071,18 +1180,11 @@ export class ProductionRepairService extends TestRepairService {
         );
       this.db.exec("BEGIN IMMEDIATE");
       try {
-        if (
-          this.production &&
-          this.db
-            .prepare(
-              "SELECT 1 FROM source_recovery_operations WHERE status IN ('repairing','checking') LIMIT 1",
-            )
-            .get()
-        )
-          fail(
-            "repair_operation_conflict",
-            "Выполняется восстановление исходных данных; исправление формулы не запущено.",
-          );
+        if (this.sourceRecoveryActive()) {
+          this.db.exec("ROLLBACK");
+          this.deferQueued(row);
+          return "deferred";
+        }
         const claimed = this.db
           .prepare(
             "UPDATE test_repair_proposals SET status='executing' WHERE id=? AND status='queued' AND version=?",

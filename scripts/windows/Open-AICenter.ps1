@@ -1,5 +1,5 @@
 ﻿[CmdletBinding()]
-param([switch]$ResolveOnly, [int]$DebugPort = 0, [string]$DataDir = (Join-Path $env:LOCALAPPDATA 'RITMIntelligence-Preview'))
+param([switch]$ResolveOnly, [int]$DebugPort = 0, [string]$DataDir = (Join-Path $env:LOCALAPPDATA 'RITMIntelligence-Preview'), [ValidateSet('overview','assembly','printing','production','stock','supplies','intelligence','sources')][string]$Page = 'intelligence')
 $ErrorActionPreference='Stop'
 $candidates=@()
 foreach($key in @('HKCU:\Software\Microsoft\Windows\CurrentVersion\App Paths\browser.exe','HKLM:\Software\Microsoft\Windows\CurrentVersion\App Paths\browser.exe','HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\browser.exe')) {
@@ -25,7 +25,7 @@ for($attempt=0;$attempt -lt 90;$attempt++) {
 if(!$ready){throw 'AI Center не ответил; браузер не запущен.'}
 if($DebugPort -ne 0 -and ($DebugPort -lt 1024 -or $DebugPort -gt 65535)){throw 'Некорректный локальный debug port'}
 $profile=Join-Path $DataDir 'Yandex-AICenter'
-$arguments=@('--new-window','--start-maximized',('--user-data-dir="'+$profile+'"'),'http://localhost:4318/?page=intelligence')
+$arguments=@('--new-window','--start-maximized',('--user-data-dir="'+$profile+'"'),('http://localhost:4318/?page='+$Page))
 if($DebugPort){$arguments+=('--remote-debugging-port='+$DebugPort);$arguments+='--remote-debugging-address=127.0.0.1'}
 $oldHandles=@(Get-Process browser -ErrorAction SilentlyContinue | Where-Object {$_.MainWindowHandle -ne 0} | ForEach-Object {$_.MainWindowHandle})
 Start-Process -FilePath $browser -ArgumentList $arguments -WindowStyle Maximized | Out-Null

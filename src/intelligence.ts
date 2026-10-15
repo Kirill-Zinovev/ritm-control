@@ -18,6 +18,23 @@ export type SourceDefinition = {
 };
 export type Incident = {
   id: string;
+  gid?: number;
+  groupedRootCause?: {
+    rootCell: string;
+    productKey: string;
+    lookupSheet: string;
+    lookupFormula: string;
+    affectedCells: {
+      gid?: number;
+      sheet: string;
+      cell: string;
+      error: string;
+      url?: string | null;
+    }[];
+    count: number;
+  };
+  relatedIncidentIds?: string[];
+  relatedIncidentCount?: number;
   kind?: string;
   demonstration?: boolean;
   observed?: unknown;
@@ -48,6 +65,9 @@ export type Incident = {
     observedAt: string;
     confirmation: string;
     evidence: string;
+    origin?: "owner_proposal";
+    version?: string;
+    expiresAt?: number;
   } | null;
   affectedCells?: {
     gid: number;

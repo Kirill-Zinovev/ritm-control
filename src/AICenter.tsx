@@ -1,5 +1,5 @@
 import { TableDoctor } from "./TableDoctor";
-import { useEffect, useRef, useState } from "react";
+import { Component, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ArrowsClockwise,
   ArrowSquareOut,
@@ -33,12 +33,13 @@ const views = [
   ["doctor", "Table Doctor"],
   ["incidents", "Инциденты"],
   ["recommendations", "Рекомендации"],
-  ["chat", "AI-чат"],
+  ["assistant", "AI Assistant"],
   ["history", "История"],
   ["settings", "Настройки"],
 ] as const;
 const primaryViews = [
   ["doctor", "Контроль таблиц"],
+  ["assistant", "AI Assistant"],
   ["history", "История"],
   ["settings", "Настройки"],
 ] as const;
@@ -160,6 +161,96 @@ function OwnerLogin({ onLogin }: { onLogin: () => void }) {
     </section>
   );
 }
+type AssistantState = {
+  provider: string; model: string; llmConfigured: boolean; spendLimitUsd: number;
+  dailyRequestLimit: number; monthlyUsageUsd: number; dailyRequests: number; telegramConfigured: boolean; telegramRunning: boolean;
+  telegramConnected: boolean; telegramLastError: string | null; telegramBotName: string | null;
+  owner: { userId: string; chatId: string; boundAt: string } | null;
+  repairApprovalEnabled: boolean; repairApprovalNote: string;
+  recent: { id: number; at: string; channel: string; event: string; tool: string | null; outcome: string }[];
+  notificationHistory: HistoryEntry[];
+};
+class AssistantErrorBoundary extends Component<
+  { children: ReactNode },
+  { error: string | null }
+> {
+  state = { error: null };
+  static getDerivedStateFromError(error: unknown) {
+    return { error: error instanceof Error ? error.message : "Ошибка отображения" };
+  }
+  render() {
+    if (this.state.error) return <section className="panel"><h2>Не удалось открыть AI Assistant</h2><p>{this.state.error}</p><Button onClick={() => this.setState({ error: null })}>Повторить</Button></section>;
+    return this.props.children;
+  }
+}
+function AssistantWorkspace({ mode }: { mode: "assistant" | "settings" }) {
+  const status = useAgentResource<AssistantState>("/api/intelligence/assistant", true, 10000);
+  const [provider, setProvider] = useState("openai"),
+    [model, setModel] = useState("gpt-4o-mini"),
+    [apiKey, setApiKey] = useState(""),
+    [telegramToken, setTelegramToken] = useState(""),
+    [spend, setSpend] = useState("5"),
+    [dailyLimit, setDailyLimit] = useState("50"),
+    [saving, setSaving] = useState(false),
+    [notice, setNotice] = useState(""),
+    [pairCode, setPairCode] = useState(""),
+    [message, setMessage] = useState(""),
+    [chatBusy, setChatBusy] = useState(false);
+  const [dialog, setDialog] = useState<{ role: "user" | "assistant"; text: string }[]>([]);
+  const current = status.value;
+  useEffect(() => {
+    if (!current) return;
+    setProvider(current.provider);
+    setModel(current.model);
+    setSpend(String(current.spendLimitUsd));
+    setDailyLimit(String(current.dailyRequestLimit));
+  }, [current?.provider, current?.model, current?.spendLimitUsd, current?.dailyRequestLimit]);
+  async function sendJson(path: string, body: object) {
+    const response = await fetch(path, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(30000) });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.message || "Не удалось выполнить запрос.");
+    return data;
+  }
+  if (mode === "assistant") return (
+    <section className="panel assistant-panel">
+      <div className="panel-heading"><div><h2>RITM Assistant</h2><p>Задавайте вопросы о производстве обычным языком.</p></div><Badge tone={current?.llmConfigured ? "success" : "neutral"}>{current?.llmConfigured ? `Модель · ${current.model}` : "Команды RITM без модели"}</Badge></div>
+      {status.error && <Notice tone="warning">{status.error}</Notice>}
+      <div className="assistant-examples">{["Как дела на производстве сегодня?", "Кто сколько напечатал?", "Что по порезке у Лукмана?", "Сколько осталось печатать?", "Какие ошибки сейчас есть?", "Проверь таблицы"].map((sample) => <button key={sample} type="button" onClick={() => setMessage(sample)}>{sample}</button>)}</div>
+      <div className="assistant-dialog" aria-live="polite">{dialog.length ? dialog.map((item, i) => <div className={`assistant-message ${item.role}`} key={i}>{item.text}</div>) : <p>Быстрые запросы выполняются штатными инструментами. Если данных нет или они устарели, помощник сообщит об этом.</p>}</div>
+      <form className="assistant-input" onSubmit={async (event) => { event.preventDefault(); const question = message.trim(); if (!question || chatBusy) return; setChatBusy(true); setMessage(""); setDialog((items) => [...items, { role: "user", text: question }]); try { const result = await sendJson("/api/intelligence/assistant/chat", { message: question }); setDialog((items) => [...items, { role: "assistant", text: result.text }]); } catch (error) { setDialog((items) => [...items, { role: "assistant", text: error instanceof Error ? error.message : "Ошибка запроса" }]); } finally { setChatBusy(false); } }}>
+        <textarea value={message} onChange={(event) => setMessage(event.target.value)} maxLength={1000} placeholder="Например: сколько осталось печатать по артикулу…" aria-label="Сообщение RITM Assistant" />
+        <Button kind="primary" disabled={chatBusy || !message.trim()}>{chatBusy ? "Отвечаю…" : "Отправить"}</Button>
+      </form>
+      <p className="panel-note">Запрос «исправь» только подготовит предложение и покажет точный адрес. Запись Google Sheets через Telegram выключена.</p>
+    </section>
+  );
+  return (
+    <section className="assistant-settings">
+      <section className="panel"><div className="panel-heading"><div><h2>AI Assistant · настройки</h2><p>Секреты передаются только локальному агенту и хранятся с защитой Windows DPAPI.</p></div><Badge tone={current ? "success" : "warning"}>{current ? "Агент доступен" : "Нет соединения"}</Badge></div>
+        {status.error && <Notice tone="warning">{status.error}</Notice>}
+        <form className="assistant-settings-grid" onSubmit={async (event) => { event.preventDefault(); setSaving(true); setNotice(""); try { await sendJson("/api/intelligence/assistant/configure", { provider, model: model.trim(), spendLimitUsd: Number(spend), dailyRequestLimit: Number(dailyLimit), ...(apiKey ? { apiKey } : {}), ...(telegramToken ? { telegramToken } : {}) }); setApiKey(""); setTelegramToken(""); setNotice("Настройки сохранены на этом компьютере."); await status.reload(); } catch (error) { setNotice(error instanceof Error ? error.message : "Не удалось сохранить настройки."); } finally { setSaving(false); } }}>
+          <Field label="Провайдер"><select value={provider} onChange={(event) => { const next = event.target.value; setProvider(next); setModel(next === "anthropic" ? "claude-sonnet-4-6" : "gpt-4o-mini"); setApiKey(""); }}><option value="openai">OpenAI API</option><option value="anthropic">Anthropic API</option></select></Field>
+          <Field label="Модель"><select value={model} onChange={(event) => setModel(event.target.value)}>{provider === "anthropic" ? <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option> : <><option value="gpt-4o-mini">GPT-4o mini</option><option value="gpt-4.1-mini">GPT-4.1 mini</option><option value="gpt-5-mini">GPT-5 mini</option></>}</select></Field>
+          <Field label={current?.llmConfigured && current.provider === provider ? "Новый API-ключ (пусто — оставить текущий)" : `API-ключ ${provider === "anthropic" ? "Anthropic" : "OpenAI"}`}><input type="password" autoComplete="new-password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} maxLength={300} /></Field>
+          <Field label={current?.telegramConfigured ? "Новый токен Telegram (пусто — оставить текущий)" : "Токен бота Telegram"}><input type="password" autoComplete="new-password" value={telegramToken} onChange={(event) => setTelegramToken(event.target.value)} maxLength={200} /></Field>
+          <Field label="Бюджетный порог, USD/месяц"><input type="number" min="0.1" max="1000" step="0.1" value={spend} onChange={(event) => setSpend(event.target.value)} /></Field>
+          <Field label="Жёсткий лимит запросов модели в день"><input type="number" min="1" max="500" step="1" value={dailyLimit} onChange={(event) => setDailyLimit(event.target.value)} /></Field>
+          <div className="assistant-settings-actions"><Button type="submit" kind="primary" disabled={saving}>{saving ? "Сохраняю…" : "Сохранить настройки"}</Button>{notice && <span role="status">{notice}</span>}</div>
+        </form>
+        <p className="panel-note">Текущая версия ограничивает число запросов и длину ответов. Фактические расходы в USD сверяйте в кабинете провайдера: тарифы моделей могут меняться.</p>
+        <p className="panel-note">Учтённый расход в этом месяце: ${current?.monthlyUsageUsd?.toFixed(4) || "0.0000"} · запросов сегодня: {current?.dailyRequests || 0} из {current?.dailyRequestLimit || 50}.</p>
+      </section>
+      <section className="panel"><div className="panel-heading"><div><h3>Привязка личного Telegram</h3><p>Доступ получит только личный чат, привязанный одноразовым кодом.</p></div><Badge tone={current?.telegramConnected ? "success" : "warning"}>{!current?.telegramConfigured ? "Токен не задан" : current.telegramConnected ? `Подключён${current.telegramBotName ? ` · @${current.telegramBotName}` : ""}` : "Нет соединения"}</Badge></div>
+        {current?.owner && <p>Telegram user ID: <strong>{current.owner.userId}</strong> · привязан {timeLabel(current.owner.boundAt)}</p>}
+        {current?.telegramLastError && <Notice tone="warning">{current.telegramLastError}</Notice>}
+        <div className="assistant-settings-actions"><Button onClick={async () => { setNotice(""); try { const result = await sendJson("/api/intelligence/assistant/pair", {}); setPairCode(result.code); } catch (error) { setNotice(error instanceof Error ? error.message : "Ошибка создания кода"); } }}>Создать код привязки</Button>{pairCode && <strong className="assistant-pair-code">{pairCode} · действует 10 минут. Отправьте боту /start {pairCode}</strong>}<Button onClick={async () => { setNotice(""); try { await sendJson("/api/intelligence/assistant/test-telegram", {}); setNotice("Тестовое сообщение отправлено в привязанный личный чат."); } catch (error) { setNotice(error instanceof Error ? error.message : "Ошибка отправки"); } }}>Отправить тест</Button>{notice && <span role="status">{notice}</span>}</div>
+        <Notice tone="warning">{current?.repairApprovalNote || "Подтверждение записей с телефона выключено."}</Notice>
+      </section>
+      <section className="panel"><div className="panel-heading"><div><h3>Последние уведомления Telegram</h3><p>История доставки из локального журнала RITM.</p></div></div>{current?.notificationHistory?.length ? <DataTable label="Уведомления Telegram" rows={current.notificationHistory} rowKey={(item) => String(item.id)} columns={[{ id: "at", label: "Время", render: (item) => timeLabel(item.at) }, { id: "type", label: "Состояние", render: (item) => eventNames[item.type] || item.type }, { id: "message", label: "Сведения", render: (item) => item.message }]} /> : <Empty title="Уведомлений пока нет">После подключения здесь появятся последние результаты доставки.</Empty>}</section>
+      <section className="panel"><h3>Последние действия</h3>{current?.recent?.length ? <DataTable label="Аудит AI Assistant" rows={current.recent} rowKey={(item) => String(item.id)} columns={[{ id: "at", label: "Время", render: (item) => timeLabel(item.at) }, { id: "channel", label: "Канал", render: (item) => item.channel === "telegram" ? "Telegram" : "AI Center" }, { id: "event", label: "Действие", render: (item) => item.tool || item.event }, { id: "outcome", label: "Результат", render: (item) => item.outcome }]} /> : <Empty title="История пока пуста">Секреты и тексты сообщений в журнал не записываются.</Empty>}</section>
+    </section>
+  );
+}
 export function AICenter() {
   const [view, setView] = useState<View>("doctor");
   const [department, setDepartment] = useState(""),
@@ -224,7 +315,9 @@ export function AICenter() {
           <Bot size={23} />
           <div>
             <strong>RITM Intelligence</strong>
-            <small>Контроль таблиц · уведомления · заявки на исправление</small>
+            <small>
+              Контроль таблиц · проблемы · подтверждённые исправления
+            </small>
           </div>
         </div>
         <div className="ai-toolbar-actions">
@@ -721,35 +814,13 @@ export function AICenter() {
               )}
             </section>
           )}
-          {view === "chat" && (
-            <section className="panel">
-              <h2>AI-чат</h2>
-              <Notice>
-                Не настроено. Аналитический чат будет подключён на этапе 3 к
-                проверенным данным и выбранной модели.
-              </Notice>
-              <Field label="Вопрос руководителя">
-                <textarea
-                  className="resize-none"
-                  disabled
-                  placeholder="Почему снизилась производительность сборки?"
-                  style={{ resize: "none" }}
-                />
-              </Field>
-              <Button kind="primary" disabled>
-                Отправить вопрос
-              </Button>
-              <p className="panel-note">
-                В первом этапе мониторинг работает обычным кодом и не вызывает
-                AI API. Причины снижения KPI без достаточных данных не
-                формируются.
-              </p>
-            </section>
-          )}
+          {view === "assistant" && <AssistantErrorBoundary><AssistantWorkspace mode="assistant" /></AssistantErrorBoundary>}
           {view === "settings" && (
+            <AssistantErrorBoundary><>
+            <AssistantWorkspace mode="settings" />
             <section className="panel">
               <div className="panel-heading">
-                <h2>Настройки · только просмотр</h2>
+                <h2>Состояние агента</h2>
                 <Badge>
                   {state.config.deployment === "local"
                     ? "Локальный агент"
@@ -876,6 +947,7 @@ export function AICenter() {
                 </article>
               ))}
             </section>
+            </></AssistantErrorBoundary>
           )}
         </>
       )}

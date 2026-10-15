@@ -36,6 +36,8 @@ export interface Roll {
   area: number;
   site: string;
   source: string;
+  sourceId?: string;
+  sheetId?: number;
 }
 export interface Stock {
   article: string;
@@ -204,7 +206,10 @@ export function validateSupply(
     errors.ready = "Готовность должна быть не позже прибытия.";
   const seen = new Set<string>();
   for (const raw of text.trim().split(/\r?\n/)) {
-    const parts = raw.trim().split(/[;\t]+|\s+(?=\d+\s*$)/);
+    // Treat the optional spaces around a semicolon as part of one delimiter.
+    // Splitting `SKU; 170` on `;` and then again on the following space leaves
+    // an empty quantity field, which made valid pasted and imported rows fail.
+    const parts = raw.trim().split(/\s*[;\t]\s*|\s+(?=\d+\s*$)/);
     const article = parts[0]?.trim().toUpperCase();
     const plan = Number(parts[1]?.replace(/\s/g, ""));
     if (

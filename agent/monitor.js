@@ -156,16 +156,36 @@ export class Monitor {
   constructor(
     store,
     config,
-    { fetcher = fetch, loaders = {}, now = () => new Date() } = {},
+    {
+      fetcher = fetch,
+      loaders = {},
+      googleReader = null,
+      now = () => new Date(),
+    } = {},
   ) {
     this.store = store;
     this.config = config;
     this.fetcher = fetcher;
     this.loaders = loaders;
+    this.googleReader = googleReader;
     this.now = now;
     this.busy = false;
+    this.sourceQueues = new Map();
   }
   async source(source, signal) {
+    const previous = this.sourceQueues.get(source.id) || Promise.resolve();
+    const current = previous
+      .catch(() => {})
+      .then(() => this.performSource(source, signal));
+    this.sourceQueues.set(source.id, current);
+    try {
+      return await current;
+    } finally {
+      if (this.sourceQueues.get(source.id) === current)
+        this.sourceQueues.delete(source.id);
+    }
+  }
+  async performSource(source, signal) {
     const at = this.now().toISOString(),
       start = performance.now();
     const fetcher = retryingFetch(this.fetcher, this.config, signal);
@@ -174,6 +194,11 @@ export class Monitor {
         source,
         fetcher,
         this.now(),
+        {
+          printingAdditionalSheets:
+            this.store.meta("rollPrintingAdditionalSheets") || [],
+          googleReader: this.googleReader,
+        },
       );
       const previous = this.store.getSnapshot(source.id);
       const unexpectedEmpty =
@@ -201,8 +226,14 @@ export class Monitor {
         verified: freshness.active,
         at,
       });
-      // A quarantined partial result is evidence, not a complete KPI snapshot.
-      if (!findings.length) this.store.snapshot(source.id, value, at);
+      // Printing diagnostics can exclude an invalid journal row while the
+      // complete read still contains a fresh, explicitly partial snapshot.
+      // Other adapters keep the previous verified snapshot on any finding.
+      if (
+        !unexpectedEmpty &&
+        (!findings.length || source.adapter === "printing")
+      )
+        this.store.snapshot(source.id, value, at);
       this.store.meta(source.id + ":failures", 0);
       this.store.check(
         source.id,

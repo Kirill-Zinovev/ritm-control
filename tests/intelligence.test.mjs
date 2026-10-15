@@ -28,7 +28,7 @@ import {
   issueFinding,
   retryingFetch,
 } from "../agent/monitor.js";
-import { inspectGeneric, validateApi } from "../agent/adapters.js";
+import { inspectGeneric, loadSource, validateApi } from "../agent/adapters.js";
 import { createAgentServer } from "../agent/server.js";
 import { flushTelegram } from "../agent/telegram.js";
 
@@ -311,6 +311,68 @@ test("source failures preserve old snapshots and do not close existing data inci
     assert.equal(
       store.overview().checks.find((x) => x.kind === "source").status,
       "error",
+    );
+  } finally {
+    store.close();
+  }
+});
+test("printing reads use the configured read-only Google token for approved CSV exports", async () => {
+  const source = DEFAULT_SOURCES.find((item) => item.adapter === "printing");
+  let observed;
+  await assert.rejects(
+    loadSource(
+      source,
+      async (url, init) => {
+        observed = {
+          url,
+          authorization: init.headers.get("authorization"),
+        };
+        throw new Error("stop after request inspection");
+      },
+      now,
+      { googleReader: { accessToken: async () => "read-only-test-token" } },
+    ),
+    /stop after request inspection/,
+  );
+  assert.equal(
+    observed.authorization,
+    "Bearer read-only-test-token",
+  );
+  assert.match(observed.url, /^https:\/\/docs\.google\.com\/spreadsheets\/d\//);
+});
+test("fresh partial printing reads replace stale snapshots while preserving the issue warning", async () => {
+  const store = new IncidentStore(":memory:"),
+    source = DEFAULT_SOURCES.find((item) => item.adapter === "printing"),
+    c = config();
+  c.sources = [structuredClone(source)];
+  const previous = {
+      ok: true,
+      schemaVersion: 2,
+      updatedAt: "2026-10-08T08:00:00.000Z",
+      events: [{ id: "old" }],
+      cutEvents: [],
+      supplies: [],
+      issues: [],
+      sheets: [],
+    },
+    current = {
+      ...previous,
+      updatedAt: now.toISOString(),
+      events: [{ id: "fresh" }],
+      issues: [{ code: "invalid_record", message: "Неизвестный сотрудник" }],
+      quality: { status: "partial", invalidRecords: 1 },
+    };
+  try {
+    store.snapshot(source.id, previous, "2026-10-08T08:00:00.000Z");
+    await new Monitor(store, c, {
+      now: () => now,
+      loaders: { printing: async () => current },
+    }).source(source);
+    assert.equal(store.getSnapshot(source.id).value.updatedAt, now.toISOString());
+    assert.equal(store.getSnapshot(source.id).value.issues.length, 1);
+    assert.equal(
+      store.overview().checks.find((check) => check.id === source.id).status,
+      "partial",
     );
   } finally {
     store.close();
@@ -665,6 +727,55 @@ test("protected API returns no fabricated KPI before the first successful snapsh
     );
     assert.equal(r.status, 503);
     assert.equal((await r.json()).error, "no_verified_snapshot");
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+    store.close();
+  }
+});
+test("printing refresh is owner-authenticated and only forced by refresh=1", async () => {
+  const store = new IncidentStore(":memory:"),
+    c = config(),
+    source = DEFAULT_SOURCES.find((item) => item.adapter === "printing");
+  c.sources = [structuredClone(source)];
+  const snapshot = {
+    ok: true,
+    schemaVersion: 2,
+    updatedAt: now.toISOString(),
+    events: [],
+    cutEvents: [],
+    supplies: [],
+    issues: [],
+    sheets: [],
+  };
+  store.snapshot(source.id, snapshot, now.toISOString());
+  store.check(
+    source.id,
+    { status: "partial", kind: "source" },
+    now.toISOString(),
+  );
+  let refreshes = 0;
+  const server = createAgentServer(store, c, {
+    now: () => now.getTime(),
+    refreshPrinting: async () => {
+      refreshes++;
+      return { ok: true };
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = "http://127.0.0.1:" + server.address().port,
+    headers = { authorization: "Bearer " + c.ownerToken };
+  c.allowedOrigins.push(base);
+  try {
+    const cachedResponse = await fetch(base + "/api/printing", { headers });
+    assert.equal(cachedResponse.status, 200);
+    const cached = await cachedResponse.json();
+    assert.equal(cached.stale, false);
+    assert.equal(cached.sourceStatus, "partial");
+    assert.equal(refreshes, 0);
+    const response = await fetch(base + "/api/printing?refresh=1", { headers });
+    assert.equal(response.status, 200);
+    assert.equal(refreshes, 1);
   } finally {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));

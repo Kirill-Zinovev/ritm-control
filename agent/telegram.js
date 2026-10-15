@@ -1,7 +1,7 @@
 export async function flushTelegram(
   store,
   config,
-  { fetcher = fetch, now = new Date(), signal } = {},
+  { fetcher = fetch, now = new Date(), signal, telegramAssistant = null } = {},
 ) {
   if (!config.enabled || !config.token || !config.chatId)
     return { status: "not_configured" };
@@ -28,82 +28,56 @@ export async function flushTelegram(
         .run(entry.id);
       continue;
     }
-    const text = [
-      "⚠️ RITM AI — обнаружена проблема",
-      "Отдел: " + incident.department,
-      "Источник: " + incident.sourceName,
-      incident.sheet ? "Лист: " + incident.sheet : "",
-      incident.cell ? "Ячейка: " + incident.cell : "",
-      "Проблема: " + incident.title,
-      "Обоснование: " + incident.cause,
-      "Действие: " + (incident.recommendation || incident.action),
-      "ID инцидента: " + incident.id,
-    ]
-      .filter(Boolean)
-      .join("\n")
-      .slice(0, 3500);
     store.db
       .prepare(
         "UPDATE outbox SET status='sending',attempts=attempts+1 WHERE id=?",
       )
       .run(entry.id);
     try {
-      const response = await fetcher(
-        "https://api.telegram.org/bot" + config.token + "/sendMessage",
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            chat_id: config.chatId,
-            text,
-            disable_web_page_preview: true,
-            ...(incident.sourceUrl?.startsWith("https://")
-              ? {
-                  reply_markup: {
-                    inline_keyboard: [
-                      [{ text: "Открыть источник", url: incident.sourceUrl }],
-                    ],
-                  },
-                }
-              : {}),
-          }),
-          signal: AbortSignal.any(
-            [AbortSignal.timeout(15000), signal].filter(Boolean),
-          ),
-        },
-      );
-      const result = await response.json();
-      if (response.ok && result.ok) {
+      let delivered = false;
+      if (telegramAssistant?.sendIncident) {
+        delivered = await telegramAssistant.sendIncident(incident);
+      } else {
+        const response = await fetcher(
+          "https://api.telegram.org/bot" + config.token + "/sendMessage",
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              chat_id: config.chatId,
+              text: [
+                "⚠️ RITM: требуется проверка",
+                incident.title,
+                `Источник: ${incident.sourceName}`,
+                `Ячейка: ${incident.sheet || "лист"}!${incident.cell || "не указана"}`,
+                "Запись не выполняется автоматически.",
+              ].filter(Boolean).join("\n").slice(0, 1800),
+              disable_web_page_preview: true,
+              ...(incident.sourceUrl?.startsWith("https://")
+                ? { reply_markup: { inline_keyboard: [[{ text: "Открыть источник", url: incident.sourceUrl }]] } }
+                : {}),
+            }),
+            signal: AbortSignal.any([AbortSignal.timeout(15000), signal].filter(Boolean)),
+          },
+        );
+        const result = await response.json();
+        delivered = response.ok && result.ok;
+        if (!delivered) {
+          const retry = response.status === 429 || response.status >= 500;
+          const attempts = entry.attempts + 1;
+          const seconds = Math.min(Math.max(Number(result.parameters?.retry_after) || 60 * 2 ** attempts, 30), 86400);
+          store.db.prepare("UPDATE outbox SET status=?,next_at=? WHERE id=?").run(retry && attempts < 5 ? "pending" : "failed", new Date(now.getTime() + seconds * 1000).toISOString(), entry.id);
+          store.log("notification_failed", "Telegram отклонил уведомление: HTTP " + response.status + ". Проверки продолжаются.", incident.id);
+          continue;
+        }
+      }
+      if (delivered) {
         store.db
           .prepare("UPDATE outbox SET status='sent' WHERE id=?")
           .run(entry.id);
         store.log(
           "notification_sent",
           "Уведомление владельцу отправлено",
-          incident.id,
-        );
-      } else {
-        const retry = response.status === 429 || response.status >= 500;
-        const attempts = entry.attempts + 1;
-        const seconds = Math.min(
-          Math.max(
-            Number(result.parameters?.retry_after) || 60 * 2 ** attempts,
-            30,
-          ),
-          86400,
-        );
-        store.db
-          .prepare("UPDATE outbox SET status=?,next_at=? WHERE id=?")
-          .run(
-            retry && attempts < 5 ? "pending" : "failed",
-            new Date(now.getTime() + seconds * 1000).toISOString(),
-            entry.id,
-          );
-        store.log(
-          "notification_failed",
-          "Telegram отклонил уведомление: HTTP " +
-            response.status +
-            ". Проверки продолжаются.",
           incident.id,
         );
       }

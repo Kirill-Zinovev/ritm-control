@@ -6,6 +6,10 @@ $ownerSecret = Import-Clixml -LiteralPath (Join-Path $resolvedDataDir 'owner.sec
 $ownerHeaders = @{ Authorization = 'Bearer ' + [PSCredential]::new('owner', $ownerSecret.OwnerToken).GetNetworkCredential().Password }
 $nodeExe = (Get-Command node -ErrorAction Stop).Source
 $databaseFile = Join-Path $resolvedDataDir 'intelligence.sqlite'
+function ConvertTo-UtcDateTime($value) {
+  if ($value -is [DateTime]) { return $value.ToUniversalTime() }
+  return [DateTimeOffset]::Parse([string]$value).UtcDateTime
+}
 try {
   # Exact authenticated main API and its Windows listener identify the process. Test port 4319 is never targeted.
   $state = Invoke-RestMethod -Uri 'http://localhost:4318/api/intelligence/status' -Headers $ownerHeaders -TimeoutSec 10
@@ -55,7 +59,7 @@ try {
     try {
       $doctorState = Invoke-RestMethod -Uri 'http://localhost:4318/api/intelligence/doctor' -Headers $ownerHeaders -TimeoutSec 5
       $metrics = @($doctorState.formulaIntelligence.metrics)
-      $freshMetrics = @($metrics | Where-Object { $_.at -and [DateTime]::Parse($_.at).ToUniversalTime() -ge $restartStarted })
+      $freshMetrics = @($metrics | Where-Object { $_.at -and (ConvertTo-UtcDateTime $_.at) -ge $restartStarted })
       $googleDocuments = @($doctorState.documents | Where-Object { !$_.demonstration })
       $deepRequests = 0
       $deepRetries = 0
@@ -70,23 +74,23 @@ try {
           if ([int]$status.Value -gt 0 -and $status.Name -notmatch '^2\d{2}$') { $badDeepStatus = $true }
         }
       }
-      $deepFinished = !$doctorState.running -and $doctorState.lastCheck -and [DateTime]::Parse($doctorState.lastCheck).ToUniversalTime() -ge $restartStarted
-      $deepVerified = $deepFinished -and $doctorState.connection -eq 'verified' -and $googleDocuments.Count -eq 3 -and $metrics.Count -eq 7 -and $freshMetrics.Count -eq 7 -and !@($metrics | Where-Object { $_.stale -or !$_.fullSheetRead }).Count -and !$badDeepStatus -and $deepRetries -eq 0
+      $deepFinished = !$doctorState.running -and $doctorState.lastCheck -and (ConvertTo-UtcDateTime $doctorState.lastCheck) -ge $restartStarted
+      $deepVerified = $deepFinished -and $doctorState.connection -eq 'verified' -and $googleDocuments.Count -eq 4 -and $metrics.Count -eq 10 -and $freshMetrics.Count -eq 10 -and !@($metrics | Where-Object { $_.stale -or !$_.fullSheetRead }).Count -and !$badDeepStatus -and $deepRetries -eq 0
       $fast = $doctorState.formulaIntelligence.fastCheck
-      $fastFinished = $fast -and !$doctorState.fastRunning -and $fast.at -and [DateTime]::Parse($fast.at).ToUniversalTime() -ge $restartStarted
+      $fastFinished = $fast -and !$doctorState.fastRunning -and $fast.at -and (ConvertTo-UtcDateTime $fast.at) -ge $restartStarted
       $fastSheets = @($fast.documents | ForEach-Object { $_.sheets } | Where-Object { $_ })
       $badFastSheets = @($fastSheets | Where-Object { $_.status -ne 'ok' -or $_.errorCode })
-      $fastVerified = $fastFinished -and $fast.status -eq 'ok' -and $fast.readRequests -gt 0 -and $fast.checkedCells -gt 0 -and $fast.retries -eq 0 -and $fastSheets.Count -gt 0 -and !$badFastSheets.Count
-      if ($deepFinished -and !$deepVerified) { $verificationFailure = 'Fresh seven-sheet scan reported incomplete data or a Google API error; no further setup changes were made'; break }
+      $fastVerified = $fastFinished -and $fast.status -eq 'ok' -and $fast.readRequests -gt 0 -and $fast.checkedCells -gt 0 -and $fast.retries -eq 0 -and $fastSheets.Count -eq 10 -and !$badFastSheets.Count
+      if ($deepFinished -and !$deepVerified) { $verificationFailure = 'Fresh ten-sheet scan reported incomplete data or a Google API error; no further setup changes were made'; break }
       if ($fastFinished -and !$fastVerified) { $verificationFailure = 'Fresh fast scan reported incomplete data or a Google API retry/error; no further setup changes were made'; break }
       if ($deepVerified -and $fastVerified) { $verified = $true; break }
     } catch {}
     Start-Sleep -Seconds 2
   }
   if ($verificationFailure) { throw $verificationFailure }
-  if (!$verified) { throw 'New agent did not finish verified seven-sheet scan; check private launcher log' }
+  if (!$verified) { throw 'New agent did not finish verified ten-sheet scan; check private launcher log' }
   Write-Output ('Быстрая проверка: {0} мс; Google GET: {1}; ячеек: {2}; повторов API: {3}' -f $fast.durationMs,$fast.readRequests,$fast.checkedCells,$fast.retries)
-  Write-Output ('Глубокая проверка: {0} мс по трём документам; Google GET: {1}; повторов API: {2}; листов: 7' -f $deepDurationMs,$deepRequests,$deepRetries)
+  Write-Output ('Глубокая проверка: {0} мс по четырём документам; Google GET: {1}; повторов API: {2}; листов: 10' -f $deepDurationMs,$deepRequests,$deepRetries)
   $doctorState.formulaIntelligence.metrics | Select-Object document,sheet,formulasRead,protectedCells,checkedCells,unprotectedFormulas,durationMs,readRequests
   $updatedStatus = Invoke-RestMethod -Uri 'http://localhost:4318/api/intelligence/status' -Headers $ownerHeaders -TimeoutSec 10
   & $nodeExe $maintenanceFile verify $databaseFile $backupFile ([int]$updatedStatus.agent.pid)

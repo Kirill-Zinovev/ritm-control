@@ -7,6 +7,73 @@ import { IncidentStore } from "../agent/store.js";
 const document = structuredClone(
   PRODUCTION_DOCTOR_DOCUMENTS.find((item) => item.id === "doctor-shop-one"),
 );
+
+function duplicateLookupFixture({ restored = false, approximate = false, wildcard = false, start = 1 } = {}) {
+  const key = wildcard ? "FT*" : "FT0001.A0002(OZ)", entries = {};
+  for (const row of [795, 796, 797, 798, 799, 800, 801, 802, 1195, 1196, 1197, 1198, 1199, 1200, 1201]) {
+    entries[`A${row}`] = { effectiveValue: { stringValue: key } };
+    entries[`AR${row}`] = { effectiveValue: { numberValue: 10 } };
+    if (row !== 1201) entries[`AN${row}`] = { effectiveValue: { stringValue: "Оператор" } };
+    entries[`B${row}`] = { userEnteredValue: { formulaValue: `=VLOOKUP(A:A;'${document.sheets[1].name}'!A${start}:P149;16;${approximate ? 1 : 0})` }, effectiveValue: { stringValue: restored ? "Фигурки" : "" } };
+    entries[`C${row}`] = { userEnteredValue: { formulaValue: "=VLOOKUP(B:B;'Нормы'!A:C;3;0)" }, effectiveValue: restored ? { numberValue: 2 } : { errorValue: { type: "N_A" } } };
+    entries[`AP${row}`] = { userEnteredValue: { formulaValue: `=IF(AN${row}>"";AR${row}/C${row};"")` }, effectiveValue: row === 1201 ? { stringValue: "" } : restored ? { numberValue: 5 } : { errorValue: { type: "N_A" } } };
+  }
+  return { sheets: [sheet(document.sheets[0].gid, document.sheets[0].name, 1201, 47, entries),
+    sheet(document.sheets[1].gid, document.sheets[1].name, 149, 17, {
+      A99: { effectiveValue: { stringValue: key } }, A149: { effectiveValue: { stringValue: key } },
+      ...(restored ? { P99: { userEnteredValue: { stringValue: "Фигурки" }, effectiveValue: { stringValue: "Фигурки" } } } : {}),
+      P149: { userEnteredValue: { stringValue: "Фигурки" }, effectiveValue: { stringValue: "Фигурки" } },
+    })] };
+}
+
+test("exact VLOOKUP duplicate selects P99 and groups 14 AP errors without borrowing P149 history", () => {
+  const damaged = duplicateLookupFixture(), at = new Date("2026-10-12T14:00:00Z"), result = diagnoseDataQuality(document, damaged, null, at);
+  assert.equal(result.complete, true);
+  assert.equal(result.findings.length, 1);
+  const incident = result.findings[0];
+  assert.equal(incident.cell, "P99");
+  assert.equal(incident.sourceState, "missing");
+  assert.equal(incident.recoveryCandidate, null);
+  assert.equal(incident.errorCells.filter((cell) => cell.cell.startsWith("AP")).length, 14);
+  assert.ok(!incident.affectedCells.some((cell) => cell.cell === "AP1201"));
+  assert.deepEqual(incident.lookupEvidence[0].matchingRows, [99, 149]);
+  assert.equal(result.snapshot.cells.P99.current, null);
+  assert.equal(result.snapshot.cells.P149.current.stringValue, "Фигурки");
+  const store = new IncidentStore(":memory:");
+  try {
+    const scope = "doctor:data-quality:" + document.id;
+    store.reconcile(scope, result.findings, { verified: true, at: at.toISOString() });
+    const id = store.listIncidents({ status: "active" }).rows[0].id;
+    for (const offset of [1, 2]) {
+      const checked = diagnoseDataQuality(document, duplicateLookupFixture({ restored: true }), result.snapshot, new Date(at.getTime() + offset * 1000));
+      assert.equal(checked.complete, true); assert.equal(checked.findings.length, 0);
+      store.reconcile(scope, checked.findings, { verified: checked.complete });
+      assert.equal(store.getIncident(id).monitorStatus, "resolved");
+    }
+  } finally { store.close(); }
+});
+
+test("approximate and wildcard VLOOKUP never invent a duplicate source row", () => {
+  for (const options of [{ approximate: true }, { wildcard: true }]) {
+    const result = diagnoseDataQuality(document, duplicateLookupFixture(options));
+    assert.equal(result.findings.length, 0);
+    assert.equal(result.complete, false);
+  }
+});
+
+test("dispatcher counters apply the same document, sheet, priority, type and search filters as rows", () => {
+  const store = new IncidentStore(":memory:"), finding = { kind: "table_doctor", title: "Нет вида", sourceId: "shop", sourceName: "Магазин", sheet: "Каталог", cell: "P99", type: "data_quality_root_cause", severity: "critical", sourceState: "missing", verification: "rule_confirmed", observed: { productKey: "SKU-99" } };
+  try {
+    store.reconcile("test-open", [finding, { ...finding, cell: "P41", sourceId: "other" }]);
+    store.reconcile("test-closed", [{ ...finding, cell: "P54" }]);
+    store.reconcile("test-closed", [], { verified: true });
+    for (const filters of [{ source: "shop" }, { search: "P99" }, { search: "P54" }, { source: "other", sheet: "Каталог", type: "data_quality_root_cause", severity: "critical" }]) {
+      const summary = store.incidentSummary(filters);
+      assert.equal(summary.allProblems, store.listIncidents({ ...filters, status: "active", includeDemonstrations: false }).total);
+      assert.equal(summary.fixed, store.listIncidents({ ...filters, status: "fixed", includeDemonstrations: false }).total);
+    }
+  } finally { store.close(); }
+});
 const formulaSet = (row) => ({
   ["AP" + row]: {
     userEnteredValue: { formulaValue: `=C${row}*1` },
@@ -465,7 +532,7 @@ test("filled sources with errors or unknown results remain open, then resolve af
   }
 });
 
-test("most recently discovered incidents stay above older severe incidents", () => {
+test("older critical incidents stay above newer medium-priority incidents", () => {
   const store = new IncidentStore(":memory:");
   try {
     store.reconcile(
@@ -503,8 +570,8 @@ test("most recently discovered incidents stay above older severe incidents", () 
       { verified: true, at: "2026-10-12T08:00:00.000Z" },
     );
     const rows = store.listIncidents({ status: "active" }).rows;
-    assert.equal(rows[0].title, "Новая проблема");
-    assert.equal(rows[1].title, "Старая критическая проблема");
+    assert.equal(rows[0].title, "Старая критическая проблема");
+    assert.equal(rows[1].title, "Новая проблема");
   } finally {
     store.close();
   }

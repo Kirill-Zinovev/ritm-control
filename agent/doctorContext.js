@@ -19,6 +19,23 @@ const meaningful = (c) =>
     String(value(c)).trim() !== "" &&
     value(c) !== 0 &&
     value(c) !== false);
+function sameRowErrorDependencies(context, row, column, formula) {
+  if (!formula) return [];
+  const columns = new Set(),
+    expression = formula.replace(/"(?:[^"]|"")*"/g, "");
+  for (const match of expression.matchAll(
+    /(^|[^A-Z0-9_!])\$?([A-Z]{1,3})\$?(\d+)(?![A-Z0-9_])/gi,
+  )) {
+    const dependency = match[2].toUpperCase();
+    if (
+      Number(match[3]) === row &&
+      dependency !== column &&
+      context?.cells?.[dependency]?.error
+    )
+      columns.add(dependency);
+  }
+  return [...columns];
+}
 export function rowContext(schema, get, row) {
   const policy = schema.context;
   if (!policy || row < policy.startRow) return null;
@@ -48,6 +65,38 @@ export function errorContext(schema, get, row, column, cell) {
     error = cell.effectiveValue?.errorValue;
   const formula = cell.userEnteredValue?.formulaValue || "";
   if (!error) return { normal: false, context };
+  if (
+    context?.state === "empty" &&
+    schema.context?.ignoreCalculationErrorsWhenInactive === true
+  )
+    return {
+      normal: true,
+      context,
+      expectedNA: error.type === "N_A",
+      reason:
+        "Строка неактивна по настроенному признаку; ошибки расчёта в ней не требуют внимания.",
+    };
+  if (
+    schema.context?.suppressErrorsWithSameRowErrorDependency === true
+  ) {
+    const dependencies = sameRowErrorDependencies(
+      context,
+      row,
+      column,
+      formula,
+    );
+    if (dependencies.length)
+      return {
+        normal: true,
+        context,
+        propagated: true,
+        dependencies,
+        reason:
+          "Ошибка расчёта распространяется из " +
+          dependencies.join(", ") +
+          "; показывается первичная ячейка.",
+      };
+  }
   if (error.type === "REF" && formula.includes("#REF!"))
     return {
       normal: false,
@@ -69,8 +118,22 @@ export function errorContext(schema, get, row, column, cell) {
     return {
       normal: true,
       context,
+      expectedNA: true,
       reason:
         "Пустая производственная строка: формула поиска возвращает ожидаемое #N/A; изменение не требуется.",
+    };
+  if (
+    context?.state === "empty" &&
+    error.type === "N_A" &&
+    policy?.emptyRowPropagatedNAColumns?.includes(column) &&
+    !formula.includes("#REF!")
+  )
+    return {
+      normal: true,
+      context,
+      expectedNA: true,
+      reason:
+        "Пустая производственная строка: #N/A распространяется из зависимости поиска; изменение не требуется.",
     };
   return {
     normal: false,
@@ -127,6 +190,27 @@ export function validateContext(policy, schema) {
     )
       throw new Error("Context requires explicit bounded columns");
   }
+  if (
+    policy.emptyRowPropagatedNAColumns !== undefined &&
+    (!Array.isArray(policy.emptyRowPropagatedNAColumns) ||
+      policy.emptyRowPropagatedNAColumns.some(
+        (col) =>
+          !/^[A-Z]{1,3}$/.test(col) ||
+          !policy.errorColumns.includes(col) ||
+          doctorColumnIndex(col) > doctorColumnIndex(schema.lastColumn),
+      ))
+  )
+    throw new Error("Context propagated N/A columns must be explicitly bounded");
+  if (
+    policy.ignoreCalculationErrorsWhenInactive !== undefined &&
+    typeof policy.ignoreCalculationErrorsWhenInactive !== "boolean"
+  )
+    throw new Error("Context inactive-row error policy must be boolean");
+  if (
+    policy.suppressErrorsWithSameRowErrorDependency !== undefined &&
+    typeof policy.suppressErrorsWithSameRowErrorDependency !== "boolean"
+  )
+    throw new Error("Context propagated-error policy must be boolean");
   if (
     policy.activeColumns.some((col) => !policy.columns.includes(col)) ||
     policy.emptyLookupNAColumns.some(

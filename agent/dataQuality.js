@@ -1,5 +1,6 @@
 import { cellAddress, formulaReferences } from "./formulaReferences.js";
 import { doctorColumnIndex } from "./doctorRegistry.js";
+import { exactVlookupSource } from "./dataQualityLookup.js";
 
 const scalar = (cell) =>
   cell?.effectiveValue?.numberValue ??
@@ -188,8 +189,6 @@ function referencesFor(
       targetView.gid === rule.source.gid &&
       reference.startColumn <= doctorColumnIndex(rule.source.fieldColumn) &&
       reference.endColumn >= doctorColumnIndex(rule.source.fieldColumn) &&
-      reference.startRow === 1 &&
-      reference.endRow === 10000000 &&
       /\b(?:INDEX|MATCH|VLOOKUP|HLOOKUP|XLOOKUP|FILTER|LOOKUP)\s*\(/i.test(
         formula,
       ) &&
@@ -200,7 +199,10 @@ function referencesFor(
           candidate.endColumn >= doctorColumnIndex(rule.source.keyColumn),
       )
     ) {
-      const sourceRow = lookupSourceRow(
+      const exact = /\bVLOOKUP\s*\(/i.test(formula)
+        ? exactVlookupSource(rule, targetView, productionView, productionRow, currentView, formula, reference)
+        : null;
+      const sourceRow = /\bVLOOKUP\s*\(/i.test(formula) ? exact?.row : lookupSourceRow(
         rule,
         targetView,
         productionView,
@@ -210,6 +212,7 @@ function referencesFor(
         references.push({
           view: targetView,
           address: rule.source.fieldColumn + sourceRow,
+          ...(exact ? { lookupEvidence: exact.evidence } : {}),
         });
       continue;
     }
@@ -283,7 +286,8 @@ function traceFormula(
   const nodes = new Map(),
     roots = new Set(),
     pending = [{ view: startView, address: startAddress, depth: 0 }],
-    visited = new Set();
+    visited = new Set(),
+    lookups = [];
   while (pending.length) {
     const current = pending.pop(),
       key = current.view.gid + ":" + current.address;
@@ -321,14 +325,16 @@ function traceFormula(
       productionView,
       productionRow,
       views,
-    ))
+    )) {
+      if (reference.lookupEvidence) lookups.push(reference.lookupEvidence);
       pending.push({
         view: reference.view,
         address: reference.address,
         depth: current.depth + 1,
       });
+    }
   }
-  return { nodes: [...nodes.values()], roots: [...roots] };
+  return { nodes: [...nodes.values()], roots: [...roots], lookups };
 }
 
 function historyEntries(history, address) {
@@ -398,6 +404,14 @@ export function diagnoseDataQuality(
     if (!productionView || !sourceView) {
       complete = false;
       continue;
+    }
+    // Keep every observed catalog value, including duplicate keys. The first
+    // exact lookup may depend on a duplicate that the old tracer skipped.
+    const sourceRows = Math.min(rule.source.maxRows || 3000, sourceView.sheet.properties.gridProperties?.rowCount || 0);
+    for (let row = 1; row <= sourceRows; row++) {
+      const key = scalar(sourceView.cell(rule.source.keyColumn, row));
+      if (typeof key === "string" && key.trim())
+        updateSourceSnapshot(nextSnapshot, rule.source.fieldColumn + row, sourceView.cell(rule.source.fieldColumn, row), at, key);
     }
     const maxRow = Math.min(
       rule.production.maxRows ||
@@ -551,6 +565,7 @@ export function diagnoseDataQuality(
               affectedCells: [],
               errorCells: [],
               dependencyPaths: [],
+              lookupEvidence: trace.lookups,
               recoveryCandidate:
                 sourceState === "missing" &&
                 priorCandidate.status === "candidate"

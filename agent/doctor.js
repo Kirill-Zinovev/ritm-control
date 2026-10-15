@@ -93,6 +93,7 @@ export function inspectDocument(
         business_review: 0,
       },
       expectedNA: 0,
+      propagatedErrors: 0,
     },
     missingSheets = [];
   const schemaImpact = (sheet) =>
@@ -243,7 +244,8 @@ export function inspectDocument(
     const contextErrors = scanContextErrors(schema, sheet, get);
     const handledErrors = new Set();
     for (const observation of contextErrors.filter((x) => x.normal)) {
-      stats.expectedNA++;
+      if (observation.expectedNA) stats.expectedNA++;
+      if (observation.propagated) stats.propagatedErrors++;
       stats.classifications.normal++;
       handledErrors.add(observation.column + observation.row);
     }

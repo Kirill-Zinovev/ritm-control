@@ -4,6 +4,7 @@ import http from "node:http";
 import { IncidentStore } from "../agent/store.js";
 import { FormulaIntelligence } from "../agent/formulaIntelligence.js";
 import { PRODUCTION_DOCTOR_DOCUMENTS } from "../agent/productionRegistry.js";
+import { PRODUCTION_REPAIR_DOCUMENT_IDS } from "../agent/productionRegistry.js";
 import {
   ProductionRepairService,
   ProductionSheetsWriter,
@@ -13,6 +14,7 @@ import {
 } from "../agent/productionRepair.js";
 import { RepairError } from "../agent/testSheetsWriter.js";
 import { createAgentServer } from "../agent/server.js";
+import { gzipSync } from "node:zlib";
 const doc = PRODUCTION_DOCTOR_DOCUMENTS.find(
   (d) => d.documentId === "1YTQQ1Mg9kVv7EOQiN6wOvkvnHvsiXcwbhYOERUPy8rQ",
 );
@@ -214,6 +216,50 @@ const confirm = (p) => ({
   confirmation: p.confirmation,
   exclusiveEditingAcknowledged: true,
 });
+function historicalIncident(h) {
+  h.store.db.prepare("DELETE FROM formula_protected WHERE cell='M11'").run();
+  const row = h.store.db.prepare("SELECT * FROM incidents WHERE id=?").get(h.id), finding = JSON.parse(row.payload);
+  const formula = finding.expected;
+  delete finding.baselineVersion; delete finding.formulaRegionId;
+  finding.type = "formula_history_change"; finding.verification = "needs_review";
+  finding.expected = { candidateFormula: formula, confidence: "unapproved_history" };
+  h.store.db.prepare("UPDATE incidents SET payload=? WHERE id=?").run(JSON.stringify(finding), h.id);
+  const region = "c".repeat(64), version = "d".repeat(64), at = new Date(Date.parse(row.first_seen) - 1000).toISOString(),
+    area = { sourceId: doc.id, gid: tab.gid, sheet: tab.name, cells: [["M11", formula, null]] };
+  h.store.db.prepare("INSERT INTO formula_versions VALUES(?,?,?,?)").run(version, region, at, gzipSync(JSON.stringify(area)));
+  h.store.db.prepare("INSERT INTO formula_regions VALUES(?,?,?,?,?,?)").run(region, doc.id, tab.gid, version, at, JSON.stringify({ current: true }));
+}
+
+test("historical repair requires immutable evidence and one explicit candidate-plus-write approval", async () => {
+  const h = harness();
+  try {
+    historicalIncident(h);
+    await h.service.prepare(h.id);
+    const proposal = h.service.state(h.id).proposals[0];
+    assert.equal(proposal.historyApprovalRequired, true);
+    assert.equal(h.calls, 0);
+    await assert.rejects(h.service.confirm(proposal.id, confirm(proposal)), { code: "history_approval_required" });
+    await h.service.confirm(proposal.id, { ...confirm(proposal), historyCandidateApproved: true });
+    await waitForProposal(h.service, proposal.id, ["verified"]);
+    assert.equal(h.calls, 1);
+    assert.equal(h.store.getIncident(h.id).monitorStatus, "resolved");
+    assert.equal(h.store.db.prepare("SELECT count(*) AS n FROM formula_protected").get().n, 0);
+    const replay = await h.service.confirm(proposal.id, { ...confirm(proposal), historyCandidateApproved: true });
+    assert.equal(replay.replayed, true); assert.equal(h.calls, 1);
+  } finally { h.store.close(); }
+});
+
+test("altered historical candidate cannot use a different immutable formula", async () => {
+  const h = harness();
+  try {
+    historicalIncident(h);
+    const finding = JSON.parse(h.store.db.prepare("SELECT payload FROM incidents WHERE id=?").get(h.id).payload);
+    finding.expected.candidateFormula = "=999";
+    h.store.db.prepare("UPDATE incidents SET payload=? WHERE id=?").run(JSON.stringify(finding), h.id);
+    await assert.rejects(h.service.prepare(h.id), { code: "history_unverified" });
+    assert.equal(h.calls, 0);
+  } finally { h.store.close(); }
+});
 async function waitForProposal(service, id, statuses) {
   for (let attempt = 0; attempt < 200; attempt++) {
     const proposal = service.queueState().items.find((item) => item.id === id);
@@ -276,6 +322,107 @@ test("individually confirmed repairs queue sequentially without a global busy lo
   h.store.close();
 });
 
+function activeSourceRecovery(h) {
+  h.store.db.prepare("INSERT INTO source_recovery_operations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+    .run("source-in-flight", "fixture-request", "fixture-source-incident", 1, "checking", "2026-10-10T09:00:00Z", "2026-10-10T09:00:00Z", "test-owner", "{}", "{}", "{}", null, null, null);
+  h.service.queuePollMs = 10;
+}
+async function waitForWaiting(h, id) {
+  for (let n = 0; n < 200; n++) {
+    const row = h.store.db.prepare("SELECT status,result FROM test_repair_proposals WHERE id=?").get(id);
+    if (row.status === "queued" && JSON.parse(row.result || "{}").phase === "waiting_before_write") return;
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  assert.fail("Confirmed formula did not wait safely before writing");
+}
+test("formula waits for source recovery, preserves consent and executes once after verification", async () => {
+  const h = harness(), first = (await h.service.prepare(h.id)).proposals[0],
+    untouched = (await h.service.prepare(h.addIncident("N11", "=E11/F11"))).proposals[0];
+  activeSourceRecovery(h);
+  await h.service.confirm(first.id, confirm(first));
+  await waitForWaiting(h, first.id);
+  assert.equal(h.calls, 0);
+  await h.service.confirm(first.id, confirm(first));
+  assert.equal(h.calls, 0);
+  h.store.db.prepare("UPDATE source_recovery_operations SET status='verified'").run();
+  await waitForProposal(h.service, first.id, ["verified"]);
+  assert.equal(h.calls, 1);
+  assert.equal(h.service.state(untouched.incidentId).proposals[0].status, "pending");
+  assert.equal(h.service.state(h.id).proposals[0].events.filter((event) => event.type === "repair_waiting").length, 1);
+  await h.service.confirm(first.id, confirm(first));
+  assert.equal(h.calls, 1);
+  h.store.close();
+});
+test("source recovery starting during formula preflight defers without failure or write", async () => {
+  const h = harness(), proposal = (await h.service.prepare(h.id)).proposals[0];
+  let started = false;
+  h.writer.verifyIsolation = async () => {
+    if (!started) { started = true; activeSourceRecovery(h); }
+    return {};
+  };
+  await h.service.confirm(proposal.id, confirm(proposal));
+  await waitForWaiting(h, proposal.id);
+  assert.equal(h.calls, 0);
+  assert.ok(!h.service.state(h.id).proposals[0].events.some((event) => event.type === "repair_postcheck_failed"));
+  h.store.db.prepare("UPDATE source_recovery_operations SET status='verified'").run();
+  await waitForProposal(h.service, proposal.id, ["verified"]);
+  assert.equal(h.calls, 1);
+  h.store.close();
+});
+test("expiry while waiting cancels before write and does not execute pending requests", async () => {
+  const h = harness(), proposal = (await h.service.prepare(h.id)).proposals[0];
+  activeSourceRecovery(h);
+  await h.service.confirm(proposal.id, confirm(proposal));
+  await waitForWaiting(h, proposal.id);
+  h.tick();
+  h.store.db.prepare("UPDATE source_recovery_operations SET status='verified'").run();
+  await waitForProposal(h.service, proposal.id, ["needs_review"]);
+  assert.equal(h.calls, 0);
+  h.service.startQueue();
+  assert.equal(h.calls, 0);
+  h.store.close();
+});
+test("restart keeps queued consent while pending and failed proposals remain unexecuted", async () => {
+  const h = harness(), proposal = (await h.service.prepare(h.id)).proposals[0],
+    pending = (await h.service.prepare(h.addIncident("N11", "=E11/F11"))).proposals[0];
+  activeSourceRecovery(h);
+  await h.service.confirm(proposal.id, confirm(proposal));
+  await waitForWaiting(h, proposal.id);
+  clearTimeout(h.service.queueWake);
+  h.service.queueWake = null;
+  const restarted = new ProductionRepairService(h.store, h.config, {
+    reader: h.service.reader, writer: h.writer, doctor: h.service.doctor, now: h.service.now,
+  });
+  restarted.queuePollMs = 10;
+  restarted.startQueue();
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.equal(h.calls, 0);
+  h.store.db.prepare("UPDATE source_recovery_operations SET status='verified'").run();
+  await waitForProposal(restarted, proposal.id, ["verified"]);
+  assert.equal(h.calls, 1);
+  assert.equal(restarted.state(pending.incidentId).proposals[0].status, "pending");
+  h.store.close();
+});
+test("queue includes real source recovery stages and counts only verified writes today", async () => {
+  const h = harness();
+  activeSourceRecovery(h);
+  const target = { documentId: doc.documentId, sheet: "Товары НОВАЯ ПЕЧАТЬ 20.07.2026", cell: "P99", sheetId: 1335787439 };
+  h.store.db.prepare("UPDATE source_recovery_operations SET target=?,status='repairing'").run(JSON.stringify(target));
+  assert.equal(h.service.queueState().executing, 1);
+  h.store.db.prepare("UPDATE source_recovery_operations SET status='checking'").run();
+  assert.equal(h.service.queueState().checking, 1);
+  h.store.db.prepare("UPDATE source_recovery_operations SET status='written_unverified'").run();
+  assert.equal(h.service.queueState().needsDecision, 1);
+  assert.equal(h.service.queueState().fixedToday, 0);
+  h.store.db.prepare("UPDATE source_recovery_operations SET status='verified',result=?").run(JSON.stringify({ verifiedAt: "2026-10-10T09:00:00Z", writeSucceeded: false }));
+  assert.equal(h.service.queueState().fixedToday, 0);
+  h.store.db.prepare("UPDATE source_recovery_operations SET result=?").run(JSON.stringify({ verifiedAt: "2026-10-10T09:00:00Z", writeSucceeded: true }));
+  assert.equal(h.service.queueState().fixedToday, 1);
+  assert.equal(h.service.queueState().items[0].target.cell, "P99");
+  assert.equal(h.calls, 0);
+  h.store.close();
+});
+
 test("already restored production formula is rescanned and closed without creating a write proposal", async () => {
   const h = harness();
   h.set({ formulaValue: "=C11/D11" });
@@ -296,6 +443,21 @@ test("already restored production formula is rescanned and closed without creati
       )
       .get(h.id).n,
     0,
+  );
+  const rollPrinting = PRODUCTION_DOCTOR_DOCUMENTS.find(
+    (entry) => entry.id === "doctor-roll-printing",
+  );
+  assert.ok(rollPrinting, "Roll printing remains available for monitoring");
+  assert.ok(!PRODUCTION_REPAIR_DOCUMENT_IDS.includes(rollPrinting.id));
+  assert.throws(
+    () =>
+      approvedTarget({
+        documentId: rollPrinting.documentId,
+        sheetId: 119710351,
+        sheet: "OZON МОСКВА 10_10",
+        cell: "J5",
+      }),
+    (error) => error.code === "target_forbidden",
   );
   h.store.close();
 });

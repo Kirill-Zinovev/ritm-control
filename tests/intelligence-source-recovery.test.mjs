@@ -5,6 +5,7 @@ import { SourceRecoveryService } from "../agent/sourceRecovery.js";
 import { ProductionSheetsWriter } from "../agent/productionRepair.js";
 import { PRODUCTION_DOCTOR_DOCUMENTS } from "../agent/productionRegistry.js";
 import { createAgentServer } from "../agent/server.js";
+import { digest } from "../agent/diagnosticGrid.js";
 
 const SHOP_ID = "doctor-shop-one";
 const DOCUMENT_ID = "1YTQQ1Mg9kVv7EOQiN6wOvkvnHvsiXcwbhYOERUPy8rQ";
@@ -430,6 +431,86 @@ test("owner-authorized source recovery writes only P4 and verifies B/C/AP rows b
   h.store.close();
 });
 
+test("Telegram repair authorization is bound to the current owner, incident and candidate fingerprint", async () => {
+  const h = fixture();
+  try {
+    const incident = h.store.getIncident(INCIDENT_ID);
+    const fingerprint = digest({ incidentId: INCIDENT_ID, generation: 1, candidate: incident.recoveryCandidate });
+    const payload = { incidentId: INCIDENT_ID, explicitWriteApproval: true };
+    const authorization = { source: "telegram_owner_button", channel: "telegram", actor: "owner-77", expectedCandidateFingerprint: fingerprint };
+    assert.throws(
+      () => h.service.startForIncident(INCIDENT_ID, payload, { ...authorization, expectedCandidateFingerprint: "f".repeat(64) }),
+      { code: "source_candidate_version_changed" },
+    );
+    assert.equal(h.writeCalls, 0);
+    const started = h.service.startForIncident(INCIDENT_ID, payload, authorization);
+    const operation = await h.service.waitForOperation(started.id);
+    assert.equal(operation.status, "verified", JSON.stringify(operation.result));
+    const row = h.store.db.prepare("SELECT authorization FROM source_recovery_operations WHERE id=?").get(started.id);
+    const audit = JSON.parse(row.authorization);
+    assert.equal(audit.owner, "linked_telegram_owner");
+    assert.equal(audit.source, "telegram_owner_button");
+    assert.equal(audit.actor, "owner-77");
+    assert.equal(audit.candidateFingerprint, fingerprint);
+    assert.equal(h.writeCalls, 1);
+  } finally { h.store.close(); }
+});
+
+function withoutHistoricalValue(h) {
+  h.store.db.prepare("DELETE FROM repair_requests WHERE incident_id=?").run(INCIDENT_ID);
+  const row = h.store.db.prepare("SELECT payload FROM incidents WHERE id=?").get(INCIDENT_ID), finding = JSON.parse(row.payload);
+  delete finding.recoveryCandidate;
+  h.store.db.prepare("UPDATE incidents SET payload=? WHERE id=?").run(JSON.stringify(finding), INCIDENT_ID);
+  const snapshot = h.store.getSnapshot("doctor:source-values:" + SHOP_ID);
+  snapshot.value.cells.P4.history = [];
+  snapshot.value.cells.P4.key = SKU;
+  h.store.snapshot("doctor:source-values:" + SHOP_ID, snapshot.value, snapshot.at);
+}
+
+test("owner source proposal is not snapshot proof or write permission; one versioned write approval completes recovery", async () => {
+  const h = fixture();
+  try {
+    withoutHistoricalValue(h);
+    const result = await h.service.proposeValue(INCIDENT_ID, VALUE.stringValue);
+    assert.equal(result.candidate.origin, "owner_proposal");
+    assert.equal(h.writeCalls, 0);
+    assert.equal(h.store.db.prepare("SELECT count(*) AS n FROM repair_requests").get().n, 0);
+    assert.deepEqual(h.store.getSnapshot("doctor:source-values:" + SHOP_ID).value.cells.P4.history, []);
+    assert.throws(() => h.service.startForIncident(INCIDENT_ID, { incidentId: INCIDENT_ID, explicitWriteApproval: true }), { code: "source_candidate_version_changed" });
+    const operation = h.service.startForIncident(INCIDENT_ID, { incidentId: INCIDENT_ID, explicitWriteApproval: true, candidateVersion: result.candidate.version });
+    const finished = await h.service.waitForOperation(operation.id);
+    assert.equal(finished.status, "verified"); assert.equal(h.writeCalls, 1);
+    assert.equal(h.store.getIncident(INCIDENT_ID).monitorStatus, "resolved");
+  } finally { h.store.close(); }
+});
+
+test("source owner proposal refuses populated values, disallowed validation and invalid text without writing", async () => {
+  for (const reason of ["populated", "validation", "formula"]) {
+    const h = fixture();
+    try {
+      withoutHistoricalValue(h);
+      if (reason === "populated") h.sourceCells.set("P4", { userEnteredValue: { stringValue: "Другое" }, effectiveValue: { stringValue: "Другое" } });
+      if (reason === "validation") h.sourceCells.set("P4", { dataValidation: { condition: { type: "ONE_OF_LIST", values: [{ userEnteredValue: "Другое" }] } } });
+      await assert.rejects(h.service.proposeValue(INCIDENT_ID, reason === "formula" ? "=999" : VALUE.stringValue));
+      assert.equal(h.writeCalls, 0); assert.equal(h.store.db.prepare("SELECT count(*) AS n FROM repair_requests").get().n, 0);
+    } finally { h.store.close(); }
+  }
+});
+
+test("first matching catalog key must still select the authorized source row before a write", async () => {
+  const h = fixture();
+  try {
+    const row = h.store.db.prepare("SELECT payload FROM incidents WHERE id=?").get(INCIDENT_ID), finding = JSON.parse(row.payload);
+    finding.lookupEvidence = [{ selection: "first_match", matchingRows: [4, 149] }];
+    h.store.db.prepare("UPDATE incidents SET payload=? WHERE id=?").run(JSON.stringify(finding), INCIDENT_ID);
+    h.sourceCells.set("A3", format(SKU));
+    const operation = h.service.startForIncident(INCIDENT_ID, { incidentId: INCIDENT_ID, explicitWriteApproval: true });
+    const finished = await h.service.waitForOperation(operation.id);
+    assert.equal(finished.result.code, "source_lookup_changed");
+    assert.equal(h.writeCalls, 0);
+  } finally { h.store.close(); }
+});
+
 test("a fresh successful Table Doctor state verifies recovery without a top-level complete flag", async () => {
   const h = fixture({ doctorStateResult: true });
   const started = h.service.startForIncident(INCIDENT_ID, {
@@ -714,7 +795,7 @@ test("ProductionSheetsWriter sends one exact single-cell string update and never
   assert.equal(result.atomicCompareAndSet, false);
 });
 
-test("the source-write endpoint requires an owner cookie and one exact approval payload", async () => {
+test("source proposal and write endpoints require owner cookies and accept no target injection", async () => {
   const store = new IncidentStore(":memory:"),
     token = "o".repeat(64),
     config = {
@@ -725,10 +806,14 @@ test("the source-write endpoint requires an owner cookie and one exact approval 
       publicOrigin: "",
       apiRateLimit: 180,
     };
-  let calls = 0;
+  let calls = 0, proposals = 0;
   const server = createAgentServer(store, config, {
     repair: { production: true },
     sourceRecovery: {
+      proposeValue: async (incidentId, value) => {
+        proposals++; assert.equal(incidentId, INCIDENT_ID); assert.equal(value, "Фигурки");
+        return { candidate: { version: "b".repeat(64), value: { stringValue: value } } };
+      },
       state: () => ({ operation: null }),
       startForIncident: (incidentId, payload) => {
         calls++;
@@ -748,6 +833,12 @@ test("the source-write endpoint requires an owner cookie and one exact approval 
       "content-type": "application/json",
     };
   try {
+    const candidateUrl = base + "/api/intelligence/formula-repair/source-candidate";
+    const candidatePayload = { incidentId: INCIDENT_ID, value: "Фигурки" };
+    const noSession = await fetch(candidateUrl, { method: "POST", headers, body: JSON.stringify(candidatePayload) });
+    assert.equal(noSession.status, 401);
+    const bearerCandidate = await fetch(candidateUrl, { method: "POST", headers: { ...headers, authorization: "Bearer " + token }, body: JSON.stringify(candidatePayload) });
+    assert.equal(bearerCandidate.status, 403);
     const anonymous = await fetch(
       base + "/api/intelligence/formula-repair/source-recovery",
       {
@@ -779,6 +870,10 @@ test("the source-write endpoint requires an owner cookie and one exact approval 
     });
     assert.equal(login.status, 200);
     const cookie = login.headers.get("set-cookie").split(";")[0];
+    const injected = await fetch(candidateUrl, { method: "POST", headers: { ...headers, cookie }, body: JSON.stringify({ ...candidatePayload, cell: "P149" }) });
+    assert.equal(injected.status, 400);
+    const candidate = await fetch(candidateUrl, { method: "POST", headers: { ...headers, cookie }, body: JSON.stringify(candidatePayload) });
+    assert.equal(candidate.status, 200); assert.equal(proposals, 1); assert.equal(calls, 0);
     const response = await fetch(
       base + "/api/intelligence/formula-repair/source-recovery",
       {

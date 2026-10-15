@@ -31,6 +31,7 @@ test("fast and deep Google checks share one FIFO so their API reads never overla
     return name;
   };
   doctor.inspect = () => scan("deep");
+  doctor.inspectFast = () => scan("fast");
   doctor.formulas = { fastCheck: () => scan("fast") };
 
   const [deep, fast] = await Promise.all([doctor.run(), doctor.runFast()]);

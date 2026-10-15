@@ -113,11 +113,13 @@ export function loadConfig(env = process.env) {
     fastCheckIntervalMs:
       number(env, "RITM_FAST_CHECK_INTERVAL_SECONDS", 120, 60, 600) * 1000,
     timeoutMs: number(env, "RITM_REQUEST_TIMEOUT_SECONDS", 25, 1, 120) * 1000,
+    doctorRunTimeoutMs:
+      number(env, "RITM_DOCTOR_RUN_TIMEOUT_MINUTES", 15, 1, 120) * 60_000,
     retries: number(env, "RITM_REQUEST_RETRIES", 2, 0, 5),
     googleMinIntervalMs: number(
       env,
       "RITM_GOOGLE_MIN_INTERVAL_MS",
-      2000,
+      1000,
       1000,
       60000,
     ),
@@ -135,6 +137,7 @@ export function loadConfig(env = process.env) {
         env.RITM_TELEGRAM_BOT_TOKEN || secretFile("RITM_TELEGRAM_TOKEN_FILE"),
       chatId: env.RITM_TELEGRAM_OWNER_CHAT_ID || "",
     },
+    assistant: null,
     model: env.RITM_AI_MODEL || null,
     llmEnabled: false,
     staticDir: path.resolve("dist/client"),

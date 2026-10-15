@@ -161,6 +161,9 @@ const repairQueueLabels: Record<string, string> = {
   verified: "Проверено",
   needs_review: "Нужна ручная проверка",
   uncertain: "Результат требует проверки",
+  written_unverified: "Записано, проверка не завершена",
+  blocked: "Запись не выполнена",
+  already_restored: "Уже восстановлено и проверено",
   cancelled: "Отменено",
   superseded: "Заменено новым предложением",
 };
@@ -293,6 +296,10 @@ function problemSeverityLabel(incident: Incident) {
   return statusLabel[incident.severity] || incident.severity;
 }
 function problemTitle(incident: Incident) {
+  if (incident.groupedRootCause)
+    return `Артикул не найден в «${incident.groupedRootCause.lookupSheet}»`;
+  if (incident.type === "unavailable" && ["app", "api:printing", "api:assembly"].includes(incident.sourceId))
+    return problemEntity(incident) + " недоступен";
   if (
     incident.monitorStatus === "resolved" &&
     incident.sourceRecoveryOperation?.status === "verified" &&
@@ -306,6 +313,10 @@ function problemTitle(incident: Incident) {
     return "Источник восстановлен и проверен";
   if (incident.monitorStatus === "resolved")
     return "Устранено: повторная проверка подтвердила восстановление";
+  if (incident.type === "formula_history_change") {
+    const observed = incident.observed as { entered?: { numberValue?: number; stringValue?: string; formulaValue?: string } } | undefined;
+    return observed?.entered?.numberValue !== undefined ? "Формула заменена числом" : observed?.entered?.stringValue !== undefined ? "Формула заменена текстом" : observed?.entered?.formulaValue ? "Формула изменена" : "Формула удалена";
+  }
   if (incident.type !== "data_quality_root_cause") return incident.title;
   const sourceState = sourceStateOf(incident);
   if (sourceState === "missing")
@@ -318,8 +329,17 @@ function problemTitle(incident: Incident) {
     return "Источник заполнен, результат расчёта не подтверждён";
   return "Недостаточно данных, чтобы определить состояние источника";
 }
+function problemEntity(incident: Incident) {
+  return ({ app: "Сайт RITM", "api:printing": "API печати", "api:assembly": "API сборки" } as Record<string, string>)[incident.sourceId] || incident.sourceName;
+}
 function problemStateLabel(incident: Incident) {
+  const operation = incident.sourceRecoveryOperation;
+  if (operation) {
+    const labels: Record<string, string> = { repairing: "Исправляется", checking: "Проверяется", verified: "Исправлено", already_restored: "Устранено", written_unverified: "Записано, проверка не завершена", uncertain: "Результат записи не подтверждён", blocked: "Требует вмешательства", needs_review: "Требует вмешательства" };
+    if (labels[operation.status]) return labels[operation.status];
+  }
   if (incident.monitorStatus === "resolved") return "Устранено";
+  if (incident.recoveryCandidate && sourceStateOf(incident) === "missing") return "Ожидает подтверждения";
   if (incident.lifecycleState === "detected") return "Обнаружено";
   if (incident.lifecycleState === "awaiting_recheck")
     return "Ожидает перепроверки";
@@ -338,6 +358,7 @@ function problemStateLabel(incident: Incident) {
     : statusLabel[incident.status] || incident.status;
 }
 function problemCause(incident: Incident) {
+  if (incident.groupedRootCause) return incident.cause || "Общая ошибка поиска";
   if (incident.monitorStatus === "resolved" && incident.resolutionCause)
     return incident.resolutionCause;
   if (
@@ -353,6 +374,8 @@ function problemCause(incident: Incident) {
   return incident.cause || "Причина не установлена";
 }
 function problemRecommendation(incident: Incident) {
+  if (incident.groupedRootCause)
+    return incident.recommendation || "Проверьте запись артикула в справочнике.";
   if (
     incident.monitorStatus === "resolved" &&
     incident.sourceRecoveryOperation?.status === "verified" &&
@@ -392,6 +415,8 @@ function kpiEvidenceLabel(incident: Incident) {
     incident.sourceRecoveryOperation.result?.writeSucceeded
   )
     return "Расчёт восстановлен · влияние на KPI не измерено";
+  if (incident.groupedRootCause)
+    return "Ошибка поиска подтверждена · влияние на KPI не измерено";
   if (incident.errorCells?.length)
     return `Ошибка расчёта подтверждена · влияние на KPI не измерено`;
   return "Влияние на KPI не подтверждено";
@@ -405,13 +430,10 @@ function SourceRecoveryApproval({
   incident: Incident;
   busy: boolean;
   available: boolean;
-  onWrite: (incidentId: string) => void;
+  onWrite: (incidentId: string, candidateVersion?: string) => void;
 }) {
   const candidate = incident.recoveryCandidate,
     operation = incident.sourceRecoveryOperation;
-  if (!candidate || !incident.cell) return null;
-  const value = sourceValue(candidate.value),
-    exact = `${incident.sheet}!${incident.cell} = ${value}`;
   const operationLabel: Record<string, string> = {
     repairing: "Исправляется",
     checking: "Проверяется",
@@ -473,13 +495,16 @@ function SourceRecoveryApproval({
         ) : null}
       </section>
     );
+  if (!candidate || !incident.cell) return null;
+  const value = sourceValue(candidate.value),
+    exact = `${incident.sheet}!${incident.cell} = ${value}`;
   return (
     <section
       className="doctor-source-recovery"
       aria-label="Разрешение на восстановление исходных данных"
     >
       <strong>Ожидает подтверждения записи</strong>
-      <h4>Значение из последнего успешного снимка</h4>
+      <h4>{candidate.origin === "owner_proposal" ? "Значение предложено владельцем" : "Значение из последнего успешного снимка"}</h4>
       <p>{exact} · {timeLabel(candidate.observedAt)}</p>
       <small>{candidate.evidence}</small>
       {incident.repairRequested && (
@@ -488,7 +513,7 @@ function SourceRecoveryApproval({
       <Button
         kind="primary"
         disabled={busy || !available}
-        onClick={() => onWrite(incident.id)}
+        onClick={() => onWrite(incident.id, candidate.version)}
       >
         Разрешить запись и восстановить {incident.cell}
       </Button>
@@ -500,6 +525,20 @@ function SourceRecoveryApproval({
       {!available && <small>Production writer не настроен; запись недоступна.</small>}
     </section>
   );
+}
+function SourceValueProposal({ incident, busy, onPropose }: { incident: Incident; busy: boolean; onPropose: (value: string) => void }) {
+  const [value, setValue] = useState("");
+  return <section className="doctor-source-recovery">
+    <h4>Уточните «Вид» для {incident.cell}</h4>
+    <p>Прежнее значение этой ячейки не найдено. Укажите верное значение; затем RITM проверит источник и покажет точное изменение для разрешения записи.</p>
+    <Field label="Вид"><input value={value} onChange={(event) => setValue(event.target.value)} disabled={busy} /></Field>
+    <Button disabled={busy || !value.trim()} onClick={() => onPropose(value.trim())}>Проверить предложение</Button>
+  </section>;
+}
+function canRestoreFormula(incident: Incident) {
+  return incident.type === "formula_history_change" ||
+    (!!incident.baselineVersion && incident.verification === "rule_confirmed" &&
+      ["formula_number", "formula_text", "formula_missing", "formula_mismatch"].includes(incident.type));
 }
 export function TableDoctor() {
   const [advanced, setAdvanced] = useState(false);
@@ -524,6 +563,9 @@ export function TableDoctor() {
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [message, setMessage] = useState("");
+  const [selectedIncidentIds, setSelectedIncidentIds] = useState<string[]>([]),
+    [bulkConfirm, setBulkConfirm] = useState<"ignore" | "restore" | null>(null),
+    [bulkProgress, setBulkProgress] = useState("");
   const active = useRef<AbortController | null>(null);
   useEffect(() => () => active.current?.abort(), []);
   useEffect(() => {
@@ -551,8 +593,35 @@ export function TableDoctor() {
     !!resource.value && !resource.locked,
     10000,
   );
+  const incidentRows = incidents.value?.rows || [],
+    selectedIncidents = incidentRows.filter((item) =>
+      selectedIncidentIds.includes(item.id),
+    ),
+    allRowsSelected =
+      incidentRows.length > 0 &&
+      incidentRows.every((item) => selectedIncidentIds.includes(item.id)),
+    bulkRestoreEligible =
+      selectedIncidents.length > 0 &&
+      selectedIncidents.every(
+        (item) =>
+          item.type === "data_quality_root_cause" &&
+          item.monitorStatus === "open" &&
+          !!item.recoveryCandidate &&
+          !item.sourceRecoveryOperation,
+      ),
+    bulkIgnoreEligible =
+      selectedIncidents.length > 0 &&
+      selectedIncidents.every(
+        (item) =>
+          item.monitorStatus === "open" &&
+          item.type !== "data_quality_root_cause",
+      );
+  const selectionScope = params.toString();
+  useEffect(() => {
+    setSelectedIncidentIds([]);
+  }, [selectionScope]);
   const summary = useAgentResource<IncidentSummary>(
-    "/api/intelligence/incidents/summary",
+    "/api/intelligence/incidents/summary?" + new URLSearchParams({ source, sheet, department, type, severity, q: committedQuery }),
     !!resource.value && !resource.locked,
     10000,
   );
@@ -562,6 +631,24 @@ export function TableDoctor() {
     10000,
   );
   const incident = detail.value?.incident || selected;
+  const recovery = incident?.sourceRecoveryOperation;
+  const recoveryAfter =
+    recovery?.after && typeof recovery.after === "object"
+      ? (recovery.after as { userEnteredValue?: Record<string, unknown> })
+      : null;
+  const hasRecoveryReadback = !!recoveryAfter && "userEnteredValue" in recoveryAfter;
+  const currentSourceLabel = hasRecoveryReadback
+    ? ["verified", "already_restored"].includes(recovery?.status || "")
+      ? "Сейчас, проверено"
+      : "После записи, проверяется"
+    : incident?.monitorStatus === "resolved"
+      ? "При обнаружении"
+      : "Последнее наблюдение";
+  const currentSourceValue = hasRecoveryReadback
+    ? text({ entered: recoveryAfter?.userEnteredValue || null })
+    : incident
+      ? text(incident.observed ?? incident.found)
+      : "Неизвестно";
   async function act(path: string, payload: unknown = {}) {
     if (busy) return;
     const ctrl = new AbortController();
@@ -590,7 +677,9 @@ export function TableDoctor() {
                 ? "Заявка сохранена. Google Sheets не изменён."
                 : path.endsWith("/source-recovery")
                   ? "Операция восстановления запущена. RITM повторно проверяет источник и зависимые расчёты."
-                : path.endsWith("/ignore")
+                  : path.endsWith("/source-candidate")
+                    ? "Значение проверено. Для записи подтвердите точную ячейку и значение."
+                  : path.endsWith("/ignore")
                   ? "Проблема игнорируется. Google Sheets не изменён."
                   : "Демонстрационный источник проверен. Рабочие таблицы не изменены.",
         );
@@ -606,6 +695,114 @@ export function TableDoctor() {
         setError(e instanceof Error ? e.message : "Агент недоступен");
     } finally {
       if (!ctrl.signal.aborted) setBusy(false);
+    }
+  }
+  async function bulkAction(action: "ignore" | "recheck") {
+    if (!selectedIncidents.length || busy) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const response = await fetch("/api/intelligence/incidents/bulk-action", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action,
+          incidentIds: selectedIncidents.map((item) => item.id),
+        }),
+        signal: AbortSignal.timeout(30000),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok)
+        throw new Error(
+          result.message || "Не удалось выполнить массовое действие.",
+        );
+      setMessage(
+        action === "recheck"
+          ? `Проверка запущена для ${result.queued} проблем в ${result.sources} таблицах. Только чтение.`
+          : `Игнорируется проблем: ${result.changed}. Google Sheets не изменён.`,
+      );
+      setSelectedIncidentIds([]);
+      await Promise.all([incidents.reload(), summary.reload()]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Агент недоступен");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function bulkRestore() {
+    if (!bulkRestoreEligible || busy) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    let completed = 0;
+    try {
+      for (const item of selectedIncidents) {
+        const candidate = item.recoveryCandidate!;
+        setBulkProgress(
+          `Восстановление ${completed + 1} из ${selectedIncidents.length}: ${item.sheet}!${item.cell}`,
+        );
+        const response = await fetch(
+          "/api/intelligence/formula-repair/source-recovery",
+          {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              incidentId: item.id,
+              candidateVersion: candidate.version,
+              explicitWriteApproval: true,
+            }),
+            signal: AbortSignal.timeout(30000),
+          },
+        );
+        const started = await response.json();
+        if (!response.ok || !started.ok)
+          throw new Error(
+            `${item.sheet}!${item.cell}: ${started.message || "операция не запущена"}`,
+          );
+        let terminal: { status?: string } | null = null;
+        for (let attempt = 0; attempt < 240; attempt++) {
+          const stateResponse = await fetch(
+            "/api/intelligence/formula-repair/source-recovery?incidentId=" +
+              encodeURIComponent(item.id),
+            { credentials: "same-origin", signal: AbortSignal.timeout(15000) },
+          );
+          const stateResult = await stateResponse.json();
+          if (!stateResponse.ok || !stateResult.ok)
+            throw new Error(
+              `${item.sheet}!${item.cell}: результат не удалось проверить; повторная запись не выполнялась.`,
+            );
+          const operation = stateResult.operation;
+          if (!operation)
+            throw new Error(`${item.sheet}!${item.cell}: операция отсутствует в журнале.`);
+          if (!["repairing", "checking"].includes(operation.status)) {
+            terminal = operation;
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
+        if (!terminal)
+          throw new Error(
+            `${item.sheet}!${item.cell}: проверка превысила 8 минут; очередь остановлена без повторной записи.`,
+          );
+        if (!["verified", "already_restored"].includes(terminal.status || ""))
+          throw new Error(
+            `${item.sheet}!${item.cell}: результат «${terminal.status}». Очередь остановлена, остальные ячейки не запускались.`,
+          );
+        completed++;
+      }
+      setMessage(`Подтверждены и проверены восстановления: ${completed}.`);
+      setSelectedIncidentIds([]);
+      setBulkConfirm(null);
+      await Promise.all([resource.reload(), incidents.reload(), summary.reload()]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Массовое восстановление остановлено.");
+      await Promise.all([resource.reload(), incidents.reload(), summary.reload()]);
+    } finally {
+      setBusy(false);
+      setBulkProgress("");
     }
   }
   if (resource.locked || incidents.locked || summary.locked || detail.locked)
@@ -665,8 +862,8 @@ export function TableDoctor() {
             {state.fastRunning ? "Быстрая проверка…" : "Проверить сейчас"}
           </Button>
           <span>
-            Сравнивает все защищённые ячейки. Полный аудит доступен отдельно
-            ниже.
+            Проверяет эталоны и обязательные источники с цепочками расчётов.
+            Полный аудит доступен отдельно ниже.
           </span>
         </div>
         <div className="ai-metrics doctor-metrics doctor-overview-metrics">
@@ -713,7 +910,7 @@ export function TableDoctor() {
             </strong>
           </div>
         </div>
-        {state.productionRepairEnabled && state.repairQueue && (
+        {state.productionRepairEnabled && state.repairQueue && state.repairQueue.items.some((item) => !["verified", "already_restored", "cancelled", "superseded"].includes(item.status)) && (
           <section className="doctor-queue" aria-label="Очередь исправлений">
             <div className="panel-heading">
               <div>
@@ -726,7 +923,7 @@ export function TableDoctor() {
             </div>
             {state.repairQueue.items.length ? (
               <ol className="doctor-queue-list">
-                {state.repairQueue.items.slice(0, 8).map((item) => (
+                {state.repairQueue.items.filter((item) => !["verified", "already_restored", "cancelled", "superseded"].includes(item.status)).slice(0, 8).map((item) => (
                   <li key={item.id}>
                     <div>
                       <strong>
@@ -771,9 +968,16 @@ export function TableDoctor() {
             {(
               (state.formulaIntelligence?.fastCheck?.durationMs ?? 0) / 1000
             ).toFixed(1)}{" "}
-            с · {state.formulaIntelligence?.fastCheck?.readRequests ?? 0}{" "}
+            с ·{" "}
+            {state.formulaIntelligence?.fastCheck?.apiReadRequests ??
+              state.formulaIntelligence?.fastCheck?.readRequests ??
+              0}{" "}
             запросов Google API ·{" "}
             {state.formulaIntelligence?.fastCheck?.violations ?? 0} отклонений
+            {state.formulaIntelligence?.fastCheck?.dataQuality?.status !==
+              "not_applicable" &&
+              state.formulaIntelligence?.fastCheck?.dataQuality &&
+              ` · источники: ${state.formulaIntelligence.fastCheck.dataQuality.findings} проблем`}
           </span>
           <span>
             Формул прочитано глубоко: {state.formulasRead ?? "—"} · Защищённых
@@ -854,24 +1058,24 @@ export function TableDoctor() {
         >
           {(
             [
-              ["all", "Все проблемы", summary.value?.allProblems ?? 0],
-              ["critical", "Критические", summary.value?.critical ?? 0],
+              ["all", "Все проблемы", summary.value?.allProblems ?? "—"],
+              ["critical", "Критические", summary.value?.critical ?? "—"],
               [
                 "missing_source",
                 "Нет исходных данных",
-                summary.value?.missingSource ?? 0,
+                summary.value?.missingSource ?? "—",
               ],
               [
                 "calculation_error",
                 "Ошибка расчёта KPI",
-                summary.value?.calculationError ?? 0,
+                summary.value?.calculationError ?? "—",
               ],
               [
                 "needs_review",
                 "Требуют проверки",
-                summary.value?.needsReview ?? 0,
+                summary.value?.needsReview ?? "—",
               ],
-              ["fixed", "Исправлены", summary.value?.fixed ?? 0],
+              ["fixed", "Исправлены", summary.value?.fixed ?? "—"],
             ] as const
           ).map(([id, label, count]) => (
             <button
@@ -987,6 +1191,67 @@ export function TableDoctor() {
             }}
           />
         </div>
+        {incidents.value?.rows.length ? (
+          <div className="doctor-bulk-bar" aria-label="Массовые действия с проблемами">
+            <label className="doctor-bulk-select-all">
+              <input
+                type="checkbox"
+                checked={allRowsSelected}
+                onChange={(event) =>
+                  setSelectedIncidentIds(
+                    event.target.checked ? incidentRows.map((item) => item.id) : [],
+                  )
+                }
+                aria-label="Выбрать все проблемы на этой странице"
+              />
+              <span>
+                {allRowsSelected ? "Снять выбор на странице" : "Выбрать все на странице"}
+              </span>
+            </label>
+            <span className="doctor-bulk-count">
+              Выбрано {selectedIncidents.length}
+              {incidents.value.total > incidentRows.length
+                ? ` из ${incidents.value.total} · выбор только на текущей странице`
+                : ""}
+            </span>
+            <div className="doctor-bulk-actions">
+              <Button
+                disabled={busy || !selectedIncidents.length || state.running || !!state.fastRunning}
+                onClick={() => void bulkAction("recheck")}
+              >
+                Проверить выбранные
+              </Button>
+              <Button
+                disabled={busy || !bulkIgnoreEligible}
+                onClick={() => setBulkConfirm("ignore")}
+              >
+                Игнорировать выбранные
+              </Button>
+              <Button
+                kind="primary"
+                disabled={busy || !state.productionRepairEnabled || !bulkRestoreEligible}
+                onClick={() => setBulkConfirm("restore")}
+              >
+                Восстановить выбранные
+              </Button>
+            </div>
+            {!bulkIgnoreEligible && selectedIncidents.length > 0 && selectedIncidents.some((item) => item.type === "data_quality_root_cause") && (
+              <small className="doctor-bulk-note">
+                Первопричины качества исходных данных нельзя скрыть через игнорирование.
+              </small>
+            )}
+            {!bulkRestoreEligible && selectedIncidents.length > 0 && (
+              <small className="doctor-bulk-note">
+                Массовое восстановление доступно, когда у каждой выбранной проблемы есть подтверждённое точное значение. Сейчас можно восстановить: {selectedIncidents.filter((item) => item.type === "data_quality_root_cause" && item.recoveryCandidate && !item.sourceRecoveryOperation).length} из {selectedIncidents.length}.
+              </small>
+            )}
+          </div>
+        ) : null}
+        {(error || message || bulkProgress) && (
+          <Notice tone={error ? "warning" : "neutral"}>
+            {error || bulkProgress || message}
+          </Notice>
+        )}
         {incidents.loading && !incidents.value ? (
           <Busy label="Загружаю проблемы…" />
         ) : incidents.value?.rows.length ? (
@@ -996,16 +1261,36 @@ export function TableDoctor() {
             aria-busy={incidents.loading}
           >
             {incidents.value.rows.map((item) => (
-              <article className="doctor-problem-card" key={item.id}>
+              <article
+                className={`doctor-problem-card${["critical", "high"].includes(item.severity) ? " is-danger" : ""}`}
+                key={item.id}
+              >
                 <div className="doctor-problem-row">
+                  <label className="doctor-problem-select">
+                    <input
+                      type="checkbox"
+                      checked={selectedIncidentIds.includes(item.id)}
+                      onChange={(event) =>
+                        setSelectedIncidentIds((current) =>
+                          event.target.checked
+                            ? [...current, item.id]
+                            : current.filter((id) => id !== item.id),
+                        )
+                      }
+                      aria-label={`Выбрать проблему: ${problemTitle(item)} · ${item.sheet || ""} ${item.cell || ""}`}
+                    />
+                  </label>
                   <div className="doctor-problem-copy">
                     <strong>{problemTitle(item)}</strong>
                     <span className="doctor-problem-product">
-                      {productKeyOf(item) || item.sourceName}
+                      {productKeyOf(item) || problemEntity(item)}
                     </span>
                     <span className="doctor-problem-address">
-                      {item.sourceName} · {item.sheet || "Документ"} ·{" "}
-                      {item.cell || "ячейка не определена"}
+                      {item.groupedRootCause
+                        ? `${item.sourceName} · ${item.sheet} · ${item.groupedRootCause.rootCell} → ${item.groupedRootCause.affectedCells.map((cell) => cell.cell).join(", ")}`
+                        : item.cell
+                          ? `${item.sourceName} · ${item.sheet} · ${item.cell}`
+                          : item.found || text(item.observed)}
                     </span>
                   </div>
                   <div className="doctor-problem-state">
@@ -1041,16 +1326,16 @@ export function TableDoctor() {
                       kind="primary"
                       disabled={
                         busy ||
-                        state.running ||
-                        item.monitorStatus === "resolved"
+                        (state.running && !(state.productionRepairEnabled && (canRestoreFormula(item) || item.type === "data_quality_root_cause"))) ||
+                        (item.monitorStatus === "resolved" && !item.sourceRecoveryOperation)
                       }
                       onClick={() =>
-                        void act(
-                          `/api/intelligence/incidents/${item.id}/recheck`,
-                        )
+                        (state.productionRepairEnabled && (canRestoreFormula(item) || item.type === "data_quality_root_cause")) || !realDocuments.some((document) => document.id === item.sourceId)
+                          ? setSelected(item)
+                          : void act(`/api/intelligence/incidents/${item.id}/recheck`)
                       }
                     >
-                      {state.running ? "Проверка…" : "Проверить"}
+                      {item.monitorStatus === "resolved" && item.sourceRecoveryOperation ? "Результат исправления" : state.productionRepairEnabled && canRestoreFormula(item) ? "Восстановить" : state.productionRepairEnabled && item.type === "data_quality_root_cause" ? item.sourceRecoveryOperation ? "Состояние исправления" : item.recoveryCandidate ? "Восстановить" : "Уточнить значение" : !realDocuments.some((document) => document.id === item.sourceId) ? "Подробнее" : state.running ? "Проверка…" : "Проверить"}
                     </Button>
                     {item.sourceUrl && (
                       <a
@@ -1058,9 +1343,9 @@ export function TableDoctor() {
                         href={item.sourceUrl}
                         target="_blank"
                         rel="noreferrer"
-                        aria-label={`Открыть ячейку ${item.sheet}!${item.cell}`}
+                        aria-label={item.cell ? `Открыть ячейку ${item.sheet}!${item.groupedRootCause?.rootCell || item.cell}` : `Открыть источник ${problemEntity(item)}`}
                       >
-                        Открыть ячейку <ArrowSquareOut size={15} />
+                        {item.cell ? "Открыть ячейку" : "Открыть источник"} <ArrowSquareOut size={15} />
                       </a>
                     )}
                   </div>
@@ -1082,6 +1367,35 @@ export function TableDoctor() {
                       <dt>Причина</dt>
                       <dd>{problemCause(item)}</dd>
                     </div>
+                    {item.groupedRootCause && (
+                      <div>
+                        <dt>Затронутые расчёты</dt>
+                        <dd>
+                          {item.groupedRootCause.affectedCells.map((cell) =>
+                            cell.url ? (
+                              <a
+                                className="doctor-problem-cell-link"
+                                href={cell.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                key={cell.cell}
+                              >
+                                {cell.sheet}!{cell.cell}
+                              </a>
+                            ) : (
+                              <span key={cell.cell}>
+                                {cell.sheet}!{cell.cell}
+                              </span>
+                            ),
+                          )}
+                          <span className="doctor-problem-cell-list">
+                            Общая ячейка поиска: {item.sheet}!
+                            {item.groupedRootCause.rootCell} · лист источника: «
+                            {item.groupedRootCause.lookupSheet}».
+                          </span>
+                        </dd>
+                      </div>
+                    )}
                     <div>
                       <dt>Текущее значение</dt>
                       <dd>{text(item.observed)}</dd>
@@ -1190,19 +1504,19 @@ export function TableDoctor() {
                         incident={item}
                         busy={busy}
                         available={state.productionRepairEnabled || false}
-                        onWrite={(incidentId) =>
+                        onWrite={(incidentId, candidateVersion) =>
                           void act(
                             "/api/intelligence/formula-repair/source-recovery",
                             {
                               incidentId,
                               explicitWriteApproval: true,
+                              ...(candidateVersion ? { candidateVersion } : {}),
                             },
                           )
                         }
                       />
                     )}
-                  {item.type !== "data_quality_root_cause" &&
-                    item.monitorStatus === "open" && (
+                  {item.monitorStatus === "open" && (
                       <Button onClick={() => setSelected(item)}>
                         Открыть полную карточку
                       </Button>
@@ -1287,7 +1601,7 @@ export function TableDoctor() {
         </Notice>
       ) : (
         <Notice>
-          Контроль подмены формул включён только для утверждённых адресов.
+          Точные эталоны защищают утверждённые адреса. Изменения остальных формул отслеживаются по сохранённым версиям и требуют проверки владельцем.
           Защищённых адресов в последних снимках:{" "}
           {state.formulaIntelligence.metrics.reduce(
             (n, m) => n + m.protectedCells,
@@ -1960,7 +2274,7 @@ export function TableDoctor() {
             : state.testRepairEnabled
               ? "Тестовый документ: точечное исправление требует отдельного подтверждения владельца."
               : state.productionRepairEnabled
-                ? "Восстановление утверждённой формулы требует подтверждения точного изменения."
+                ? incident?.type === "unavailable" || incident?.type === "sheets_api_unavailable" ? "Проверка доступа к источнику. Это сообщение о доступности, а не о повреждении ячейки." : incident?.type === "calculation_error" ? "Формула сохранена. Проверяем источник ошибки; переписывать эту формулу не нужно." : "Восстановление требует вашего разрешения точного изменения."
                 : "Доказательства, предполагаемая причина и заявка владельца. Google Sheets не изменяется."
         }
       >
@@ -1977,39 +2291,28 @@ export function TableDoctor() {
                 Не удалось обновить карточку. Показаны сохранённые сведения.
               </Notice>
             )}
-            <h3>{incident.title}</h3>
+            <h3>{problemTitle(incident)}</h3>
             <Badge tone={tone(incident.status)}>
               {statusLabel[incident.status]}
             </Badge>
             {incident.type === "data_quality_root_cause" && (
               <>
-                <Notice tone="warning">
-                  Качество исходных данных может повлиять на KPI сборки. Ошибка
-                  сгруппирована по одной первопричине; формулы не предлагается
-                  менять.
-                </Notice>
                 <div className="doctor-data-quality-summary">
-                  <strong>
-                    Затронутые ячейки:{" "}
-                    {(incident.affectedCells || [])
-                      .map((cell) => `${cell.sheet}!${cell.cell}`)
-                      .join(" · ")}
-                  </strong>
-                  {incident.recoveryCandidate ? (
-                    <span>
-                      Предыдущее значение: {incident.sheet}!{incident.cell} ={" "}
-                      {sourceValue(incident.recoveryCandidate.value)}
-                      {" · "}
-                      {timeLabel(incident.recoveryCandidate.observedAt)}
-                    </span>
-                  ) : (
-                    <span>
-                      Предыдущее значение неизвестно. Статус: «Требует
-                      проверки».
-                    </span>
-                  )}
+                  <strong>{incident.monitorStatus === "resolved" ? "Восстановленные коэффициенты: " : "Ошибка расчёта: "}{(incident.errorCells || []).filter((cell) => cell.cell.startsWith("AP")).map((cell) => cell.cell).join(", ")}</strong>
+                  <details><summary>Все зависимости и затронутые ячейки</summary><p>{(incident.affectedCells || []).map((cell) => `${cell.sheet}!${cell.cell}`).join(" · ")}</p></details>
                 </div>
               </>
+            )}
+            {incident.type === "data_quality_root_cause" && ((incident.monitorStatus === "open" && incident.recoveryCandidate) || incident.sourceRecoveryOperation) && (
+              <SourceRecoveryApproval key={incident.id} incident={incident} busy={busy}
+                available={state.productionRepairEnabled || false}
+                onWrite={(incidentId, candidateVersion) => void act("/api/intelligence/formula-repair/source-recovery", { incidentId, explicitWriteApproval: true, ...(candidateVersion ? { candidateVersion } : {}) })} />
+            )}
+            {incident.type === "data_quality_root_cause" && incident.monitorStatus === "open" && sourceStateOf(incident) === "missing" && !incident.recoveryCandidate && !incident.sourceRecoveryOperation && state.productionRepairEnabled && (
+              <SourceValueProposal key={incident.id} incident={incident} busy={busy} onPropose={(value) => void act("/api/intelligence/formula-repair/source-candidate", { incidentId: incident.id, value })} />
+            )}
+            {state.productionRepairEnabled && incident.monitorStatus === "open" && canRestoreFormula(incident) && (
+              <TestRepairPanel key={incident.id} incidentId={incident.id} production />
             )}
             <dl className="ai-details">
               {[
@@ -2019,17 +2322,9 @@ export function TableDoctor() {
                     .filter(Boolean)
                     .join(" · "),
                 ],
-                ["Сейчас", text(incident.observed)],
-                ["Ожидается", text(incident.expected)],
-                ["Предполагаемая причина", incident.cause],
-                ["Влияние на производство", incident.impact],
-                ["Предложение", incident.recommendation || incident.action],
-                [
-                  "Надёжность вывода",
-                  incident.verification === "rule_confirmed"
-                    ? "Нарушение утверждённого правила подтверждено"
-                    : "Требует проверки; причина и исходная формула могут быть неизвестны",
-                ],
+                [currentSourceLabel, currentSourceValue],
+                ["Ожидается", text(typeof incident.expected === "object" && incident.expected ? (incident.expected as { candidateFormula?: string; formula?: string }).candidateFormula || (incident.expected as { formula?: string }).formula || incident.expected : incident.expected)],
+                ["Влияние на KPI", kpiEvidenceLabel(incident)],
               ].map(([label, value]) => (
                 <div key={label}>
                   <dt>{label}</dt>
@@ -2137,26 +2432,17 @@ export function TableDoctor() {
               )}
               {incident.monitorStatus === "open" && (
                 <>
-                  {incident.type !== "data_quality_root_cause" &&
-                    !(
-                      state.productionRepairEnabled &&
-                      incident.baselineVersion &&
-                      incident.verification === "rule_confirmed"
-                    ) && (
+                  {incident.type !== "data_quality_root_cause" && realDocuments.some((document) => document.id === incident.sourceId) && (
                       <Button
                         kind="primary"
-                        disabled={busy || incident.repairRequested}
+                        disabled={busy || state.running || !!state.fastRunning}
                         onClick={() =>
                           void act(
-                            "/api/intelligence/incidents/" +
-                              incident.id +
-                              "/request-repair",
+                            "/api/intelligence/incidents/" + incident.id + "/recheck",
                           )
                         }
                       >
-                        {incident.repairRequested
-                          ? "Заявка сохранена"
-                          : "Создать заявку на исправление"}
+                        Проверить источник
                       </Button>
                     )}
                   {incident.type !== "data_quality_root_cause" && (
@@ -2176,37 +2462,9 @@ export function TableDoctor() {
                 </>
               )}
             </div>
-            {incident.type === "data_quality_root_cause" &&
-              incident.monitorStatus === "open" &&
-              incident.recoveryCandidate && (
-                <SourceRecoveryApproval
-                  key={incident.id}
-                  incident={incident}
-                  busy={busy}
-                  available={state.productionRepairEnabled || false}
-                  onWrite={(incidentId) =>
-                    void act(
-                      "/api/intelligence/formula-repair/source-recovery",
-                      {
-                        incidentId,
-                        explicitWriteApproval: true,
-                      },
-                    )
-                  }
-                />
-              )}
             {state.testRepairEnabled && (
               <TestRepairPanel key={incident.id} incidentId={incident.id} />
             )}
-            {state.productionRepairEnabled &&
-              incident.baselineVersion &&
-              incident.verification === "rule_confirmed" && (
-                <TestRepairPanel
-                  key={incident.id}
-                  incidentId={incident.id}
-                  production
-                />
-              )}
             {incident.formulaRegionId && incident.monitorStatus === "open" && (
               <details className="ai-advanced">
                 <summary>Настроить допустимое исключение</summary>
@@ -2225,6 +2483,56 @@ export function TableDoctor() {
             )}
           </>
         )}
+      </Modal>
+      <Modal
+        open={!!bulkConfirm}
+        onClose={() => !busy && setBulkConfirm(null)}
+        title={bulkConfirm === "restore" ? "Массовое восстановление" : "Игнорировать выбранные проблемы"}
+        description={
+          bulkConfirm === "restore"
+            ? "Одно подтверждение разрешит RITM по очереди восстановить только перечисленные ячейки и значения. Каждая запись будет перепроверена и отдельно прочитана обратно; при первой ошибке очередь остановится."
+            : "Выбранные проблемы будут скрыты из активного списка с записью решения владельца. Данные Google Sheets не изменятся."
+        }
+      >
+        <ol className="doctor-bulk-confirm-list">
+          {selectedIncidents.map((item) => (
+            <li key={item.id}>
+              <strong>{problemTitle(item)}</strong>
+              <span>
+                {item.sourceName} · {item.sheet}!{item.cell || "—"}
+                {bulkConfirm === "restore" && item.recoveryCandidate
+                  ? ` = ${sourceValue(item.recoveryCandidate.value)}`
+                  : ""}
+              </span>
+            </li>
+          ))}
+        </ol>
+        {bulkProgress && <Notice>{bulkProgress}</Notice>}
+        <div className="doctor-bulk-confirm-actions">
+          <Button disabled={busy} onClick={() => setBulkConfirm(null)}>
+            Отмена
+          </Button>
+          {bulkConfirm === "restore" ? (
+            <Button
+              kind="primary"
+              disabled={busy || !bulkRestoreEligible || !state.productionRepairEnabled}
+              onClick={() => void bulkRestore()}
+            >
+              {busy ? "Восстанавливаю…" : `Разрешить восстановление ${selectedIncidents.length}`}
+            </Button>
+          ) : (
+            <Button
+              kind="primary"
+              disabled={busy || !bulkIgnoreEligible}
+              onClick={() => {
+                setBulkConfirm(null);
+                void bulkAction("ignore");
+              }}
+            >
+              {busy ? "Сохраняю…" : `Игнорировать ${selectedIncidents.length}`}
+            </Button>
+          )}
+        </div>
       </Modal>
     </div>
   );

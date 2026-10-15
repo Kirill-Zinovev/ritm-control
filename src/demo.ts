@@ -20,7 +20,7 @@ export const sources: Source[] = [
   },
   {
     id: "printing",
-    name: "Сезонная печать",
+    name: "Печать · сезонная и рулонная",
     url: "https://docs.google.com/spreadsheets/d/1eNdUuk-2l83Pgv95LyqYKuOOfhAsEMm5tKLbhWBJiC4/edit",
     state: "prepared",
   },

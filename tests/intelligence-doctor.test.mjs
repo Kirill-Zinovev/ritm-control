@@ -130,6 +130,40 @@ function harness() {
     },
   };
 }
+test("doctor run status has heartbeat, timeout, and restart recovery without releasing a live scan early", async () => {
+  const h = harness();
+  try {
+    h.doctor.runTimeoutMs = 20;
+    h.doctor.runHeartbeatMs = 5;
+    h.doctor.inspect = async () => new Promise((resolve) => setTimeout(
+      () => resolve({ documents: [] }),
+      50,
+    ));
+    const pending = h.doctor.run();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const during = h.doctor.getRunStatus();
+    assert.equal(during.mode, "deep");
+    assert.ok(["running", "timing_out"].includes(during.status));
+    assert.ok(during.lastActivityAt);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(h.doctor.getRunStatus().status, "timing_out");
+    assert.ok(h.doctor.current, "timed-out operation retains the lock until its promise settles");
+    await pending;
+    assert.equal(h.doctor.current, null);
+    assert.equal(h.doctor.getRunStatus().status, "timed_out");
+
+    h.store.meta("doctorRunState", {
+      id: "old-run", mode: "deep", status: "running", queuedAt: "2026-10-14T08:00:00.000Z",
+      startedAt: "2026-10-14T08:00:00.000Z", lastActivityAt: "2026-10-14T08:01:00.000Z", progress: {},
+    });
+    const recovered = h.doctor.recoverInterruptedRun();
+    assert.equal(recovered.length, 1);
+    assert.equal(recovered[0].status, "interrupted");
+    assert.match(recovered[0].error, /перезапустился/);
+  } finally {
+    h.clean();
+  }
+});
 test("full persistent lifecycle: healthy -> fault -> repeat -> repair request -> fixed -> restart", async () => {
   const h = harness();
   try {
@@ -441,6 +475,97 @@ test("incident recheck is authenticated, read-only, and limited to its real regi
     assert.equal(
       h.store.db.prepare("SELECT count(*) n FROM repair_requests").get().n,
       0,
+    );
+
+    const secondFinding = {
+      ...inspect("number").findings[0],
+      cell: "H248",
+      row: 248,
+      kind: "table_doctor",
+      sourceId: document.id,
+      sourceName: document.name,
+      demonstration: false,
+    };
+    h.store.reconcile("doctor:data:" + document.id, [
+      {
+        ...inspect("number").findings[0],
+        kind: "table_doctor",
+        sourceId: document.id,
+        sourceName: document.name,
+        demonstration: false,
+      },
+      secondFinding,
+    ]);
+    const selectedIds = h.store
+      .listIncidents({ status: "active", limit: 20 })
+      .rows.map((row) => row.id);
+    calls.length = 0;
+    const bulkCheck = await fetch(
+      base + "/api/intelligence/incidents/bulk-action",
+      {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ action: "recheck", incidentIds: selectedIds }),
+      },
+    );
+    assert.equal(bulkCheck.status, 202);
+    assert.deepEqual(await bulkCheck.json(), {
+      ok: true,
+      queued: 2,
+      sources: 1,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(calls, [document.id]);
+
+    h.store.reconcile("doctor:data-quality", [
+      {
+        kind: "table_doctor",
+        sourceId: document.id,
+        sourceName: document.name,
+        department: "production",
+        sheet: "Каталог",
+        cell: "P5",
+        type: "data_quality_root_cause",
+        severity: "high",
+        title: "Отсутствует обязательное значение",
+        sourceState: "missing",
+        verification: "rule_confirmed",
+        demonstration: false,
+      },
+    ]);
+    const protectedRootId = h.store
+      .listIncidents({ status: "active", limit: 20 })
+      .rows.find((row) => row.type === "data_quality_root_cause").id;
+    const rejectedBulkIgnore = await fetch(
+      base + "/api/intelligence/incidents/bulk-action",
+      {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "ignore",
+          incidentIds: [...selectedIds, protectedRootId],
+        }),
+      },
+    );
+    assert.equal(rejectedBulkIgnore.status, 409);
+    assert.equal(h.store.listIncidents({ status: "active" }).total, 3);
+
+    const bulkIgnore = await fetch(
+      base + "/api/intelligence/incidents/bulk-action",
+      {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ action: "ignore", incidentIds: selectedIds }),
+      },
+    );
+    assert.equal(bulkIgnore.status, 200);
+    assert.deepEqual(await bulkIgnore.json(), { ok: true, changed: 2 });
+    assert.equal(h.store.listIncidents({ status: "active" }).total, 1);
+    assert.equal(
+      h.store.db
+        .prepare("SELECT count(*) n FROM history WHERE type='incident_ignored'")
+        .get().n,
+      2,
     );
   } finally {
     await new Promise((resolve) => server.close(resolve));

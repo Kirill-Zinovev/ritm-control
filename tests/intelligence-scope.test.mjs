@@ -5,6 +5,7 @@ import { PRODUCTION_DOCTOR_DOCUMENTS as docs } from "../agent/productionRegistry
 import { businessPreview } from "../agent/businessDoctor.js";
 import { readDoctorSheet } from "../agent/doctorRead.js";
 import { validateDoctorDocuments } from "../agent/doctorRegistry.js";
+import { inspectDocument } from "../agent/doctor.js";
 const source = [{ id: "assembly-fbo", documentId: docs[0].documentId }];
 const finding = (sheet, kind = "table_doctor", sourceId = "doctor-fbo") => ({
   kind,
@@ -16,13 +17,13 @@ const finding = (sheet, kind = "table_doctor", sourceId = "doctor-fbo") => ({
   verification: "needs_review",
   initialStatus: "review",
 });
-test("exact production scope is three documents/seven distinct ID pairs and KPI history is not a doctor sheet", () => {
-  assert.equal(docs.length, 3);
+test("production scope adds only three roll-printing tabs and preserves existing monitoring", () => {
+  assert.equal(docs.length, 4);
   assert.equal(
     new Set(
       docs.flatMap((d) => d.sheets.map((s) => d.documentId + ":" + s.gid)),
     ).size,
-    7,
+    10,
   );
   assert.ok(!docs[0].sheets.some((s) => s.name === "История производства"));
   assert.ok(
@@ -30,6 +31,70 @@ test("exact production scope is three documents/seven distinct ID pairs and KPI 
       .flatMap((d) => d.sheets)
       .flatMap((s) => s.businessChecks || [])
       .every((r) => r.approval === "pending"),
+  );
+  const roll = docs.find((d) => d.id === "doctor-roll-printing");
+  assert.ok(roll);
+  assert.equal(roll.documentId, "1hojhKS4Av_yy5sUMJcsoeJ_MQRU3V5g9P-fP61PO6Cs");
+  assert.deepEqual(
+    roll.sheets.map((s) => s.gid),
+    [119710351, 126956215, 2053830156],
+  );
+  assert.ok(roll.sheets.every((s) => !s.name.startsWith("_")));
+  assert.equal(
+    roll.sheets[0].rules.find((rule) => rule.id === "roll-planned-area")
+      .approval,
+    "pending",
+  );
+});
+
+test("active roll-order calculation errors are shown for review, not as formula damage", () => {
+  const doc = docs.find((d) => d.id === "doctor-roll-printing"),
+    schema = doc.sheets[0],
+    rows = Array.from({ length: 6 }, () => ({ values: [] }));
+  const put = (row, col, value) => {
+    const column = [...col].reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0) - 1;
+    while (rows[row - 1].values.length <= column)
+      rows[row - 1].values.push({});
+    rows[row - 1].values[column] = value;
+  };
+  put(1, "AC", { userEnteredValue: { stringValue: "UID" } });
+  put(4, "E", { userEnteredValue: { stringValue: "Артикул" } });
+  put(4, "O", { userEnteredValue: { stringValue: "Кол-во" } });
+  put(6, "E", { effectiveValue: { stringValue: "NT0006.A4692" } });
+  put(6, "F", { effectiveValue: { numberValue: 1 } });
+  put(6, "H", { effectiveValue: { numberValue: 0.42 } });
+  put(6, "I", { effectiveValue: { numberValue: 0.3 } });
+  put(6, "J", {
+    userEnteredValue: { formulaValue: "=F6*H6*I6*O6" },
+    effectiveValue: { numberValue: 7.56 },
+  });
+  put(6, "O", { effectiveValue: { numberValue: 60 } });
+  put(6, "P", {
+    userEnteredValue: { formulaValue: "=J6/K6" },
+    effectiveValue: {
+      errorValue: { type: "DIVIDE_BY_ZERO", message: "Division by zero" },
+    },
+  });
+  put(6, "AC", { effectiveValue: { stringValue: "uid-6" } });
+  const result = inspectDocument(doc, {
+    sheets: [
+      {
+        properties: {
+          sheetId: schema.gid,
+          title: schema.name,
+          gridProperties: { rowCount: schema.maxRows, columnCount: 32 },
+        },
+        data: [{ startRow: 0, startColumn: 0, rowData: rows }],
+      },
+    ],
+  });
+  const issue = result.findings.find((finding) => finding.cell === "P6");
+  assert.equal(issue.type, "calculation_error");
+  assert.equal(issue.verification, "needs_review");
+  assert.match(issue.cause, /активной строке|назначения столбца/);
+  assert.equal(
+    result.findings.some((finding) => finding.cell === "J6"),
+    false,
   );
 });
 test("scope removes old issue from active list without resolving/deleting it or its history, cancels notification, persists idempotently", () => {

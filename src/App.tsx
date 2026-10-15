@@ -1,5 +1,6 @@
 import { AICenter } from "./AICenter";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { TelegramMiniApp } from "./TelegramMiniApp";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
   ArrowsClockwise,
@@ -51,10 +52,16 @@ import {
   useLivePrinting,
   printingDataset,
   PRINTING_URL,
+  ROLL_PRINTING_URL,
   PRINTERS,
 } from "./livePrinting";
 import { importFields, importRows } from "./importer";
 import { FBO_URL, useLiveAssembly } from "./liveAssembly";
+const LiveSuppliesWorkspace = lazy(() =>
+  import("./LiveSupplies").then((module) => ({
+    default: module.LiveSuppliesWorkspace,
+  })),
+);
 import {
   AssemblyProfileDrawer,
   PrinterProfilePage,
@@ -96,7 +103,7 @@ const SUBTITLES: Record<Page, string> = {
   intelligence: "RITM Intelligence · контроль источников и системы",
   overview: "Вся смена на одном экране",
   assembly: "Дневная цель — коэффициент не ниже 1,00",
-  printing: "Фактический выпуск печатников · Красное здание",
+  printing: "Фактический выпуск · сезонная и рулонная печать",
   production: "План и выполненное по каждому артикулу",
   stock: "Готовый товар, ячейки хранения и свободный остаток",
   supplies: "Состав, сроки и готовность к отгрузке",
@@ -130,7 +137,7 @@ function download(name: string, text: string, type = "text/csv;charset=utf-8") {
   a.click();
   URL.revokeObjectURL(url);
 }
-export function App() {
+function AppShell() {
   const [page, setPage] = useState<Page>(initialPage);
   const [date, setDate] = useState(() =>
     new Intl.DateTimeFormat("en-CA", {
@@ -148,7 +155,10 @@ export function App() {
   const [real, setReal] = useState<Dataset>(() =>
     readStorage("ritm-real-v1", emptyDataset()),
   );
-  const live = useLivePrinting(page !== "intelligence");
+  const live = useLivePrinting(
+    page !== "intelligence",
+    page === "printing" || page === "supplies",
+  );
   const assemblyLive = useLiveAssembly(date, period, page !== "intelligence");
   const data = mode === "demo" ? demo : printingDataset(real, live.value);
   const [supplyFilter, setSupplyFilter] = useState("all");
@@ -315,8 +325,36 @@ export function App() {
     (r) =>
       inPeriod(r.date, date, period) &&
       (site === "Все участки" || r.site === site) &&
-      (mode === "demo" || supplyFilter === "all" || r.source === supplyFilter),
+      (mode === "demo" ||
+        supplyFilter === "all" ||
+        (r.sourceId && r.sheetId
+          ? `${r.sourceId}::${r.sheetId}` === supplyFilter
+          : r.source === supplyFilter)),
   );
+  const cuttingEvents = (live.value?.cutEvents || []).filter(
+    (event) =>
+      inPeriod(event.date, date, period) &&
+      (site === "Все участки" || event.site === site) &&
+      (supplyFilter === "all" ||
+        (event.sourceId && event.sheetId
+          ? `${event.sourceId}::${event.sheetId}` === supplyFilter
+          : event.sheetName === supplyFilter)),
+  );
+  const cuttingByEmployee = new Map<
+    string,
+    { quantity: number; area: number; records: number }
+  >();
+  for (const event of cuttingEvents) {
+    const current = cuttingByEmployee.get(event.employee) || {
+      quantity: 0,
+      area: 0,
+      records: 0,
+    };
+    current.quantity += event.quantity;
+    current.area += event.area;
+    current.records += 1;
+    cuttingByEmployee.set(event.employee, current);
+  }
   const area = rolls.reduce((s, r) => s + r.area, 0);
   const printerPeople =
     mode === "imported"
@@ -354,9 +392,15 @@ export function App() {
     : [];
   const supplyPrintingRows = (live.value?.sheets || []).map((sheet) => {
     const orders = live.value!.supplies.filter(
-      (o) => o.sheetId === sheet.sheetId,
+      (o) =>
+        o.sheetId === sheet.sheetId &&
+        (!o.sourceId || !sheet.sourceId || o.sourceId === sheet.sourceId),
     );
-    const facts = live.value!.events.filter((e) => e.sheetId === sheet.sheetId);
+    const facts = live.value!.events.filter(
+      (e) =>
+        e.sheetId === sheet.sheetId &&
+        (!e.sourceId || !sheet.sourceId || e.sourceId === sheet.sourceId),
+    );
     return {
       ...sheet,
       orders: orders.length,
@@ -558,10 +602,40 @@ export function App() {
     }
   };
   const sourceLink = (kind: Kind) => {
+    if (kind === "printing") {
+      const linkedSources = live.value?.sources?.length
+        ? live.value.sources
+        : [
+            {
+              id: "seasonal-printing",
+              name: "Сезонная печать",
+              spreadsheetUrl: PRINTING_URL,
+            },
+            {
+              id: "roll-printing",
+              name: "Рулонная печать · OZON",
+              spreadsheetUrl: ROLL_PRINTING_URL,
+            },
+          ];
+      return (
+        <div className="source-actions">
+          {linkedSources.map((source) => (
+            <a
+              key={source.id}
+              className="button secondary"
+              href={source.spreadsheetUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <ArrowSquareOut size={17} />
+              {source.name}
+            </a>
+          ))}
+        </div>
+      );
+    }
     const url =
-      kind === "printing"
-        ? PRINTING_URL
-        : sources.find((s) => s.id === kind)?.url;
+      sources.find((s) => s.id === kind)?.url;
     return url ? (
       <a
         className="button secondary"
@@ -584,7 +658,7 @@ export function App() {
       </div>
       <DataTable
         rows={supplyPrintingRows}
-        rowKey={(r) => String(r.sheetId)}
+        rowKey={(r) => `${r.sourceId || "legacy"}:${r.sheetId}`}
         label="Печать всех поставок"
         pageSize={25}
         columns={[
@@ -593,7 +667,7 @@ export function App() {
             label: "Поставка",
             render: (r) => (
               <a
-                href={`${PRINTING_URL}#gid=${r.sheetId}`}
+                href={r.spreadsheetUrl || `${PRINTING_URL}#gid=${r.sheetId}`}
                 target="_blank"
                 rel="noreferrer"
               >
@@ -1510,7 +1584,7 @@ export function App() {
                   }
                 >
                   {live.loading
-                    ? "Загружаю все поставки и журнал выпуска."
+                    ? "Загружаю листы заказов и журналы выпуска."
                     : "Повторите обновление. Показатели появятся после успешного чтения."}
                 </Empty>
               </section>
@@ -1524,9 +1598,18 @@ export function App() {
                       value={supplyFilter}
                       onChange={(e) => setSupplyFilter(e.target.value)}
                     >
-                      <option value="all">Все 11 поставок</option>
+                      <option value="all">
+                        Все поставки ({live.value?.sheets.length || 0})
+                      </option>
                       {live.value?.sheets.map((s) => (
-                        <option key={s.sheetId} value={s.name}>
+                        <option
+                          key={`${s.sourceId || "legacy"}:${s.sheetId}`}
+                          value={
+                            s.sourceId
+                              ? `${s.sourceId}::${s.sheetId}`
+                              : s.name
+                          }
+                        >
                           {s.name}
                         </option>
                       ))}
@@ -1555,7 +1638,7 @@ export function App() {
                     <div className="panel-heading">
                       <h2>Выработка по сотрудникам</h2>
                       <select
-                        aria-label="Участок печати"
+                        aria-label="Площадка или источник печати"
                         value={site}
                         onChange={(e) => setSite(e.target.value)}
                       >
@@ -1602,7 +1685,7 @@ export function App() {
                   </section>
                   <section className="panel">
                     <div className="panel-heading">
-                      <h2>По участкам</h2>
+                      <h2>По площадкам и источникам</h2>
                     </div>
                     <div className="site-rows">
                       {[...new Set(rolls.map((r) => r.site))].map((s) => {
@@ -1629,6 +1712,33 @@ export function App() {
                     </div>
                   </section>
                 </div>
+                {mode === "imported" && live.value && (
+                  <section className="panel">
+                    <div className="panel-heading">
+                      <h2>Порезка по журналу</h2>
+                      <strong>
+                        {num(cuttingEvents.reduce((sum, event) => sum + event.quantity, 0))} шт. · {num(cuttingEvents.reduce((sum, event) => sum + event.area, 0), 2)} м²
+                      </strong>
+                    </div>
+                    {cuttingByEmployee.size ? (
+                      <div className="site-rows">
+                        {[...cuttingByEmployee.entries()].map(
+                          ([employee, totals]) => (
+                            <div key={employee}>
+                              <strong>{employee}</strong>
+                              <small>{totals.records} записей</small>
+                              <b>
+                                {num(totals.quantity)} шт. · {num(totals.area, 2)} м²
+                              </b>
+                            </div>
+                          ),
+                        )}
+                      </div>
+                    ) : (
+                      <Empty title="Нет подтверждённых записей порезки за период" />
+                    )}
+                  </section>
+                )}
                 <section className="panel">
                   <div className="panel-heading">
                     <h2>Динамика по дням</h2>
@@ -1953,30 +2063,16 @@ export function App() {
         )}
         {page === "supplies" && (
           <>
-            {mode === "imported" &&
-              (live.value ? (
-                liveSupplyPanel
-              ) : (
-                <section className="panel">
-                  <Empty
-                    title={
-                      live.loading
-                        ? "Читаю поставки"
-                        : "Нет подключения к таблице"
-                    }
-                  >
-                    {live.error || "Загружаю все листы рабочей таблицы."}
-                  </Empty>
-                </section>
-              ))}
-            {mode === "imported" && (
-              <Notice>
-                Каждый рабочий лист — отдельная поставка. Здесь показаны план и
-                подтверждённый выпуск печати. Порезку, упаковку и отгрузку
-                подключим отдельно.
-              </Notice>
-            )}
-            {(mode === "demo" || data.supplies.length > 0) && (
+            {mode === "imported" ? (
+              <Suspense fallback={<section className="panel"><Empty title="Открываю поставки">Загружаю рабочий экран поставок.</Empty></section>}>
+                <LiveSuppliesWorkspace
+                  live={live.value}
+                  loading={live.loading}
+                  error={live.error}
+                  onRefresh={live.reload}
+                />
+              </Suspense>
+            ) : (
               <>
                 <div className="toolbar">
                   <select
@@ -2854,4 +2950,9 @@ export function App() {
       )}
     </div>
   );
+}
+
+export function App() {
+  const isMiniApp = new URLSearchParams(location.search).get("mini") === "1";
+  return isMiniApp ? <TelegramMiniApp /> : <AppShell />;
 }

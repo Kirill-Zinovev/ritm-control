@@ -1,7 +1,12 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Badge, Button, Field, Notice } from "./ui";
 import { timeLabel } from "./intelligence";
 import { useAgentResource } from "./useAgent";
+import {
+  repairReadback,
+  repairStatusMessage,
+  type RepairResult,
+} from "./repairResult";
 type Proposal = {
   id: string;
   version: string;
@@ -10,6 +15,8 @@ type Proposal = {
   direction: string;
   confirmation: string;
   limitation: string;
+  historyApprovalRequired?: boolean;
+  restoreEvidence?: { kind: string; observedAt?: string };
   from: {
     numberValue?: number;
     formulaValue?: string;
@@ -27,18 +34,7 @@ type Proposal = {
   createdAt: string;
   expiresAt: number;
   target: { documentId: string; sheetId: number; sheet: string; cell: string };
-  result?: {
-    at: string;
-    after: {
-      cell: unknown;
-      effective: {
-        numberValue?: number;
-        stringValue?: string;
-        boolValue?: boolean;
-      };
-    };
-    api: { writeRequests: number };
-  } | null;
+  result?: RepairResult | null;
   events: { at: string; type: string; payload: unknown }[];
 };
 type RepairState = {
@@ -56,7 +52,7 @@ type RepairState = {
 const labels: Record<string, string> = {
   queued: "В очереди",
   checking: "Проверяется после записи",
-  needs_review: "Ошибка — требуется решение",
+  needs_review: "Требуется проверка",
   pending: "Ожидает подтверждения",
   verified: "Изменение проверено",
   cancelled: "Отменено",
@@ -65,6 +61,7 @@ const labels: Record<string, string> = {
   executing: "Выполняется",
   repair_proposed: "Предложение сохранено",
   repair_confirmed: "Владелец подтвердил изменение",
+  repair_waiting: "Ожидает завершения другой операции · записи ещё не было",
   repair_backup: "Исходное содержимое сохранено",
   repair_write_started: "Условная запись",
   repair_verified: "Повторное чтение и диагностика успешны",
@@ -96,6 +93,19 @@ export function TestRepairPanel({
   const [ack, setAck] = useState(false);
   const [typed, setTyped] = useState("");
   const p = resource.value?.proposals[0];
+  const readback = repairReadback(p?.result);
+  const resultMessage = repairStatusMessage(p?.result, p?.target.cell || "ячейки");
+  const rejectedBeforeWrite =
+    p?.status === "needs_review" &&
+    p.result?.errorCode === "repair_operation_conflict" &&
+    !p.events.some((event) => event.type === "repair_write_started");
+  const prepared = useRef(false);
+  useEffect(() => {
+    if (production && resource.value && !p && !prepared.current) {
+      prepared.current = true;
+      void act(base + "/propose", { incidentId });
+    }
+  }, [production, resource.value, p, base, incidentId]);
   async function act(path: string, payload: unknown) {
     if (busy) return;
     setBusy(true);
@@ -121,7 +131,9 @@ export function TestRepairPanel({
         )
       )
         setNotice(
-          "Подготовлено точечное предложение. Google Sheets не изменялись; для записи потребуется отдельное подтверждение владельца.",
+          production
+            ? ""
+            : "Подготовлено точечное предложение. Google Sheets не изменялись; для записи потребуется отдельное подтверждение владельца.",
         );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Агент недоступен");
@@ -138,14 +150,18 @@ export function TestRepairPanel({
       <div className="panel-heading">
         <h3>
           {production
-            ? "Исправление по твоему подтверждению"
+            ? "Точное исправление"
             : "Исправление · только тестовая G247"}
         </h3>
         <Badge>Настоящий Google API</Badge>
       </div>
       <Notice>
         {production ? (
-          "Предложение пока ничего не меняет. Формула взята из утверждённого эталона; запись требует подтверждения точного изменения ниже."
+          p?.historyApprovalRequired ? (
+            "Прежняя формула найдена в успешном снимке, но ещё не утверждена. Подтвердите её правильность и разрешите точную запись одним действием ниже."
+          ) : (
+            "Проверьте точное изменение ниже. После вашего разрешения RITM запишет формулу и проверит результат."
+          )
         ) : (
           <>
             Производственные таблицы не изменяются. Новый ключ используется
@@ -154,11 +170,14 @@ export function TestRepairPanel({
           </>
         )}
       </Notice>
-      {resource.value && (
-        <Notice tone={blocked ? "warning" : "neutral"}>
-          {resource.value.isolation.message}
-        </Notice>
-      )}
+      {resource.value &&
+        (!production ||
+          blocked ||
+          resource.value.isolation.status === "unverified") && (
+          <Notice tone={blocked ? "warning" : "neutral"}>
+            {resource.value.isolation.message}
+          </Notice>
+        )}
       {resource.value?.isolation.requiredAction && (
         <p className="panel-note">
           Следующее действие: {resource.value.isolation.requiredAction}
@@ -169,32 +188,45 @@ export function TestRepairPanel({
         <Notice tone="warning">{error || resource.error}</Notice>
       )}
       <div className="doctor-actions">
-        <Button
-          disabled={
-            busy ||
-            resource.locked ||
-            ["queued", "checking", "needs_review"].includes(p?.status || "") ||
-            p?.status === "executing" ||
-            p?.status === "uncertain"
-          }
-          onClick={() => void act(base + "/propose", { incidentId })}
-        >
-          Предложить исправление
-        </Button>
-        {p?.status === "verified" && p.direction === "repair" && (
+        {(!production ||
+          !p ||
+          ["cancelled", "superseded"].includes(p.status) ||
+          rejectedBeforeWrite ||
+          (p.status === "pending" && p.expired)) && (
           <Button
-            disabled={busy}
-            onClick={() =>
-              void act(base + "/propose", {
-                incidentId,
-                direction: "rollback",
-                previousId: p.id,
-              })
+            disabled={
+              busy ||
+              resource.locked ||
+              ["queued", "checking"].includes(p?.status || "") ||
+              (p?.status === "needs_review" && !rejectedBeforeWrite) ||
+              p?.status === "executing" ||
+              p?.status === "uncertain"
             }
+            onClick={() => void act(base + "/propose", { incidentId })}
           >
-            Предложить откат
+            {busy
+              ? "Проверяю ячейку…"
+              : rejectedBeforeWrite
+                ? "Проверить и подготовить заново"
+                : "Подготовить точное исправление"}
           </Button>
         )}
+        {!production &&
+          p?.status === "verified" &&
+          p.direction === "repair" && (
+            <Button
+              disabled={busy}
+              onClick={() =>
+                void act(base + "/propose", {
+                  incidentId,
+                  direction: "rollback",
+                  previousId: p.id,
+                })
+              }
+            >
+              Предложить откат
+            </Button>
+          )}
       </div>
       {p && (
         <>
@@ -203,42 +235,51 @@ export function TestRepairPanel({
             {p.expired && p.status === "pending" ? " · срок истёк" : ""}
           </Badge>
           <dl className="ai-details">
-            <div>
-              <dt>Документ</dt>
-              <dd>
-                {p.sourceName}
-                <small className="ai-block">{p.target.documentId}</small>
-              </dd>
-            </div>
+            {!production && (
+              <div>
+                <dt>Документ</dt>
+                <dd>{p.sourceName}</dd>
+              </div>
+            )}
             <div>
               <dt>Точное изменение</dt>
               <dd>
-                {p.target.sheet} · gid {p.target.sheetId} · {p.target.cell}
+                {p.target.sheet} · {p.target.cell}
                 <br />
                 {value(p.from)} → {value(p.to)}
               </dd>
             </div>
-            <div>
-              <dt>Ожидаемый результат</dt>
-              <dd>
-                {p.expectedResult === null
-                  ? "Будет проверен после восстановления; числовой результат заранее не рассчитан"
-                  : p.expectedResult.toLocaleString("ru-RU")}
-              </dd>
-            </div>
-            <div>
-              <dt>Версия предложения</dt>
-              <dd>{p.version}</dd>
-            </div>
-            <div>
-              <dt>Создано / действует до</dt>
-              <dd>
-                {timeLabel(p.createdAt)} /{" "}
-                {timeLabel(new Date(p.expiresAt).toISOString())}
-              </dd>
-            </div>
+            {!production && (
+              <div>
+                <dt>Ожидаемый результат</dt>
+                <dd>
+                  {p.expectedResult === null
+                    ? "Будет проверен после восстановления; числовой результат заранее не рассчитан"
+                    : p.expectedResult.toLocaleString("ru-RU")}
+                </dd>
+              </div>
+            )}
+            {!production && (
+              <div>
+                <dt>Создано / действует до</dt>
+                <dd>
+                  {timeLabel(p.createdAt)} /{" "}
+                  {timeLabel(new Date(p.expiresAt).toISOString())}
+                </dd>
+              </div>
+            )}
           </dl>
-          <Notice tone="warning">{p.limitation}</Notice>
+          <details>
+            <summary>Условия и доказательства</summary>
+            <p>{p.limitation}</p>
+            <p>Версия: {p.version}</p>
+            <p>
+              Действует до {timeLabel(new Date(p.expiresAt).toISOString())}.
+            </p>
+            {p.restoreEvidence?.observedAt && (
+              <p>Снимок: {timeLabel(p.restoreEvidence.observedAt)}</p>
+            )}
+          </details>
           {p.status === "pending" && (
             <>
               {!production && (
@@ -253,58 +294,81 @@ export function TestRepairPanel({
                   />
                 </Field>
               )}
-              <label className="ai-block">
-                <input
-                  type="checkbox"
-                  checked={ack}
-                  disabled={busy || blocked || p.expired}
-                  onChange={(e) => setAck(e.target.checked)}
-                />{" "}
-                {production
-                  ? "Я согласовал отсутствие параллельного редактирования этой ячейки и её зависимостей на время исправления. Понимаю, что Google не блокирует других редакторов."
-                  : "Я подтверждаю отсутствие параллельного редактирования G247 и C247/D247 на время теста."}
-              </label>
+              {!production && (
+                <label className="ai-block">
+                  <input
+                    type="checkbox"
+                    checked={ack}
+                    disabled={busy || blocked || p.expired}
+                    onChange={(e) => setAck(e.target.checked)}
+                  />{" "}
+                  {production
+                    ? "Я согласовал отсутствие параллельного редактирования этой ячейки и её зависимостей на время исправления. Понимаю, что Google не блокирует других редакторов."
+                    : "Я подтверждаю отсутствие параллельного редактирования G247 и C247/D247 на время теста."}
+                </label>
+              )}
+              {production && (
+                <p className="panel-note">
+                  Нажатие разрешает только показанное изменение и подтверждает
+                  отсутствие параллельного редактирования этой ячейки и
+                  зависимостей на время записи.
+                  {p.historyApprovalRequired
+                    ? " Вы также утверждаете правильность показанной прежней формулы."
+                    : ""}
+                </p>
+              )}
               <Button
                 kind="primary"
                 disabled={
                   busy ||
                   blocked ||
                   p.expired ||
-                  !ack ||
+                  (!production && !ack) ||
                   (!production && typed !== p.confirmation)
                 }
                 onClick={() =>
                   void act(base + "/" + p.id + "/confirm", {
                     version: p.version,
                     confirmation: production ? p.confirmation : typed,
-                    exclusiveEditingAcknowledged: ack,
+                    exclusiveEditingAcknowledged: production || ack,
+                    ...(production && p.historyApprovalRequired
+                      ? { historyCandidateApproved: true }
+                      : {}),
                   })
                 }
               >
                 {busy
                   ? "Проверяю…"
-                  : "Подтвердить " + value(p.from) + " → " + value(p.to)}
+                  : production
+                    ? "Разрешить запись и восстановить " + p.target.cell
+                    : "Подтвердить " + value(p.from) + " → " + value(p.to)}
               </Button>
             </>
           )}
-          {p.result && (
-            <Notice>
-              Повторное чтение: {JSON.stringify(p.result.after.cell)}.
-              Результат:{" "}
-              {p.result.after.effective.numberValue?.toLocaleString("ru-RU") ??
-                p.result.after.effective.stringValue ??
-                String(p.result.after.effective.boolValue ?? "не получен")}
-              . Проверено {timeLabel(p.result.at)}.
+          {resultMessage && (
+            <Notice tone={p?.result?.errorCode ? "warning" : "neutral"}>
+              {resultMessage}
             </Notice>
           )}
-          <h4>Журнал этого предложения</h4>
-          <ol>
-            {p.events.map((e, i) => (
-              <li key={i}>
-                {timeLabel(e.at)} · {labels[e.type] || e.type}
-              </li>
-            ))}
-          </ol>
+          {readback && (
+            <Notice>
+              Повторное чтение: {JSON.stringify(readback.cell)}. Результат:{" "}
+              {readback.effective.numberValue?.toLocaleString("ru-RU") ??
+                readback.effective.stringValue ??
+                String(readback.effective.boolValue ?? "не получен")}
+              . Проверено {timeLabel(p.result?.at)}.
+            </Notice>
+          )}
+          <details>
+            <summary>История операции</summary>
+            <ol>
+              {p.events.map((e, i) => (
+                <li key={i}>
+                  {timeLabel(e.at)} · {labels[e.type] || e.type}
+                </li>
+              ))}
+            </ol>
+          </details>
         </>
       )}
     </section>
