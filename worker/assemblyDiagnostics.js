@@ -173,6 +173,7 @@ export function inspectAssemblyRows(csv) {
     records.push({
       id,
       date,
+      updatedAt: stamp,
       employee,
       machineCut: nums[0],
       manualCut: nums[1],

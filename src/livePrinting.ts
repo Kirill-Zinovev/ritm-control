@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Dataset, Roll } from "./model";
-export const PRINTING_URL =
-  "https://docs.google.com/spreadsheets/d/1eNdUuk-2l83Pgv95LyqYKuOOfhAsEMm5tKLbhWBJiC4/edit";
+export const PRINTING_URL = import.meta.env.VITE_PRINTING_SOURCE_URL || "";
 export const ROLL_PRINTING_URL =
-  "https://docs.google.com/spreadsheets/d/1hojhKS4Av_yy5sUMJcsoeJ_MQRU3V5g9P-fP61PO6Cs/edit#gid=119710351";
+  import.meta.env.VITE_ROLL_PRINTING_SOURCE_URL || "";
 export const PRINTERS = [
   { id: "printer-dmitry", name: "Дмитрий" },
   { id: "printer-pavel", name: "Павел" },
@@ -28,6 +27,10 @@ export type LiveEvent = {
   sourceUrl?: string;
 };
 export type LiveOrder = {
+  assemblyShipmentId?: string | null;
+  areaKnown?: boolean;
+  areaIssue?: string | null;
+  rawUid?: string | null;
   uid: string;
   sheetId: number;
   sheetName: string;
@@ -38,6 +41,8 @@ export type LiveOrder = {
   printProgress?: number | null;
   cutProgress?: number | null;
   remainingPrint?: number | null;
+  packed?: number | null;
+  packingRecords?: number | null;
   sourceId?: string;
   sourceName?: string;
   site?: string;
@@ -54,6 +59,16 @@ export type LivePrinting = {
   staleReason?: string | null;
   sourceUpdatedAt?: string | null;
   quality?: { status: string; invalidRecords: number };
+  packing?: {
+    status: "available" | "partial" | "unavailable";
+    source: string;
+    sourceUrl?: string;
+    checkedAt: string;
+    sourceUpdatedAt?: string | null;
+    eventCount: number;
+    invalidRecords: number;
+    reason?: string | null;
+  };
   events: LiveEvent[];
   cutEvents?: LiveEvent[];
   supplies: LiveOrder[];
@@ -134,6 +149,21 @@ export function useLivePrinting(enabled = true, refreshSource = false) {
         !Array.isArray(j.issues) ||
         !Array.isArray(j.sheets) ||
         !Number.isFinite(Date.parse(j.updatedAt)) ||
+        (j.packing !== undefined &&
+          (![
+            "available",
+            "partial",
+            "unavailable",
+          ].includes(j.packing.status) ||
+            typeof j.packing.source !== "string" ||
+            !Number.isFinite(Date.parse(j.packing.checkedAt)) ||
+            !Number.isSafeInteger(j.packing.eventCount) ||
+            j.packing.eventCount < 0 ||
+            !Number.isSafeInteger(j.packing.invalidRecords) ||
+            j.packing.invalidRecords < 0 ||
+            (j.packing.sourceUpdatedAt !== null &&
+              j.packing.sourceUpdatedAt !== undefined &&
+              !Number.isFinite(Date.parse(j.packing.sourceUpdatedAt))))) ||
         j.events.some(
           (e: LiveEvent) =>
             !PRINTERS.some((p) => p.name === e.employee) ||
@@ -142,6 +172,15 @@ export function useLivePrinting(enabled = true, refreshSource = false) {
         )
       )
         throw new Error(j.message || "Таблица временно недоступна.");
+      if (
+        j.supplies.some(
+          (order: LiveOrder) =>
+            order.packed !== undefined &&
+            order.packed !== null &&
+            (!Number.isSafeInteger(order.packed) || order.packed < 0),
+        )
+      )
+        throw new Error("Некорректные данные упаковки в источнике WorkLog.");
       const cutEvents = Array.isArray(j.cutEvents) ? j.cutEvents : [];
       if (
         cutEvents.some(

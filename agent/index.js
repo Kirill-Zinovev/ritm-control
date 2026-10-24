@@ -24,11 +24,14 @@ import {
   RollSupplySheetsWriter,
 } from "./rollSupply.js";
 import { Monitor } from "./monitor.js";
+import { ProductionSupplyService, ProductionSupplyWriter } from "./productionSupplies.js";
 import { createAgentServer } from "./server.js";
 import { flushTelegram } from "./telegram.js";
 import { RITMAssistant } from "./assistant.js";
 import { TelegramAssistant } from "./telegramAssistant.js";
 import { LocalSecretStore } from "./secretStore.js";
+import { AssemblySyncQueue } from "./assemblySync.js";
+import { AssemblyTransferService } from "./assemblyTransfer.js";
 
 const config = loadConfig(),
   store = new IncidentStore(config.dbPath),
@@ -42,8 +45,12 @@ if (!store.acquire(owner)) {
 store.setMonitoringScope(config.doctorDocuments, config.sources);
 store.recoverNotifications();
 const controller = new AbortController(),
-  doctor = new TableDoctor(store, config),
-  monitor = new Monitor(store, config, { googleReader: doctor.reader });
+  doctor = new TableDoctor(store, config);
+let assemblyTransfer = null;
+const monitor = new Monitor(store, config, {
+  googleReader: doctor.reader,
+  getAssemblyBoxLinks: () => assemblyTransfer?.links() || [],
+});
 // The process owns the exclusive database lease above; only now is a persisted
 // run from a dead prior agent safe to classify as interrupted.
 doctor.recoverInterruptedRun();
@@ -110,7 +117,22 @@ const rollSupplyService = new RollSupplyManagementService(store, {
       throw new Error("Printing snapshot could not be refreshed cleanly");
     return result;
   },
+  getPrintingSnapshot: () => {
+    const source = config.sources.find(
+      (item) => item.adapter === "printing" && item.enabled,
+    );
+    return source ? store.getSnapshot(source.id)?.value || null : null;
+  },
 });
+const productionSupplyService = new ProductionSupplyService(store, {
+  legacy: rollSupplyService,
+  writers: productionWriter ? Object.fromEntries(["roll", "box"].map(department => [department,
+    new ProductionSupplyWriter({ department, credentialWriter: productionWriter }),
+  ])) : null,
+  refresh: rollSupplyService.refresh,
+});
+const assemblySync = new AssemblySyncQueue(store, { secret: config.assemblySyncSecret });
+assemblyTransfer = new AssemblyTransferService(store, { reader: doctor.reader, queue: assemblySync });
 mkdirSync(config.dataDir, { recursive: true });
 const logPath = path.join(config.dataDir, "agent.log");
 function log(event) {
@@ -206,6 +228,7 @@ async function stop() {
   clearInterval(pulse);
   clearTimeout(timer);
   clearTimeout(fastTimer);
+  await assemblySync.stop();
   controller.abort();
   if (current) await current;
   if (fastCurrent) await fastCurrent;
@@ -235,12 +258,21 @@ try {
       repair,
       sourceRecovery,
       rollSupplyService,
+      productionSupplyService,
+      assemblyTransfer,
+      assemblySync,
       assistant,
       secretStore,
       telegramAssistant,
       refreshPrinting: async () => {
         const source = config.sources.find(
           (item) => item.adapter === "printing" && item.enabled,
+        );
+        return source ? monitor.source(source, controller.signal) : { ok: false };
+      },
+      refreshAssembly: async () => {
+        const source = config.sources.find(
+          (item) => item.adapter === "assembly" && item.enabled,
         );
         return source ? monitor.source(source, controller.signal) : { ok: false };
       },
@@ -251,6 +283,7 @@ try {
       server.listen(config.port, "127.0.0.1", resolve);
     });
     if (repair?.production) repair.startQueue();
+    assemblySync.start();
     console.log(
       "RITM Intelligence: http://127.0.0.1:" +
         config.port +

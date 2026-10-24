@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { IncidentStore } from "../agent/store.js";
+import { ROLL_PRINTING_SHEET_ID } from "../worker/printing.js";
 import { PRODUCTION_DOCTOR_DOCUMENTS as docs } from "../agent/productionRegistry.js";
 import { businessPreview } from "../agent/businessDoctor.js";
 import { readDoctorSheet } from "../agent/doctorRead.js";
@@ -34,7 +35,7 @@ test("production scope adds only three roll-printing tabs and preserves existing
   );
   const roll = docs.find((d) => d.id === "doctor-roll-printing");
   assert.ok(roll);
-  assert.equal(roll.documentId, "1hojhKS4Av_yy5sUMJcsoeJ_MQRU3V5g9P-fP61PO6Cs");
+  assert.equal(roll.documentId, ROLL_PRINTING_SHEET_ID);
   assert.deepEqual(
     roll.sheets.map((s) => s.gid),
     [119710351, 126956215, 2053830156],

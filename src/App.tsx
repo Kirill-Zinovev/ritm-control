@@ -57,16 +57,21 @@ import {
 } from "./livePrinting";
 import { importFields, importRows } from "./importer";
 import { FBO_URL, useLiveAssembly } from "./liveAssembly";
+import { AssemblyAnalytics } from "./AssemblyAnalytics";
+import { DesignPreview } from "./DesignPreview";
+import { RitmBackdrop } from "./RitmBackdrop";
+import {
+  completeTotal,
+  plannedAreaTotal,
+  rollCut,
+  rollPrinted,
+} from "./liveSupplyProgress";
 const LiveSuppliesWorkspace = lazy(() =>
   import("./LiveSupplies").then((module) => ({
     default: module.LiveSuppliesWorkspace,
   })),
 );
-import {
-  AssemblyProfileDrawer,
-  PrinterProfilePage,
-  type PrinterRecord,
-} from "./EmployeeProfiles";
+import { PrinterProfilePage, type PrinterRecord } from "./EmployeeProfiles";
 import {
   Badge,
   Button,
@@ -102,7 +107,7 @@ const TITLES: Record<Page, string> = {
 const SUBTITLES: Record<Page, string> = {
   intelligence: "RITM Intelligence · контроль источников и системы",
   overview: "Вся смена на одном экране",
-  assembly: "Дневная цель — коэффициент не ниже 1,00",
+  assembly: "Производительность сотрудников · фактические дневные итоги",
   printing: "Фактический выпуск · сезонная и рулонная печать",
   production: "План и выполненное по каждому артикулу",
   stock: "Готовый товар, ячейки хранения и свободный остаток",
@@ -159,7 +164,11 @@ function AppShell() {
     page !== "intelligence",
     page === "printing" || page === "supplies",
   );
-  const assemblyLive = useLiveAssembly(date, period, page !== "intelligence");
+  const assemblyLive = useLiveAssembly(
+    date,
+    period,
+    page === "assembly" || page === "overview" || page === "sources",
+  );
   const data = mode === "demo" ? demo : printingDataset(real, live.value);
   const [supplyFilter, setSupplyFilter] = useState("all");
   const [sources, setSources] = useState<Source[]>(() =>
@@ -167,7 +176,6 @@ function AppShell() {
   );
   const [employee, setEmployee] = useState("e0");
   const [printer, setPrinter] = useState("all");
-  const [assemblyProfile, setAssemblyProfile] = useState<string | null>(null);
   const [printerProfileId, setPrinterProfileId] = useState<string | null>(null);
   const [supplyId, setSupplyId] = useState("П-0124");
   const [market, setMarket] = useState("Все маркетплейсы");
@@ -200,7 +208,18 @@ function AppShell() {
   const draftInitial = useRef("");
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    document.title = `${TITLES[page]} · RITM`;
+    const params = new URLSearchParams(location.search);
+    const preview = params.get("designPreview") === "1";
+    const view = params.get("view");
+    const previewTitle =
+      view === "wb"
+        ? "Поставка WB"
+        : view === "ozon"
+          ? "Поставка Ozon"
+          : "Обзор";
+    document.title = preview
+      ? `${previewTitle} · RITM · предпросмотр`
+      : `${TITLES[page]} · RITM`;
     const url = new URL(location.href);
     url.searchParams.set("page", page);
     history.replaceState(null, "", url);
@@ -208,7 +227,6 @@ function AppShell() {
   useEffect(() => {
     const onPop = () => {
       setPage(initialPage());
-      setAssemblyProfile(null);
       setPrinterProfileId(null);
     };
     addEventListener("popstate", onPop);
@@ -237,7 +255,6 @@ function AppShell() {
   }, [dirty]);
   const go = (id: Page) => {
     setPage(id);
-    setAssemblyProfile(null);
     setPrinterProfileId(null);
     setQuery("");
     setSidebar(false);
@@ -253,7 +270,7 @@ function AppShell() {
     }
   };
   const refresh = () => {
-    if (mode === "imported" && page === "assembly") {
+    if (page === "assembly") {
       void assemblyLive.reload();
       return;
     }
@@ -272,36 +289,8 @@ function AppShell() {
       );
     }, 450);
   };
-  const assemblyRows = (
-    assemblyLive.value?.date === date && assemblyLive.value?.period === period
-      ? assemblyLive.value.rows
-      : []
-  ).filter(
-    (row) =>
-      !query ||
-      (
-        row.employee +
-        " " +
-        row.cutTypes.map((x) => x.name).join(" ") +
-        " " +
-        row.packTypes.map((x) => x.name).join(" ")
-      )
-        .toLocaleLowerCase("ru")
-        .includes(query.toLocaleLowerCase("ru")),
-  );
-  const assemblyTotals = assemblyRows.reduce(
-    (sum, row) => ({
-      coefficient: sum.coefficient + row.coefficient,
-      cut: sum.cut + row.cut,
-      packed: sum.packed + row.packed,
-      total: sum.total + row.total,
-    }),
-    { coefficient: 0, cut: 0, packed: 0, total: 0 },
-  );
-  const assemblyKnown = assemblyRows.length > 0;
   const printingKnown = mode === "demo" || !!live.value;
-  const activeSourceLoading =
-    page === "assembly" ? assemblyLive.loading : live.loading;
+  const activeSourceLoading = live.loading;
   const contains = (value: string) =>
     value.toLocaleLowerCase("ru").includes(query.toLocaleLowerCase("ru"));
   const workPeople = data.employees.filter(
@@ -401,13 +390,22 @@ function AppShell() {
         e.sheetId === sheet.sheetId &&
         (!e.sourceId || !sheet.sourceId || e.sourceId === sheet.sourceId),
     );
+    const plannedArea = plannedAreaTotal(orders);
     return {
       ...sheet,
       orders: orders.length,
       plan: orders.reduce((n, o) => n + o.quantity, 0),
-      plannedArea: orders.reduce((n, o) => n + o.plannedArea, 0),
+      plannedArea: plannedArea.total ?? 0,
+      areaKnown: plannedArea.observed > 0 && plannedArea.missing === 0,
+      areaObservedOrders: plannedArea.observed,
+      areaMissingOrders: plannedArea.missing,
       quantity: facts.reduce((n, e) => n + e.quantity, 0),
       area: facts.reduce((n, e) => n + e.area, 0),
+      printed: completeTotal(orders.map(rollPrinted)),
+      cut: completeTotal(orders.map(rollCut)),
+      packed: completeTotal(
+        orders.map((o) => (typeof o.packed === "number" ? o.packed : null)),
+      ),
     };
   });
   const totals = data.supplies.reduce(
@@ -655,6 +653,11 @@ function AppShell() {
       <div className="panel-heading">
         <h2>Печать по поставкам</h2>
         <small>За всё время · план из J и O · факт из записей выпуска</small>
+        {page === "overview" && (
+          <Button kind="ghost" onClick={() => go("supplies")}>
+            Все поставки <CaretRight size={17} />
+          </Button>
+        )}
       </div>
       <DataTable
         rows={supplyPrintingRows}
@@ -680,7 +683,14 @@ function AppShell() {
           {
             id: "plannedArea",
             label: "План, м²",
-            render: (r) => num(r.plannedArea, 2),
+            render: (r) => (
+              <span>
+                {r.areaObservedOrders > 0 ? num(r.plannedArea, 2) : "—"}
+                {r.areaMissingOrders > 0 && (
+                  <small>Без площади: {num(r.areaMissingOrders)}</small>
+                )}
+              </span>
+            ),
           },
           {
             id: "quantity",
@@ -812,8 +822,30 @@ function AppShell() {
       ]}
     />
   );
+  if (new URLSearchParams(location.search).get("designPreview") === "1") {
+    const actualPrintingArea = live.value
+      ? live.value.events
+          .filter((event) => inPeriod(event.date, date, period))
+          .reduce((sum, event) => sum + event.area, 0)
+      : null;
+    return (
+      <DesignPreview
+        live={live.value}
+        loading={live.loading}
+        error={live.error}
+        supplies={supplyPrintingRows}
+        printingArea={actualPrintingArea}
+        assemblyPeople={assemblyLive.value?.rows.length ?? null}
+        onRefresh={() => {
+          void live.reload();
+          void assemblyLive.reload();
+        }}
+      />
+    );
+  }
   return (
-    <div className="app">
+    <div className="app app--atmosphere">
+      <RitmBackdrop />
       <a className="skip-link" href="#main">
         К содержимому
       </a>
@@ -891,20 +923,20 @@ function AppShell() {
               {page !== "intelligence" && (
                 <Badge
                   tone={
-                    mode === "demo"
+                    page === "assembly"
+                      ? assemblyLive.error
+                        ? "warning"
+                        : assemblyLive.value
+                          ? "success"
+                          : "info"
+                      : mode === "demo"
                       ? "warning"
-                      : page === "assembly"
-                        ? assemblyLive.error
-                          ? "warning"
-                          : assemblyLive.value
-                            ? "success"
-                            : "info"
-                        : "info"
+                      : "info"
                   }
                 >
-                  {page === "assembly" && mode === "imported"
+                  {page === "assembly"
                     ? assemblyLive.error
-                      ? "Ошибка FBO"
+                      ? "Ошибка загрузки"
                       : assemblyLive.value
                         ? "FBO подключено"
                         : "Подключаю FBO"
@@ -918,7 +950,7 @@ function AppShell() {
             </div>
             <p>{SUBTITLES[page]}</p>
           </div>
-          {page !== "intelligence" && (
+          {page !== "intelligence" && page !== "assembly" && (
             <div className="header-controls">
               <div
                 className="segments"
@@ -950,7 +982,7 @@ function AppShell() {
             </div>
           )}
         </header>
-        {page !== "intelligence" && (
+        {page !== "intelligence" && page !== "assembly" && (
           <div className="context-bar">
             {page !== "sources" && (
               <span>
@@ -958,24 +990,7 @@ function AppShell() {
                   <>Показан демонстрационный пример на {shortDate(date)}.</>
                 ) : (
                   <>
-                    {page === "assembly" && mode === "imported"
-                      ? assemblyLive.loading
-                        ? "Читаю подключённую таблицу FBO…"
-                        : assemblyLive.error
-                          ? assemblyLive.value
-                            ? "Не удалось обновить FBO · показаны последние данные"
-                            : "Таблица FBO недоступна"
-                          : assemblyLive.value
-                            ? "FBO «Итого» подключена · " +
-                              assemblyLive.value.rows.length +
-                              " сборщиков · обновлено " +
-                              new Intl.DateTimeFormat("ru-RU", {
-                                hour: "2-digit",
-                                minute: "2-digit",
-                                timeZone: "Europe/Moscow",
-                              }).format(new Date(assemblyLive.value.updatedAt))
-                            : "Подключаю FBO…"
-                      : live.loading
+                    {live.loading
                         ? "Читаю рабочую таблицу…"
                         : live.error
                           ? live.value
@@ -1048,7 +1063,10 @@ function AppShell() {
                 Printer,
               )}
             </div>
-            <section className="panel">
+            {mode === "imported" ? (
+              liveSupplyPanel
+            ) : (
+              <section className="panel">
               <div className="panel-heading">
                 <h2>Поставки и этапы</h2>
                 <Button kind="ghost" onClick={() => go("supplies")}>
@@ -1057,7 +1075,8 @@ function AppShell() {
                 </Button>
               </div>
               {supplyTable}
-            </section>
+              </section>
+            )}
             <div className="split overview-bottom">
               <section className="panel">
                 <div className="panel-heading">
@@ -1125,421 +1144,13 @@ function AppShell() {
             </div>
           </>
         )}
-        {page === "assembly" && mode === "imported" && (
-          <>
-            <div className="metrics four">
-              {metric(
-                "Сборщики с выпуском",
-                assemblyLive.value ? num(assemblyRows.length) : "—",
-                Users,
-              )}
-              {metric(
-                "Общий коэффициент",
-                assemblyKnown ? num(assemblyTotals.coefficient, 3) : "—",
-                ChartBar,
-                "Сумма кэфов за выбранный период",
-              )}
-              {metric(
-                "Порезано",
-                assemblyKnown ? num(assemblyTotals.cut) : "—",
-                Scissors,
-                "Штук",
-              )}
-              {metric(
-                "Упаковано",
-                assemblyKnown ? num(assemblyTotals.packed) : "—",
-                Package,
-                assemblyKnown
-                  ? num(assemblyTotals.total) + " шт. всего"
-                  : "Нет подтверждённых записей",
-              )}
-            </div>
-            <section className="panel assembly-report">
-              <div className="panel-heading">
-                <div>
-                  <h2>Выпуск сборщиков · FBO итого</h2>
-                  <p className="panel-note">
-                    Коэффициент, количество штук и виды изделий загружаются из
-                    подключённой таблицы.
-                  </p>
-                </div>
-                <div className="assembly-actions">
-                  <Search
-                    label="Найти сборщика или изделие"
-                    value={query}
-                    onChange={setQuery}
-                  />
-                  <a
-                    className="button secondary"
-                    href={FBO_URL}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Открыть FBO <ArrowSquareOut size={16} />
-                  </a>
-                </div>
-              </div>
-              {assemblyLive.error && (
-                <Notice tone="warning">{assemblyLive.error}</Notice>
-              )}
-              {assemblyLive.value?.quality?.status === "partial" && (
-                <Notice tone="warning">
-                  Источник содержит некорректные записи:{" "}
-                  {assemblyLive.value.quality.invalidRecords}. Показатели
-                  неполные; снижение KPI нельзя интерпретировать как ухудшение
-                  работы.
-                </Notice>
-              )}
-              {assemblyLive.value?.stale && (
-                <Notice tone="warning">
-                  Данные устарели. Проверенный снимок:{" "}
-                  {assemblyLive.value.updatedAt}. Текущий выпуск не подтверждён.
-                </Notice>
-              )}
-              {!assemblyRows.length && assemblyLive.loading ? (
-                <Busy label="Читаю FBO итого…" />
-              ) : !assemblyRows.length ? (
-                <Empty
-                  title={
-                    assemblyLive.error
-                      ? "Источник недоступен"
-                      : "Нет записей за этот период"
-                  }
-                >
-                  Отсутствие записей не подтверждает нулевую производительность.
-                  Проверь дату или выбери другой период.
-                </Empty>
-              ) : (
-                <div className="assembly-table-wrap">
-                  <table className="assembly-live-table">
-                    <thead>
-                      <tr>
-                        <th>Сборщик</th>
-                        <th>Общий кэф</th>
-                        <th>
-                          <span className="assembly-th-icon">
-                            <Scissors aria-hidden="true" size={17} />
-                            <span>Порезал · шт. и виды</span>
-                          </span>
-                        </th>
-                        <th>
-                          <span className="assembly-th-icon">
-                            <Package aria-hidden="true" size={17} />
-                            <span>Упаковал · шт. и виды</span>
-                          </span>
-                        </th>
-                        <th>Всего, шт.</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {assemblyRows.map((row) => (
-                        <tr key={row.employee}>
-                          <th scope="row">
-                            <button
-                              className="assembly-employee-link"
-                              type="button"
-                              onClick={() => setAssemblyProfile(row.employee)}
-                            >
-                              {row.employee}
-                              <span>Открыть профиль</span>
-                            </button>
-                          </th>
-                          <td
-                            className={`assembly-coefficient${row.coefficient > 0 ? " is-positive" : ""}`}
-                          >
-                            {num(row.coefficient, 3)}
-                          </td>
-                          <td>
-                            <strong>{num(row.cut)}</strong>
-                            <small>
-                              {row.cutTypes
-                                .map(
-                                  (item) =>
-                                    item.name + " × " + num(item.quantity),
-                                )
-                                .join(" · ") || "—"}
-                            </small>
-                          </td>
-                          <td>
-                            <strong>{num(row.packed)}</strong>
-                            <small>
-                              {row.packTypes
-                                .map(
-                                  (item) =>
-                                    item.name + " × " + num(item.quantity),
-                                )
-                                .join(" · ") || "—"}
-                            </small>
-                          </td>
-                          <td className="assembly-total">{num(row.total)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    <tfoot>
-                      <tr>
-                        <th>Итого</th>
-                        <td
-                          className={`assembly-coefficient${assemblyTotals.coefficient > 0 ? " is-positive" : ""}`}
-                        >
-                          {num(assemblyTotals.coefficient, 3)}
-                        </td>
-                        <td>{num(assemblyTotals.cut)} шт.</td>
-                        <td>{num(assemblyTotals.packed)} шт.</td>
-                        <td>{num(assemblyTotals.total)}</td>
-                      </tr>
-                    </tfoot>
-                  </table>
-                </div>
-              )}
-              <p className="panel-note">
-                Данные по коэффициенту и видам взяты из «FBO итого». За неделю и
-                месяц коэффициенты суммируются по дневным строкам источника.
-              </p>
-            </section>
-          </>
-        )}
-        {page === "assembly" && mode === "demo" && (
-          <>
-            <div className="metrics three">
-              {metric(
-                "Сотрудников с учётом работы",
-                num(scoreRows.length),
-                Users,
-              )}
-              {metric(
-                "Достигли цели",
-                `${achieved} из ${scoreRows.length}`,
-                CheckCircle,
-              )}
-              {metric(
-                "Нет результата",
-                num(scoreRows.filter((s) => s.value === null).length),
-                Database,
-              )}
-            </div>
-            <div className="split staff-split">
-              <section className="panel">
-                <div className="panel-heading">
-                  <h2>Результаты смены</h2>
-                  <Search
-                    label="Найти сотрудника"
-                    value={query}
-                    onChange={setQuery}
-                  />
-                </div>
-                <DataTable
-                  rows={scoreRows.filter((e) => contains(e.name))}
-                  columns={staffColumns}
-                  rowKey={(e) => e.id}
-                  label="Коэффициенты сборщиков"
-                  onSelect={(e) => setEmployee(e.id)}
-                  selected={activeEmployee?.id}
-                />
-                <p className="panel-note">
-                  Выходные и отсутствия исключаются из рабочих дней. Неизвестные
-                  данные показываем отдельно.
-                </p>
-              </section>
-              <section className="panel employee-panel">
-                {activeEmployee && selectedScore ? (
-                  <>
-                    <div className="employee-heading">
-                      <span className="avatar">
-                        {activeEmployee.name
-                          .split(" ")
-                          .map((s) => s[0])
-                          .slice(0, 2)
-                          .join("")}
-                      </span>
-                      <div>
-                        <h2>{activeEmployee.name}</h2>
-                        <p>Сборщик</p>
-                      </div>
-                    </div>
-                    <div className="employee-score">
-                      <strong>
-                        {selectedScore.value === null
-                          ? "—"
-                          : num(selectedScore.value, 2)}
-                      </strong>
-                      <div>
-                        <b>
-                          {selectedScore.value === null
-                            ? "Нет результата"
-                            : num(selectedScore.value * 100) + "%"}
-                        </b>
-                        <span>
-                          {period === "day"
-                            ? "дневной нормы"
-                            : "среднее за рабочий день"}
-                        </span>
-                      </div>
-                    </div>
-                    {selectedScore.value !== null && (
-                      <div className="goal-progress">
-                        <Progress
-                          value={selectedScore.value}
-                          plan={1}
-                          showValue={false}
-                        />
-                        <small>Цель 1,00</small>
-                      </div>
-                    )}
-                    <h3>Вклад операций {period !== "day" && "за период"}</h3>
-                    <div className="operation-list">
-                      {(["Резка", "Ручная работа", "Упаковка"] as const).map(
-                        (o) => (
-                          <div key={o}>
-                            <span>{o}</span>
-                            <strong>
-                              {num(
-                                selectedScore.work
-                                  .filter((w) => w.operation === o)
-                                  .reduce((s, w) => s + coefficient(w), 0),
-                                2,
-                              )}
-                            </strong>
-                          </div>
-                        ),
-                      )}
-                      <div className="total">
-                        <b>Итого коэффициент</b>
-                        <strong>{num(selectedScore.total, 2)}</strong>
-                      </div>
-                    </div>
-                    <div className="section-label">
-                      <h3>Выполнение по дням</h3>
-                      <small>
-                        {new Intl.DateTimeFormat("ru-RU", {
-                          month: "long",
-                          year: "numeric",
-                          timeZone: "Europe/Moscow",
-                        }).format(new Date(date + "T12:00:00Z"))}
-                      </small>
-                    </div>
-                    <div className="calendar-days">
-                      {Array.from({ length: 7 }, (_, i) => {
-                        const day = Math.max(1, Number(date.slice(8)) - 6) + i;
-                        const d = `${date.slice(0, 8)}${String(day).padStart(2, "0")}`;
-                        const shift = data.shifts.find(
-                          (s) =>
-                            s.date === d && s.employee === activeEmployee.id,
-                        );
-                        const result = employeeResult(
-                          data,
-                          activeEmployee.id,
-                          d,
-                          "day",
-                        );
-                        return (
-                          <button
-                            key={d}
-                            className={`day-cell ${d === date ? "current" : ""}`}
-                            onClick={() => {
-                              setDate(d);
-                              setPeriod("day");
-                            }}
-                          >
-                            <small>
-                              {day}
-                              <span>
-                                {new Intl.DateTimeFormat("ru-RU", {
-                                  weekday: "short",
-                                  timeZone: "Europe/Moscow",
-                                }).format(new Date(d + "T12:00:00Z"))}
-                              </span>
-                            </small>
-                            {shift && !shift.working ? (
-                              <span className="calendar-value off">
-                                Выходной
-                              </span>
-                            ) : (
-                              <span
-                                className={`calendar-value ${result.value === null ? "off" : result.value >= 1 ? "success" : "warning"}`}
-                              >
-                                {result.value === null
-                                  ? "—"
-                                  : num(result.value, 2)}
-                              </span>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    <div className="mini-summary">
-                      <div>
-                        <small>Рабочих дней в периоде</small>
-                        <b>{selectedScore.working || "Нет учёта выходов"}</b>
-                      </div>
-                      <div>
-                        <small>Цель достигнута</small>
-                        <b>
-                          {selectedScore.working
-                            ? `${selectedScore.complete} из ${selectedScore.working}`
-                            : "—"}
-                        </b>
-                      </div>
-                    </div>
-                    {!data.shifts.length && (
-                      <Notice>
-                        Для среднего за рабочий день нужен учёт выходов на
-                        смену.
-                      </Notice>
-                    )}
-                  </>
-                ) : (
-                  <Empty title="Нет записей сборщиков">
-                    Загрузи таблицу операций в разделе «Источники данных».
-                  </Empty>
-                )}
-              </section>
-            </div>
-            <section className="panel">
-              <div className="panel-heading">
-                <h2>Выполненные операции</h2>
-                {sourceLink("assembly")}
-              </div>
-              <DataTable
-                rows={selectedScore?.work || []}
-                rowKey={(w) => w.id}
-                label="Расшифровка коэффициента"
-                columns={[
-                  {
-                    id: "date",
-                    label: "Дата",
-                    render: (w) => shortDate(w.date),
-                    sort: (w) => w.date,
-                  },
-                  {
-                    id: "article",
-                    label: "Артикул",
-                    render: (w) => <strong>{w.article}</strong>,
-                  },
-                  { id: "op", label: "Операция", render: (w) => w.operation },
-                  {
-                    id: "qty",
-                    label: "Количество",
-                    render: (w) => num(w.quantity),
-                  },
-                  { id: "norm", label: "Норма", render: (w) => num(w.norm) },
-                  {
-                    id: "coef",
-                    label: "Коэффициент",
-                    render: (w) => (
-                      <strong className="green">
-                        {num(coefficient(w), 2)}
-                      </strong>
-                    ),
-                  },
-                  {
-                    id: "source",
-                    label: "Источник",
-                    render: (w) => <small>{w.source}</small>,
-                  },
-                ]}
-              />
-            </section>
-          </>
+        {page === "assembly" && (
+          <AssemblyAnalytics
+            value={assemblyLive.value}
+            loading={assemblyLive.loading}
+            error={assemblyLive.error}
+            onRefresh={() => void assemblyLive.reload()}
+          />
         )}
         {page === "printing" && printerProfileId && activePrinterProfile ? (
           <PrinterProfilePage
@@ -2687,16 +2298,6 @@ function AppShell() {
               операции.
             </Notice>
           </>
-        )}
-        {page === "assembly" && mode === "imported" && (
-          <AssemblyProfileDrawer
-            employee={assemblyProfile}
-            selectedDate={date}
-            history={assemblyLive.value?.history || []}
-            loading={assemblyLive.loading}
-            error={assemblyLive.error}
-            onClose={() => setAssemblyProfile(null)}
-          />
         )}
       </main>
       <div className="toast-region" role="status" aria-live="polite">

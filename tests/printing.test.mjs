@@ -8,9 +8,97 @@ import {
   SUPPLY_SHEETS,
   ROLL_PRINTING_SHEET,
   ROLL_PRINTING_SHEET_ID,
+  BOX_PRINTING_SHEET_ID,
   PRINTING_SOURCES,
   loadPrinting,
 } from "../worker/printing.js";
+
+test("box jobs load without an invented production journal or printer KPI", async () => {
+  const csv = rows => rows.map(row => row.map(v => '"' + String(v ?? '').replaceAll('"', '""') + '"').join(',')).join('\n');
+  const requested = [];
+  const result = await loadPrinting(async url => {
+    const parsed = new URL(url), documentId = parsed.pathname.split('/')[3], gid = Number(parsed.searchParams.get('gid'));
+    requested.push({ documentId, gid });
+    const source = PRINTING_SOURCES.find(s => s.spreadsheetId === documentId);
+    if (source && gid === source.journal.gid) {
+      const headers = Array(15).fill('');
+      for (const [column, header] of Object.entries(source.journal.expectedHeaders)) headers[column] = header;
+      return new Response(csv([headers]));
+    }
+    const rows = Array.from({ length: 4 }, () => Array(29).fill(''));
+    const descriptor = source?.supplies.find(s => s.gid === gid);
+    const headerRow = descriptor?.headerRow || (documentId === BOX_PRINTING_SHEET_ID ? 4 : 3);
+    rows[0][28] = 'UID'; rows[headerRow - 1][4] = 'Артикул'; rows[headerRow - 1][14] = 'Кол-во';
+    if (documentId === BOX_PRINTING_SHEET_ID) {
+      const row = Array(29).fill(''); row[4] = 'BOX'; row[14] = 25; row[17] = 'TRUE'; row[18] = 'FALSE'; row[28] = 'box-id'; rows.push(row);
+    }
+    return new Response(csv(rows));
+  }, { productionSupplies: [{ id: 'common', name: 'OZON Общая', parts: [{ department: 'box', documentId: BOX_PRINTING_SHEET_ID, sheetId: 700 }] }] });
+  assert.equal(result.supplies.length, 1);
+  assert.equal(result.supplies[0].sourceId, 'box-printing');
+  assert.equal(result.supplies[0].assemblyShipmentId, 'common');
+  assert.equal(result.events.length, 0);
+  assert.equal(requested.filter(r => r.documentId === BOX_PRINTING_SHEET_ID).length, 1);
+});
+
+test("Assembly-linked box sheets load with row-based identity and share the roll shipment", async () => {
+  const csv = rows => rows.map(row => row.map(v => '"' + String(v ?? '').replaceAll('"', '""') + '"').join(',')).join('\n');
+  const requested = [];
+  const rollSheetId = 900001;
+  const boxSheetId = 900002;
+  const result = await loadPrinting(async url => {
+    const parsed = new URL(url);
+    const documentId = parsed.pathname.split('/')[3];
+    const gid = Number(parsed.searchParams.get('gid'));
+    requested.push({ documentId, gid });
+    const source = PRINTING_SOURCES.find(s => s.spreadsheetId === documentId);
+    if (source?.journal?.gid === gid) {
+      const headers = Array(15).fill('');
+      for (const [column, header] of Object.entries(source.journal.expectedHeaders)) headers[column] = header;
+      return new Response(csv([headers]));
+    }
+    const box = documentId === BOX_PRINTING_SHEET_ID && gid === boxSheetId;
+    const descriptor = source?.supplies.find(sheet => sheet.gid === gid) ||
+      (documentId === ROLL_PRINTING_SHEET_ID && gid === rollSheetId ? ROLL_PRINTING_SHEET : null);
+    const rows = Array.from({ length: box ? 4 : 4 }, () => Array(29).fill(''));
+    if (!box) rows[0][28] = 'UID';
+    const headerRow = box ? 4 : descriptor?.headerRow || 3;
+    rows[headerRow - 1][4] = 'Артикул';
+    rows[headerRow - 1][14] = 'Кол-во';
+    if (box) {
+      const order = Array(29).fill('');
+      order[4] = 'BOX-SKU';
+      order[9] = '12.5';
+      order[14] = '25';
+      rows.push(order);
+    }
+    return new Response(csv(rows));
+  }, {
+    additionalSheets: [{ gid: rollSheetId, name: 'OZON linked roll' }],
+    productionSupplies: [{
+      id: 'shared-shipment',
+      name: 'OZON linked roll',
+      parts: [{ department: 'roll', documentId: ROLL_PRINTING_SHEET_ID, sheetId: rollSheetId }],
+    }],
+    assemblyBoxLinks: [{
+      name: 'OZON linked roll',
+      boxSheetId,
+      targetRollSheetId: rollSheetId,
+      boxRows: 1,
+      boxQuantity: 25,
+      positionKeys: ['row:5|BOX-SKU'],
+    }],
+  });
+  const boxOrder = result.supplies.find(order => order.sourceId === 'box-printing');
+  assert.ok(requested.some(request => request.documentId === BOX_PRINTING_SHEET_ID && request.gid === boxSheetId));
+  assert.equal(boxOrder?.article, 'BOX-SKU');
+  assert.equal(boxOrder?.uid, `${boxSheetId}::row:5`);
+  assert.equal(boxOrder?.rawUid, null);
+  assert.equal(boxOrder?.assemblyShipmentId, 'shared-shipment');
+  assert.equal(boxOrder?.plannedArea, 12.5);
+  assert.equal(boxOrder?.areaKnown, true);
+  assert.equal(result.issues.some(issue => issue.source === 'OZON linked roll' && issue.code === 'missing_uid'), false);
+});
 const o = {
   uid: "NY-0001",
   rawUid: "NY-0001",
@@ -238,6 +326,44 @@ test("X shows half the print run when T is empty; cutting stays unknown without 
   assert.equal(index.orders[0].printProgress, 50);
   assert.equal(index.orders[0].cutProgress, null);
   assert.equal(index.orders[0].remainingPrint, 50);
+});
+
+test("box progress uses confirmed R/S flags and preserves unknown manual print area", () => {
+  const rows = Array.from({ length: 4 }, () => Array(29).fill(""));
+  rows[0][28] = "UID"; rows[3][4] = "Артикул"; rows[3][14] = "Кол-во";
+  const row = Array(29).fill("");
+  row[4] = "BOX-SKU"; row[14] = "25"; row[17] = "TRUE"; row[18] = "FALSE";
+  row[23] = "999"; row[28] = "box-uid";
+  const index = indexOrders([{ gid: 700, name: "OZON Общая", sourceId: "box-printing", assemblyShipmentId: "common", headerRow: 4, dataStartRow: 5, rows: [...rows, row] }]);
+  const order = index.orders[0];
+  assert.equal(order.printProgress, 25);
+  assert.equal(order.cutProgress, 0);
+  assert.equal(order.remainingPrint, 0, "box extras in X cannot become a print remainder");
+  assert.equal(order.assemblyShipmentId, "common");
+  assert.equal(order.areaKnown, false);
+});
+
+test("supply area trusts valid J, preserves missing areas, and never invents manual dimensions", () => {
+  const headers = Array.from({ length: 4 }, () => Array(29).fill(""));
+  headers[0][28] = "UID";
+  headers[3][4] = "Артикул";
+  headers[3][14] = "Кол-во";
+  const values = ["12,45", "#N/A", "", "0", "0,0003"];
+  const rows = values.map((area, i) => {
+    const row = Array(29).fill("");
+    row[4] = `AREA-${i}`; row[9] = area; row[14] = "10"; row[28] = `area-${i}`;
+    return row;
+  });
+  const index = indexOrders([{ gid: 700, name: "OZON Площадь", sourceId: "roll-printing", headerRow: 4, dataStartRow: 5, rows: [...headers, ...rows] }]);
+  assert.equal(index.orders[0].plannedArea, 12.45);
+  assert.equal(index.orders[0].areaKnown, true, "J is a valid source independently of manual dimensions");
+  assert.equal(index.orders[1].areaKnown, false);
+  assert.equal(index.orders[1].areaIssue, "J6: #N/A");
+  assert.equal(index.orders[2].areaKnown, false);
+  assert.equal(index.orders[2].areaIssue, "J7: площадь не заполнена");
+  assert.equal(index.orders[3].areaKnown, false, "zero from blank dimensions must remain unknown");
+  assert.equal(index.orders[4].plannedArea, 0.0003, "small valid manual area is not rounded down by absent dimensions");
+  assert.equal(index.orders[4].areaKnown, true);
 });
 test("percentage progress is converted to pieces and respects a zero percent value", () => {
   const rows = [

@@ -6,6 +6,7 @@ import {
   ROLL_PRINTING_SHEET,
   ROLL_PRINTING_SHEET_ID,
 } from "../worker/printing.js";
+import { privateGoogleSource } from "../worker/privateGoogleConfig.js";
 export const PRODUCTION_REPAIR_DOCUMENT_IDS = [
   "doctor-fbo",
   "doctor-shop-one",
@@ -111,7 +112,7 @@ export const PRODUCTION_DOCTOR_DOCUMENTS = (() => {
   });
   const shop = {
     id: "doctor-shop-one",
-    documentId: "1YTQQ1Mg9kVv7EOQiN6wOvkvnHvsiXcwbhYOERUPy8rQ",
+    documentId: privateGoogleSource("ozonCodesCatalogId"),
     name: "OZON Первый магазин",
     department: "Сборка",
     enabled: true,

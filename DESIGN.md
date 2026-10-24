@@ -1,12 +1,12 @@
 ---
 version: alpha
 colors:
-  primary: "#008260"
-  navigation: "#142638"
-  text: "#14253b"
-  muted: "#6b7c91"
-  border: "#e1e7ed"
-  background: "#f8fafb"
+  primary: "#2563eb"
+  navigation: "#ffffff"
+  text: "#10213a"
+  muted: "#50627a"
+  border: "#e3eaf2"
+  background: "#e7edf5"
   surface: "#ffffff"
   success: "#007653"
   success-bg: "#e5f6ef"
@@ -23,8 +23,8 @@ typography:
     fontSize: "34px"
     lineHeight: "1.15"
 rounded:
-  control: "6px"
-  panel: "8px"
+  control: "9px"
+  panel: "15px"
 spacing:
   small: "8px"
   medium: "16px"
@@ -41,11 +41,17 @@ components:
 
 ## Overview
 
-Product/admin register. Audience: production manager coordinating WB/Ozon goods, assembly staff and printing sites. Visual targets are the four most recent detailed generated mockups in this conversation: overview, assembly, printing, supplies. Keep their navy sidebar and light working surface. Signature: operational numbers always lead to their source records. Initial release reads data; task dispatch is a later phase.
+Product/admin register. Audience: production manager coordinating WB/Ozon goods, assembly staff and printing sites. Approved visual direction (2026-10-20): a light RITM SaaS/ERP system with a white navigation rail, a slightly deeper slate-blue ambient page background, white operational surfaces, clear compact data tables, blue primary actions and restrained teal status accents. Operational numbers always lead to their source records. Preserve real data, routes and business behavior during visual changes.
+
+Marketplace colors are scoped to the currently selected shipment only: Ozon uses a soft blue hero, Wildberries uses a purple hero. The global shell, other pages and shared components remain RITM-neutral. Unknown marketplace uses the neutral RITM theme. Do not add routes or marketplace screens that the application does not already support.
+
+The owner reaffirmed the illustrated reference on 2026-10-20: a plain colored strip is insufficient. `src/ShipmentHero.tsx` and `src/shipmentHero.css` own the shared live/preview banner, with a readable heading and source link, marketplace tile, decorative 3D composition on the right, existing actions, and a separate white metrics strip below. Ozon artwork contains kraft parcels, label rolls and tickets; WB artwork contains berry parcels, a garment and shopping bag. Optimized decorative WebP assets live in `public/images/` (under 65 KB each). No KPI, label content or status is baked into the artwork; actual supply facts remain rendered text.
 
 ## Colors
 
-Canonical runtime owner is `src/styles.css`, with this document mirroring shared values. `colors.primary` maps to `--primary`; navigation to `--nav`; text to `--text`; background to `--bg`; all other color keys map to matching CSS variables. Shared primitives consume those variables. Green means a reached goal or completed work, amber means current below-goal output or missing information. Color never replaces a textual state.
+Owner-approved on 2026-10-20 after the local 1920×1080 review: all existing RITM sections use `RitmBackdrop` via the shared `app--atmosphere` shell. The decorative component uses static CSS lighting plus inline SVG glass prisms, outside document flow and pointer/accessibility hit testing. `--ritm-backdrop-base: #D7E4F2`, `--ritm-backdrop-light: #E6EFF8`, `--ritm-backdrop-depth: #C0D5EB`, and `--ritm-backdrop-shadow: #B6CDE6` are owned by `src/styles.css`; SVG lighting remains local decorative material. Geometry is hidden at 950px and below, with a simple gradient retained. No animation or external asset is required. Existing panel geometry and marketplace hero artwork are preserved. Publication is authorized. The existing global `--page-background` remains the fallback for surfaces outside the shared RITM shell.
+
+Canonical runtime owner is `src/styles.css`, with this document mirroring shared values. `colors.primary` maps to `--primary`; navigation to `--nav`; text to `--text`; background to `--bg`; all other color keys map to matching CSS variables. Shared primitives consume those variables. Primary `#2563EB`; navigation/surface `#FFFFFF`; text `#10213A`; muted text `#50627A`; background `#E7EDF5`; border `#E3EAF2`; teal accent `#12B8A6`. `--page-background` composes the base and restrained blue/teal glows; both the live application and design preview consume this same token. The owner requested this slightly darker canvas so white cards stand apart, while retaining a light theme. Secondary text was darkened with it for readable contrast (5.29:1 against the base). Green means a reached goal or completed work, amber means current below-goal output or missing information. Color never replaces a textual state.
 
 ## Typography
 
@@ -53,15 +59,15 @@ Segoe UI includes Cyrillic and is installed on the user's Windows device. Arial 
 
 ## Layout
 
-Sidebar 220px, content padding 32px, section gap 18px. RITM is a workstation application: full left navigation remains visible on monitors. Content panels may stack and tables keep their own visible horizontal scrolling. No page-height constraints inherited from tables. Tables are paginated at 10/20/50 rows.
+Sidebar 220px, content padding 32px, section gap 18px. Full left navigation remains visible on workstation monitors. On narrow screens, all navigation links stay available in a horizontally scrollable top navigation row. Content panels may stack and tables keep their own visible horizontal scrolling. No page-height constraints inherited from tables. Tables are paginated at 10/20/50 rows.
 
 ## Elevation & Depth
 
-Content panels are flat with fine borders. Shadows are reserved for modals and notifications.
+Operational surfaces use a fine border, 15px radius and a very soft shadow. Table contents stay on white/light surfaces for legibility. Avoid decorative treatments behind dense data.
 
 ## Shapes
 
-Control radius 6px maps to `--radius`; panel radius 8px. Initial avatars are text labels. The RITM wordmark is editable typography, not a simulated raster logo.
+Control radius 9px maps to `--radius`; panel radius 15px maps to `--panel-radius`. Soft panel elevation maps to `--shadow-soft` and `--shadow-hover`. Initial avatars are text labels. The RITM wordmark is editable typography, not a simulated raster logo.
 
 ## Components
 

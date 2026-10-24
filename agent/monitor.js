@@ -160,6 +160,7 @@ export class Monitor {
       fetcher = fetch,
       loaders = {},
       googleReader = null,
+      getAssemblyBoxLinks = () => [],
       now = () => new Date(),
     } = {},
   ) {
@@ -168,6 +169,7 @@ export class Monitor {
     this.fetcher = fetcher;
     this.loaders = loaders;
     this.googleReader = googleReader;
+    this.getAssemblyBoxLinks = getAssemblyBoxLinks;
     this.now = now;
     this.busy = false;
     this.sourceQueues = new Map();
@@ -197,7 +199,10 @@ export class Monitor {
         {
           printingAdditionalSheets:
             this.store.meta("rollPrintingAdditionalSheets") || [],
+          productionSupplies: this.store.meta("productionSupplies") || [],
+          assemblyBoxLinks: this.getAssemblyBoxLinks() || [],
           googleReader: this.googleReader,
+          signal,
         },
       );
       const previous = this.store.getSnapshot(source.id);

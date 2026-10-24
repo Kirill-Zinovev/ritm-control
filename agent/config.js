@@ -96,6 +96,7 @@ export function loadConfig(env = process.env) {
   if (env.RITM_DOCTOR_DEMO_ENABLED === "true")
     doctorDocuments.push(validateDoctorDocuments([DEMO_DOCUMENT])[0]);
   const config = {
+    assemblySyncSecret: secretFile("RITM_ASSEMBLY_SYNC_SECRET_FILE"),
     testWriterCredentialsFile: env.RITM_TEST_WRITER_CREDENTIALS_FILE || "",
     productionRepairEnabled: env.RITM_PRODUCTION_REPAIR_ENABLED === "true",
     productionWriterCredentialsFile:

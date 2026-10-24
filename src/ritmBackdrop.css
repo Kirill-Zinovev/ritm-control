@@ -1,0 +1,113 @@
+/* Owner-approved shared RITM shell treatment; marketplace heroes stay local. */
+.app--atmosphere {
+  position: relative;
+  isolation: isolate;
+  min-height: 100vh;
+  --shadow-soft:
+    0 8px 30px rgba(40, 70, 110, 0.055), 0 2px 8px rgba(40, 70, 110, 0.025);
+}
+
+.ritm-backdrop {
+  position: fixed;
+  inset: 0 0 0 220px;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  background:
+    radial-gradient(
+      ellipse at 28% -12%,
+      rgba(246, 252, 255, 0.9),
+      transparent 52%
+    ),
+    radial-gradient(
+      ellipse at 77% 8%,
+      rgba(156, 191, 234, 0.58),
+      transparent 53%
+    ),
+    radial-gradient(
+      ellipse at 15% 70%,
+      rgba(169, 201, 229, 0.46),
+      transparent 43%
+    ),
+    radial-gradient(
+      ellipse at 66% 61%,
+      rgba(207, 235, 236, 0.38),
+      transparent 45%
+    ),
+    radial-gradient(
+      ellipse at 91% 83%,
+      rgba(216, 221, 245, 0.64),
+      transparent 49%
+    ),
+    linear-gradient(
+      164deg,
+      var(--ritm-backdrop-light) 0%,
+      var(--ritm-backdrop-base) 36%,
+      var(--ritm-backdrop-depth) 74%,
+      var(--ritm-backdrop-shadow) 100%
+    );
+}
+
+.ritm-backdrop svg {
+  position: absolute;
+  display: block;
+  pointer-events: none;
+}
+
+.ritm-backdrop-upper {
+  width: min(78%, 1160px);
+  height: auto;
+  top: -108px;
+  right: -36px;
+  opacity: 0.35;
+}
+
+.ritm-backdrop-cubes {
+  width: clamp(320px, 28vw, 500px);
+  height: auto;
+  left: -55px;
+  bottom: -48px;
+  opacity: 0.86;
+}
+
+.app--atmosphere .sidebar {
+  background: rgba(255, 255, 255, 0.97);
+}
+
+.app--atmosphere .panel {
+  border-color: rgba(130, 158, 190, 0.17);
+  box-shadow: var(--shadow-soft);
+}
+
+@media (max-width: 1250px) {
+  .ritm-backdrop {
+    left: 200px;
+  }
+  .ritm-backdrop-cubes {
+    opacity: 0.62;
+  }
+}
+
+@media (max-width: 950px) {
+  .ritm-backdrop {
+    left: 0;
+  }
+  .ritm-backdrop svg {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ritm-backdrop,
+  .ritm-backdrop * {
+    animation: none;
+    transition: none;
+  }
+}
+
+@media print, (forced-colors: active) {
+  .ritm-backdrop {
+    display: none;
+  }
+}

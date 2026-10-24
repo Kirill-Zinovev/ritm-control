@@ -10,11 +10,13 @@
     "test:sites": "node --test tests/sites-worker.test.mjs tests/printing.test.mjs tests/assembly.test.mjs",
     "typecheck": "tsc --noEmit",
     "test:domain": "node scripts/test-domain.mjs",
+    "test:assembly-app": "node --test tests/assembly-supply-sync.test.mjs",
+    "test:assembly-load": "node --test tests/assembly-load-simulation.test.mjs",
     "format": "prettier --write src tests scripts tsconfig.json DESIGN.md UX-CONTRACT.md README.md",
     "format:check": "prettier --check src tests/domain.test.ts scripts/test-domain.mjs tsconfig.json DESIGN.md UX-CONTRACT.md README.md",
     "intelligence": "node agent/index.js",
     "intelligence:check": "node agent/index.js --once",
-    "test:intelligence": "node --test tests/intelligence*.test.mjs"
+    "test:intelligence": "node --test tests/intelligence*.test.mjs tests/assembly-packing.test.mjs"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "https://registry.npmjs.org/@radix-ui/react-dialog/-/react-dialog-1.1.23.tgz",

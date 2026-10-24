@@ -1,5 +1,9 @@
 # RITM Control
 
+## Private local configuration
+
+Google spreadsheet IDs and the Assembly Web App URL are deliberately excluded from Git. The Node agent reads them from the ignored `intelligence.local.json` file under `googleSources`; the Vite app reads `VITE_FBO_SOURCE_URL`, `VITE_PRINTING_SOURCE_URL`, `VITE_ROLL_PRINTING_SOURCE_URL` and `VITE_ASSEMBLY_WEB_APP_URL` from the ignored `.env.local`. Without local settings, integrations remain unconfigured. The test Sheets writer also fails closed unless its isolated test target and the production-document deny list are configured locally.
+
 Formula Intelligence: [снимки формул, массовое утверждение, покрытие и безопасное обновление Windows](docs/FORMULA-INTELLIGENCE.md).
 
 Существующий производственный кабинет на React 19, TypeScript, Vite и JavaScript Worker. Разделы: обзор, сборщики, печать, производство, склад, поставки, источники данных и AI Center. Навигация постоянно видна слева на рабочих мониторах.
@@ -10,6 +14,10 @@ Formula Intelligence: [снимки формул, массовое утверж�
 - Печать: сезонная таблица красного здания, уникальные валидные операции «Печать» из «Журнал выпуска». Производственная дата B, сотрудник C, количество J, площадь L. Резка не входит в KPI печати.
 - worker/assembly.js и worker/printing.js предоставляют существующие API. Некорректные записи сборки имеют диагностику и не превращаются в нулевые значения.
 - Импорт CSV, локальные черновики и демонстрационный режим остаются отдельными. Резерв прототипа не изменяет внешнюю складскую систему.
+
+## Синхронизация с RITM Assembly
+
+Состав Assembly обновляется подписанными событиями из надёжной очереди агента после подтверждённых операций с поставкой. Минутный Apps Script триггер отключён после проверки квитанции. Прямые правки таблиц обновляются кнопкой «Обновить данные» в Assembly.
 
 ## RITM Intelligence — этапы 1–2
 
@@ -35,6 +43,12 @@ AI Center встроен в текущий интерфейс: обзор, ин�
 
 ## Разработка
 
+### Передача существующих товаров в Assembly
+
+В «Поставках» подготовлено отдельное действие «Передать в сборку»: участок → существующий лист → выбор позиций → проверка → подтверждение. Поддерживаются рулонная печать и бокс. Производственные таблицы не изменяются. Связанная общая поставка RITM передаётся целиком; для отдельного старого листа можно выбрать часть товаров. Повторные передачи дополняют состав без дублей, история работы сборщиков сохраняется.
+
+Изолированный предпросмотр формы запускается через `node scripts/assembly-transfer-preview.mjs` и доступен на `http://127.0.0.1:5187/__transfer-preview`. Он явно помечен как тестовый, использует искусственные товары, память вместо рабочей базы и не обращается к Google Sheets. Подготовленные изменения пока не опубликованы.
+
 Node.js 24.12+ для агента; frontend использует существующий стек.
 
     npm ci
@@ -52,3 +66,6 @@ Node.js 24.12+ для агента; frontend использует существ
 Production-деплой не выполняется автоматически. Секреты не хранить в frontend, GitHub или публичных параметрах.
 
 Утверждение четырёх базовых проверок, расследования и точечные исключения доступны в AI Center → Table Doctor. Все правила первоначально ждут решения владельца; это не разрешение на изменение Google Sheets. Контракты, защита решений и ограничения описаны в [docs/DIAGNOSTIC-APPROVAL.md](docs/DIAGNOSTIC-APPROVAL.md).
+# Private local configuration
+
+Google spreadsheet IDs and the Assembly Web App URL are deliberately excluded from Git. The Node agent reads them from the ignored `intelligence.local.json` file under `googleSources`; the Vite app reads `VITE_FBO_SOURCE_URL`, `VITE_PRINTING_SOURCE_URL`, `VITE_ROLL_PRINTING_SOURCE_URL` and `VITE_ASSEMBLY_WEB_APP_URL` from the ignored `.env.local`. Without local settings, integrations remain unconfigured. The test Sheets writer also fails closed unless its isolated test target and the production-document deny list are configured locally.

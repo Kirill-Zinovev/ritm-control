@@ -25,6 +25,8 @@ Navigation uses semantic links and persists the active page in URL `page`. List 
 
 ## Feedback and recovery
 
+Explicit Assembly transfer uses the shared Modal, Button and Field components, native department/sheet selectors and a compact checkbox table. Source quantities are read-only; missing or invalid quantities are unavailable, never substituted with zero. Unlinked source sheets allow selecting positions; a linked RITM supply requires its complete confirmed composition. A separate review precedes «Передать только в сборку». Closing retains selection; keyboard dismissal restores focus to the launching button. Pending operations persist in the server outbox; the browser stores only an operation ID for status recovery. A source change blocks transfer and requires refreshing the preview. Repeat transfer preserves existing work and does not duplicate positions. The production sheets are read-only in this flow.
+
 CSV validation is all-or-nothing: duplicate roll/operation IDs, invalid dates, missing fields and invalid quantities block replacement. Retry keeps file and mappings. Reimport replaces a source snapshot; it never adds the same rows twice. Summary FBO coefficients are not imported as additional work operations. Frozen per-operation norms are needed in the export. Imported monthly mean stays unknown without shift records.
 
 ## States

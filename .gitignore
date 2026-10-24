@@ -23,3 +23,10 @@ credentials*.json
 google-key*.json
 table-doctor-demo.json
 doctor.private.json
+
+# Owner-specific Apps Script IDs and local verification snapshots
+.clasp.json
+apps-script/assembly/Code.js
+.tmp-*/
+artifacts/
+debug.log

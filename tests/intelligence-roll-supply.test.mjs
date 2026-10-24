@@ -10,6 +10,8 @@ import {
   ROLL_PRINTING_SHEET_ID,
 } from "../worker/printing.js";
 
+import { ProductionSupplyWriter, DEPARTMENTS } from "../agent/productionSupplies.js";
+
 const payload = (operationId, overrides = {}) => ({
   action: "create",
   explicitWriteApproval: true,
@@ -36,24 +38,30 @@ function response(value, status = 200) {
 }
 
 function googleHarness({
+  box = false,
   loseWriteResponse = false,
   corruptReadback = false,
   missingFormulaRows = [],
+  missingFormulaCells = [],
+  formulaOverrides = {},
+  templateRows = 600,
 } = {}) {
+  const documentId = box ? DEPARTMENTS.box.documentId : ROLL_PRINTING_SHEET_ID;
+  const descriptor = box ? DEPARTMENTS.box.template : ROLL_PRINTING_SHEET;
   const sheets = new Map(),
     requests = [],
     counters = { writes: 0 };
   let loseWriteResponseAfterAcceptance = loseWriteResponse;
   const template = {
     properties: {
-      sheetId: ROLL_PRINTING_SHEET.gid,
-      title: ROLL_PRINTING_SHEET.name,
-      gridProperties: { rowCount: 600 },
+      sheetId: descriptor.gid,
+      title: descriptor.name,
+      gridProperties: { rowCount: templateRows },
     },
     data: [{ startRow: 0, startColumn: 0, rowData: [] }],
   };
   const rowData = template.data[0].rowData;
-  for (let row = 0; row < 600; row++) {
+  for (let row = 0; row < templateRows; row++) {
     const values = Array.from({ length: 29 }, () => ({}));
     const sheetRow = row + 1;
     if (sheetRow === 1)
@@ -64,24 +72,32 @@ function googleHarness({
           stringValue: "⚠️ СЕЗОННАЯ ПЕЧАТЬ — Работа НЕ завершена!",
         },
       };
-    if (sheetRow === ROLL_PRINTING_SHEET.headerRow) {
+    if (sheetRow === (descriptor.headerRow || 4)) {
       values[4] = { userEnteredValue: { stringValue: "Артикул" } };
       values[14] = { userEnteredValue: { stringValue: "Кол-во" } };
     }
-    if (sheetRow === ROLL_PRINTING_SHEET.uidHeaderRow)
+    if (!box && sheetRow === (descriptor.uidHeaderRow || 1))
       values[28] = { userEnteredValue: { stringValue: "UID" } };
     if (
-      sheetRow >= ROLL_PRINTING_SHEET.dataStartRow &&
-      sheetRow <= ROLL_PRINTING_SHEET.dataStartRow + 499 &&
-      !missingFormulaRows.includes(sheetRow)
+      sheetRow >= (descriptor.dataStartRow || 5) &&
+      sheetRow <= templateRows
     ) {
-      for (const column of [5, 8, 9])
+      for (const column of (box ? [5, 9] : [5, 8, 9])) {
+        const cell = `${String.fromCharCode(65 + column)}${sheetRow}`;
+        if (
+          missingFormulaRows.includes(sheetRow) ||
+          missingFormulaCells.includes(cell)
+        )
+          continue;
         values[column] = {
           userEnteredValue: {
-            formulaValue: `=FORMULA_${column + 1}_${sheetRow}`,
+            formulaValue:
+              formulaOverrides[sheetRow]?.[column + 1] ||
+              `=FORMULA_${column + 1}_${sheetRow}`,
           },
           effectiveValue: { numberValue: 0 },
         };
+      }
       values[1] = {
         userEnteredValue: { formulaValue: `=IMAGE(E${sheetRow})` },
       };
@@ -109,10 +125,12 @@ function googleHarness({
           userEnteredValue: { stringValue: `old-uid-${sheetRow}` },
         };
       }
+      if (sheetRow === templateRows)
+        values[0] = { userEnteredValue: { numberValue: 46302 } };
     }
     rowData.push({ values });
   }
-  sheets.set(ROLL_PRINTING_SHEET.gid, {
+  sheets.set(descriptor.gid, {
     properties: structuredClone(template.properties),
     data: structuredClone(template.data),
   });
@@ -130,9 +148,9 @@ function googleHarness({
     const cloned = structuredClone(sheet);
     for (const row of cloned.data[0].rowData || []) {
       for (const cell of row.values || []) {
-        if (cell.userEnteredValue?.formulaValue && !cell.effectiveValue)
+        if (cell?.userEnteredValue?.formulaValue && !cell.effectiveValue)
           cell.effectiveValue = { numberValue: 0 };
-        else if (cell.userEnteredValue && !cell.effectiveValue)
+        else if (cell?.userEnteredValue && !cell.effectiveValue)
           cell.effectiveValue = structuredClone(cell.userEnteredValue);
       }
     }
@@ -143,7 +161,7 @@ function googleHarness({
     const parsed = new URL(url);
     if (parsed.hostname === "www.googleapis.com")
       return response({
-        id: ROLL_PRINTING_SHEET_ID,
+        id: documentId,
         capabilities: { canEdit: true },
       });
     assert.equal(parsed.hostname, "sheets.googleapis.com");
@@ -153,7 +171,44 @@ function googleHarness({
       requests.push(body.requests);
       const replies = [];
       for (const request of body.requests) {
-        if (request.duplicateSheet) {
+        if (request.insertDimension) {
+          const range = request.insertDimension.range;
+          const sheet = sheets.get(range.sheetId);
+          const count = range.endIndex - range.startIndex;
+          sheet.data[0].rowData.splice(
+            range.startIndex,
+            0,
+            ...Array.from({ length: count }, () => ({ values: [] })),
+          );
+          sheet.properties.gridProperties.rowCount += count;
+          replies.push({});
+        } else if (request.copyPaste) {
+          const { source, destination } = request.copyPaste;
+          const sheet = sheets.get(source.sheetId);
+          for (let row = 0; row < destination.endRowIndex - destination.startRowIndex; row++) {
+            for (let column = 0; column < destination.endColumnIndex - destination.startColumnIndex; column++) {
+              const sourceCell = sheet.data[0].rowData[source.startRowIndex + row]?.values?.[source.startColumnIndex + column];
+              const formula = sourceCell?.userEnteredValue?.formulaValue;
+              updateCell(
+                sheet,
+                destination.startRowIndex + row,
+                destination.startColumnIndex + column,
+                formula ? { userEnteredValue: { formulaValue: formula } } : {},
+              );
+            }
+          }
+          replies.push({});
+        } else if (request.deleteDeveloperMetadata) {
+          const lookup = request.deleteDeveloperMetadata.dataFilter.developerMetadataLookup;
+          const target = sheets.get(lookup.metadataLocation.sheetId);
+          target.developerMetadata = (target.developerMetadata || []).filter(m => m.metadataKey !== lookup.metadataKey);
+          replies.push({});
+        } else if (request.createDeveloperMetadata) {
+          const metadata = request.createDeveloperMetadata.developerMetadata;
+          const target = sheets.get(metadata.location.sheetId);
+          (target.developerMetadata ||= []).push(metadata);
+          replies.push({});
+        } else if (request.duplicateSheet) {
           const duplicate = request.duplicateSheet;
           const copied = structuredClone(sheets.get(duplicate.sourceSheetId));
           copied.properties.sheetId = duplicate.newSheetId;
@@ -183,14 +238,15 @@ function googleHarness({
         throw new Error(
           "simulated lost HTTP response after Google accepted write",
         );
-      return response({ spreadsheetId: ROLL_PRINTING_SHEET_ID, replies });
+      return response({ spreadsheetId: documentId, replies });
     }
-    if (parsed.pathname === `/v4/spreadsheets/${ROLL_PRINTING_SHEET_ID}`) {
+    if (parsed.pathname === `/v4/spreadsheets/${documentId}`) {
       if (parsed.searchParams.get("includeGridData") !== "true")
         return response({
-          spreadsheetId: ROLL_PRINTING_SHEET_ID,
+          spreadsheetId: documentId,
           sheets: [...sheets.values()].map((sheet) => ({
             properties: sheet.properties,
+            developerMetadata: sheet.developerMetadata || [],
           })),
         });
       const range = parsed.searchParams.get("ranges") || "";
@@ -202,14 +258,16 @@ function googleHarness({
       );
       assert.ok(sheet, `Expected read of sheet ${title}`);
       const grid = materialize(sheet);
+      const endRow = Number(range.match(/:AC(\d+)$/)?.[1] || templateRows);
+      grid.data[0].rowData = grid.data[0].rowData.slice(0, endRow);
       if (
         corruptReadback &&
-        grid.properties.sheetId !== ROLL_PRINTING_SHEET.gid
+        grid.properties.sheetId !== descriptor.gid
       )
         grid.data[0].rowData[4].values[4].userEnteredValue.stringValue =
           "OTHER";
       return response({
-        spreadsheetId: ROLL_PRINTING_SHEET_ID,
+        spreadsheetId: documentId,
         sheets: [grid],
       });
     }
@@ -255,6 +313,47 @@ function makeService(options = {}) {
     refreshes: () => refreshes,
   };
 }
+
+test("box destination copies its own template, initializes checkbox facts and never writes roll remainder into X", async () => {
+  const google = googleHarness({ box: true });
+  const writer = new ProductionSupplyWriter({ department: "box", credentialWriter: { token: async () => "test-token", metrics: { readRequests: 0, writeRequests: 0 } }, fetcher: google.fetcher });
+  const input = payload("11111111-1111-4111-8111-111111111111");
+  const plan = await writer.prepareCreate(input);
+  plan.manifest = { version: 1, id: "RITM-SUPPLY-" + input.operationId, revision: input.operationId, name: input.name,
+    parts: [{ department: "box", documentId: DEPARTMENTS.box.documentId, sheetId: plan.sheetId }], ready: false };
+  await writer.execute(plan);
+  const verified = await writer.verify(plan);
+  assert.equal(verified.rows, 1);
+  const source = google.sheets.get(DEPARTMENTS.box.template.gid);
+  const target = google.sheets.get(plan.sheetId);
+  assert.equal(source.data[0].rowData[0].values[28].userEnteredValue, undefined, "source template UID header must remain untouched");
+  assert.equal(target.data[0].rowData[0].values[28].userEnteredValue.stringValue, "UID");
+  assert.equal(target.data[0].rowData[4].values[23].userEnteredValue, undefined, "X is an extras column in box, never a print remainder");
+  assert.equal(target.data[0].rowData[4].values[17].userEnteredValue.boolValue, false);
+  assert.equal(target.data[0].rowData[4].values[18].userEnteredValue.boolValue, false);
+  assert.equal((await writer.manifest(plan.sheetId)).ready, false);
+  await writer.publish(plan, plan.manifest);
+  assert.equal((await writer.manifest(plan.sheetId)).ready, true);
+  assert.equal(google.requests[0][0].duplicateSheet.sourceSheetId, DEPARTMENTS.box.template.gid);
+});
+
+test("box create verification reads formulas through the full copied template range", async () => {
+  const google = googleHarness({ box: true, templateRows: 700 });
+  const writer = new ProductionSupplyWriter({
+    department: "box",
+    credentialWriter: {
+      token: async () => "test-token",
+      metrics: { readRequests: 0, writeRequests: 0 },
+    },
+    fetcher: google.fetcher,
+  });
+  const input = payload("12121212-1212-4212-8212-121212121212");
+  const plan = await writer.prepareCreate(input);
+  await writer.execute(plan);
+  const verified = await writer.verify(plan);
+  assert.equal(plan.clearThrough, 700);
+  assert.equal(verified.rows, 1);
+});
 
 test("new supply clears template data, renames the heading and initializes print remainder", async () => {
   const h = makeService();
@@ -338,7 +437,7 @@ test("create checks only formula rows used by this supply, not an unrelated gap 
         ],
       }),
     );
-    assert.equal(result.status, "verified");
+    assert.equal(result.status, "verified", JSON.stringify(result));
     assert.equal(result.rows, 4);
     assert.equal(h.google.counters.writes, 1);
   } finally {
@@ -359,7 +458,7 @@ test("owner-confirmed delete removes one registered sheet and verifies absence b
         created.sheetId,
       ),
     );
-    assert.equal(result.status, "verified");
+    assert.equal(result.status, "verified", JSON.stringify(result));
     assert.equal(result.action, "delete");
     assert.equal(result.sheetId, created.sheetId);
     assert.equal(h.google.sheets.has(created.sheetId), false);
@@ -434,7 +533,7 @@ test("owner can delete an existing supply tab that was created outside RITM", as
     const result = await h.service.execute(
       deletePayload("27272727-2727-4727-8727-272727272727", name, sheetId),
     );
-    assert.equal(result.status, "verified");
+    assert.equal(result.status, "verified", JSON.stringify(result));
     assert.equal(h.google.sheets.has(sheetId), false);
     assert.deepEqual(h.google.requests.at(-1), [
       { deleteSheet: { sheetId } },
@@ -531,7 +630,7 @@ test("uncertain delete is not repeated and remains registered until live reconci
   }
 });
 
-test("create still stops before writing when a formula is missing in a requested row", async () => {
+test("create explains a missing formula in the source template when its pattern is unproven", async () => {
   const h = makeService({ missingFormulaRows: [6] });
   try {
     await assert.rejects(
@@ -543,9 +642,63 @@ test("create still stops before writing when a formula is missing in a requested
           ],
         }),
       ),
-      { code: "roll_template_formula_missing" },
+      (error) =>
+        error.code === "roll_template_formula_missing" &&
+        error.message.includes("OZON МОСКВА 10_10") &&
+        error.message.includes("F6") &&
+        error.message.includes("Загруженный список товаров ни при чём"),
     );
     assert.equal(h.google.counters.writes, 0);
+  } finally {
+    h.store.close();
+  }
+});
+
+test("create carries a proven missing formula into the new copy only", async () => {
+  const formulaOverrides = {};
+  for (const row of [77, 78, 79, 80, 81]) {
+    formulaOverrides[row] = {
+      6: "=VLOOKUP(E:E;'БДО'!B:F;5;0)",
+      9: `=IF($E${row}=\"\";\"\";--SUBSTITUTE(REGEXEXTRACT(SUBSTITUTE(SUBSTITUTE(LOWER(TRIM($G${row}));\"х\";\"x\");\"×\";\"x\");\"[0-9]+[,.]?[0-9]*$\");\",\";\".\")/100)`,
+      10: `=F${row}*H${row}*I${row}*O${row}`,
+    };
+  }
+  const h = makeService({
+    missingFormulaCells: ["I80"],
+    formulaOverrides,
+  });
+  const lines = Array.from({ length: 76 }, (_, index) => ({
+    article: `TEST-${String(index + 1).padStart(3, "0")}`,
+    quantity: index + 1,
+  }));
+  try {
+    const result = await h.service.execute(
+      payload("81818181-8181-4181-8181-818181818181", { lines }),
+    );
+    assert.equal(result.status, "verified", JSON.stringify(result));
+    const created = h.google.sheets.get(result.sheetId);
+    const copiedRow = created.data[0].rowData[79].values;
+    assert.equal(
+      copiedRow[8].userEnteredValue.formulaValue,
+      '=IF($E80=\"\";\"\";--SUBSTITUTE(REGEXEXTRACT(SUBSTITUTE(SUBSTITUTE(LOWER(TRIM($G80));\"х\";\"x\");\"×\";\"x\");\"[0-9]+[,.]?[0-9]*$\");\",\";\".\")/100)',
+    );
+    assert.equal(
+      copiedRow[9].userEnteredValue.formulaValue,
+      "=F80*H80*I80*O80",
+    );
+    assert.equal(
+      copiedRow[5].userEnteredValue.formulaValue,
+      "=VLOOKUP(E:E;'БДО'!B:F;5;0)",
+    );
+    const sourceRow = h.google.sheets.get(ROLL_PRINTING_SHEET.gid).data[0].rowData[79].values;
+    assert.equal(sourceRow[8].userEnteredValue, undefined);
+    const operation = h.store.rollSupplyOperation(
+      "81818181-8181-4181-8181-818181818181",
+    );
+    assert.deepEqual(
+      operation.payload.plan.formulaRepairs.map((repair) => repair.cell),
+      ["I80"],
+    );
   } finally {
     h.store.close();
   }
@@ -569,18 +722,123 @@ test("explicit approval is required before any Google read or write", async () =
   }
 });
 
-test("an active formula repair blocks a supply write", async () => {
+test("a formula repair in another Google document does not block supplies", async () => {
   const h = makeService();
   try {
     h.store.db.exec(
-      "CREATE TABLE test_repair_proposals (status TEXT NOT NULL)",
+      "CREATE TABLE test_repair_proposals (id TEXT PRIMARY KEY, incident_id TEXT NOT NULL, version TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL, result TEXT)",
+    );
+    for (const status of ["queued", "executing", "checking", "uncertain"])
+      h.store.db
+        .prepare(
+          "INSERT INTO test_repair_proposals VALUES(?,?,?,?,?,NULL)",
+        )
+        .run(
+          `repair-${status}`,
+          "incident",
+          "version",
+          status,
+          JSON.stringify({
+            target: { documentId: "different-production-document" },
+          }),
+        );
+
+    assert.equal(h.service.state().available, true);
+    const result = await h.service.execute(
+      payload("23232323-2323-4323-8323-232323232323"),
+    );
+    assert.equal(result.status, "verified", JSON.stringify(result));
+    assert.equal(h.google.counters.writes, 1);
+  } finally {
+    h.store.close();
+  }
+});
+
+test("a formula repair in the roll-printing document still protects that document", async () => {
+  const h = makeService();
+  try {
+    h.store.db.exec(
+      "CREATE TABLE test_repair_proposals (id TEXT PRIMARY KEY, incident_id TEXT NOT NULL, version TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL, result TEXT)",
     );
     h.store.db
-      .prepare("INSERT INTO test_repair_proposals(status) VALUES('queued')")
-      .run();
+      .prepare("INSERT INTO test_repair_proposals VALUES(?,?,?,?,?,NULL)")
+      .run(
+        "same-document-repair",
+        "incident",
+        "version",
+        "uncertain",
+        JSON.stringify({
+          target: { documentId: ROLL_PRINTING_SHEET_ID },
+        }),
+      );
+
     assert.equal(h.service.state().available, false);
     await assert.rejects(
-      h.service.execute(payload("23232323-2323-4323-8323-232323232323")),
+      h.service.execute(payload("24242424-2424-4424-8424-242424242424")),
+      { code: "roll_supply_operation_conflict" },
+    );
+    assert.equal(h.google.counters.writes, 0);
+  } finally {
+    h.store.close();
+  }
+});
+
+test("source recovery in another Google document does not block supply creation", async () => {
+  const h = makeService();
+  try {
+    h.store.db
+      .prepare(
+        "INSERT INTO source_recovery_operations(id,request_id,incident_id,generation,status,created_at,updated_at,owner,target,approved_value,authorization) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        "source-operation",
+        "request",
+        "incident",
+        1,
+        "uncertain",
+        "2026-10-16T00:00:00.000Z",
+        "2026-10-16T00:00:01.000Z",
+        "owner",
+        JSON.stringify({ documentId: "different-production-document" }),
+        "{}",
+        "{}",
+      );
+
+    assert.equal(h.service.state().available, true);
+    const result = await h.service.execute(
+      payload("25252525-2525-4525-8525-252525252525"),
+    );
+    assert.equal(result.status, "verified");
+    assert.equal(h.google.counters.writes, 1);
+  } finally {
+    h.store.close();
+  }
+});
+
+test("source recovery in the roll-printing document still protects that document", async () => {
+  const h = makeService();
+  try {
+    h.store.db
+      .prepare(
+        "INSERT INTO source_recovery_operations(id,request_id,incident_id,generation,status,created_at,updated_at,owner,target,approved_value,authorization) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        "same-document-source-operation",
+        "request",
+        "incident",
+        1,
+        "written_unverified",
+        "2026-10-16T00:00:00.000Z",
+        "2026-10-16T00:00:01.000Z",
+        "owner",
+        JSON.stringify({ documentId: ROLL_PRINTING_SHEET_ID }),
+        "{}",
+        "{}",
+      );
+
+    assert.equal(h.service.state().available, false);
+    await assert.rejects(
+      h.service.execute(payload("26262626-2626-4626-8626-262626262626")),
       { code: "roll_supply_operation_conflict" },
     );
     assert.equal(h.google.counters.writes, 0);
@@ -603,7 +861,7 @@ test("same approved operation is idempotent and is never written twice", async (
   }
 });
 
-test("append writes only new articles into the next prepared rows", async () => {
+test("append inserts new articles at the top and preserves existing rows", async () => {
   const h = makeService();
   try {
     const created = await h.service.execute(
@@ -619,19 +877,19 @@ test("append writes only new articles into the next prepared rows", async () => 
       sheetId: created.sheetId,
       lines: [{ article: "TEST-002", quantity: 8 }],
     });
-    assert.equal(result.status, "verified");
+    assert.equal(result.status, "verified", JSON.stringify(result));
     assert.equal(h.google.counters.writes, 2);
     assert.equal(
       sheet.data[0].rowData[4].values[4].userEnteredValue.stringValue,
-      "TEST-001",
+      "TEST-002",
     );
     assert.equal(
       sheet.data[0].rowData[4].values[14].userEnteredValue.numberValue,
-      12,
+      8,
     );
     assert.equal(
       sheet.data[0].rowData[4].values[23].userEnteredValue.numberValue,
-      12,
+      8,
     );
     assert.equal(
       sheet.data[0].rowData[4].values[5].userEnteredValue.formulaValue,
@@ -643,19 +901,19 @@ test("append writes only new articles into the next prepared rows", async () => 
     );
     assert.equal(
       sheet.data[0].rowData[5].values[4].userEnteredValue.stringValue,
-      "TEST-002",
+      "TEST-001",
     );
     assert.equal(
       sheet.data[0].rowData[5].values[14].userEnteredValue.numberValue,
-      8,
+      12,
     );
     assert.equal(
       sheet.data[0].rowData[5].values[23].userEnteredValue.numberValue,
-      8,
+      12,
     );
-    assert.notEqual(
+    assert.equal(
       sheet.data[0].rowData[5].values[28].userEnteredValue.stringValue,
-      "old-uid-6",
+      originalRow.values[28].userEnteredValue.stringValue,
     );
     assert.equal(
       originalRow.values[5].userEnteredValue.formulaValue,
@@ -669,11 +927,15 @@ test("append writes only new articles into the next prepared rows", async () => 
     assert.deepEqual(
       [
         ...new Set(
-          appendBatch.map((request) => request.updateCells.start.columnIndex),
+          appendBatch
+            .filter((request) => request.updateCells)
+            .map((request) => request.updateCells.start.columnIndex),
         ),
       ].sort((a, b) => a - b),
       [4, 14, 23, 28],
     );
+    assert.ok(appendBatch.some((request) => request.insertDimension));
+    assert.ok(appendBatch.some((request) => request.copyPaste));
   } finally {
     h.store.close();
   }
@@ -690,19 +952,19 @@ test("append preserves orphan service IDs and scans beyond the old 504-row range
       sheetId: ROLL_PRINTING_SHEET.gid,
       lines: [{ article: "TEST-600", quantity: 1 }],
     });
-    assert.equal(result.status, "verified");
+    assert.equal(result.status, "verified", JSON.stringify(result));
     assert.equal(result.rows, 1);
     const sheet = h.google.sheets.get(ROLL_PRINTING_SHEET.gid);
     assert.equal(
-      sheet.data[0].rowData[151].values[28].userEnteredValue.stringValue,
+      sheet.data[0].rowData[152].values[28].userEnteredValue.stringValue,
       "old-uid-152",
     );
     assert.equal(
-      sheet.data[0].rowData[193].values[28].userEnteredValue.stringValue,
+      sheet.data[0].rowData[194].values[28].userEnteredValue.stringValue,
       "old-uid-194",
     );
     assert.equal(
-      sheet.data[0].rowData[194].values[4].userEnteredValue.stringValue,
+      sheet.data[0].rowData[4].values[4].userEnteredValue.stringValue,
       "TEST-600",
     );
   } finally {

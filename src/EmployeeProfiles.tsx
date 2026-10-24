@@ -274,7 +274,9 @@ export function AssemblyProfileDrawer({
     (row) => row.date >= periodStart(date, period) && row.date <= date,
   );
   const activeDays = new Set(periodRows.map((row) => row.date)).size;
-  const coefficient = periodRows.reduce((sum, row) => sum + row.coefficient, 0);
+  const coefficient = periodRows.some((row) => row.coefficient === null)
+    ? null
+    : periodRows.reduce((sum, row) => sum + (row.coefficient ?? 0), 0);
   const cut = periodRows.reduce((sum, row) => sum + row.cut, 0);
   const packed = periodRows.reduce((sum, row) => sum + row.packed, 0);
   const total = periodRows.reduce((sum, row) => sum + row.total, 0);
@@ -337,7 +339,7 @@ export function AssemblyProfileDrawer({
           <div className="employee-profile-metrics">
             <MetricCard
               label="Сумма кэфов"
-              value={num(coefficient, 3)}
+              value={coefficient === null ? "Нет нормы" : num(coefficient, 3)}
               detail={activeDays + " дн. с записями"}
               icon={ChartBar}
               tone="metric-primary"
@@ -400,13 +402,15 @@ export function AssemblyProfileDrawer({
                   <div>
                     <span>Коэффициент за день</span>
                     <strong>
-                      {num(
-                        selectedRows.reduce(
-                          (sum, row) => sum + row.coefficient,
-                          0,
-                        ),
-                        3,
-                      )}
+                      {selectedRows.some((row) => row.coefficient === null)
+                        ? "Нет нормы"
+                        : num(
+                            selectedRows.reduce(
+                              (sum, row) => sum + (row.coefficient ?? 0),
+                              0,
+                            ),
+                            3,
+                          )}
                     </strong>
                   </div>
                   <div>

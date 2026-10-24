@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { publicConfig } from "./config.js";
 import { isTailscaleReadOrigin } from "./productionRepair.js";
-import { summarizeAssembly } from "../worker/assembly.js";
+import { summarizeAssembly, selectAssemblyPeriod } from "../worker/assembly.js";
 import { todayMoscow } from "./adapters.js";
 import { verifyTelegramInitData } from "./telegramMiniApp.js";
 import { digest } from "./diagnosticGrid.js";
@@ -30,7 +30,11 @@ export function createAgentServer(
     repair = null,
     sourceRecovery = null,
     rollSupplyService = null,
+    productionSupplyService = null,
+    assemblySync = null,
+    assemblyTransfer = null,
     refreshPrinting = null,
+    refreshAssembly = null,
     assistant = null,
     secretStore = null,
     telegramAssistant = null,
@@ -1304,7 +1308,37 @@ export function createAgentServer(
           send(res, 404, { ok: false, error: "not_found" });
           return;
         }
+        if (pathname.startsWith("/api/assembly-transfers") && req.method === "GET") {
+          try {
+            if (!assemblyTransfer) throw Object.assign(new Error("Передача в Assembly пока не подключена к этому агенту."), { status: 503 });
+            if (pathname === "/api/assembly-transfers/sources") send(res, 200, { ok: true, sources: await assemblyTransfer.sources() });
+            else if (pathname === "/api/assembly-transfers/links") send(res, 200, { ok: true, links: assemblyTransfer.links() });
+            else if (pathname === "/api/assembly-transfers/source") send(res, 200, { ok: true, source: await assemblyTransfer.source(url.searchParams.get("department"), Number(url.searchParams.get("sheetId"))) });
+            else if (pathname === "/api/assembly-transfers/operation") {
+              const operation = assemblyTransfer.operation(url.searchParams.get("id"));
+              send(res, operation ? 200 : 404, { ok: !!operation, operation, message: operation ? undefined : "Передача не найдена. Повторите подтверждение с тем же номером операции." });
+            } else send(res, 404, { ok: false, message: "Действие передачи не найдено." });
+          } catch (error) { send(res, error.status || 503, { ok: false, message: error.message || "Не удалось прочитать источники передачи." }); }
+          return;
+        }
+        if (["/api/assembly-transfers/preview", "/api/assembly-transfers"].includes(pathname) && req.method === "POST") {
+          if (!assemblyTransfer || config.port !== 4318 || !localHost ||
+              !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress) ||
+              !req.headers.cookie?.includes("ritm_owner=") || req.headers.authorization ||
+              !["http://127.0.0.1:4318", "http://localhost:4318"].includes(origin) ||
+              Object.keys(req.headers).some(header => header.startsWith("x-forwarded-") || header === "forwarded") ||
+              !String(req.headers["content-type"] || "").startsWith("application/json")) {
+            send(res, 403, { ok: false, message: "Передача в сборку доступна владельцу в локальном RITM." }); return;
+          }
+          try {
+            const input = await body(req, 220000);
+            if (pathname.endsWith("/preview")) send(res, 200, { ok: true, preview: await assemblyTransfer.preview(input) });
+            else send(res, 202, { ok: true, operation: await assemblyTransfer.execute(input) });
+          } catch (error) { send(res, error.status || 409, { ok: false, message: error.message || "Передача в сборку не выполнена." }); }
+          return;
+        }
         if (pathname === "/api/roll-supplies/status" && req.method === "GET") {
+          assemblySync?.recoverConfirmed();
           const sheetSync = await rollSupplyService?.syncRegisteredSheets({
             refreshOnChange: true,
           });
@@ -1312,7 +1346,7 @@ export function createAgentServer(
             res,
             rollSupplyService ? 200 : 503,
             rollSupplyService
-              ? { ...rollSupplyService.state(), sheetSync }
+              ? { ...rollSupplyService.state(), sheetSync, production: productionSupplyService?.state() || null, assemblySync: assemblySync?.state() || null }
               : {
                   ok: false,
                   available: false,
@@ -1334,7 +1368,7 @@ export function createAgentServer(
           );
           return;
         }
-        if (pathname === "/api/roll-supplies" && req.method === "POST") {
+        if (["/api/roll-supplies", "/api/roll-supplies/preview"].includes(pathname) && req.method === "POST") {
           const hasOwnerCookie = req.headers.cookie?.includes("ritm_owner=");
           if (
             !rollSupplyService ||
@@ -1377,7 +1411,20 @@ export function createAgentServer(
             return;
           }
           try {
-            const operation = await rollSupplyService.execute(payload);
+            if (pathname.endsWith("/preview")) {
+              if (!productionSupplyService) throw Object.assign(new Error("Распределение по отделам не настроено."), { status: 503 });
+              send(res, 200, { ok: true, preview: await productionSupplyService.preview(payload) });
+              return;
+            }
+            const routed = ["create", "append", "resume", "deletePart"].includes(payload?.action);
+            if (routed && !productionSupplyService) throw Object.assign(new Error("Распределение по отделам не настроено. Запись остановлена."), { status: 503 });
+            if (!routed && productionSupplyService?.operations().some(op => op.status !== "verified"))
+              throw Object.assign(new Error("Сначала завершите загрузку общей поставки."), { status: 409 });
+            if (payload?.action === "delete" && productionSupplyService?.state().supplies.some(s => s.parts.some(p => p.department === "roll" && p.sheetId === payload.sheetId)))
+              throw Object.assign(new Error("Это часть общей поставки двух отделов. Отдельное удаление производственного задания запрещено."), { status: 409 });
+            const operation = routed ? await productionSupplyService.execute(payload) : await rollSupplyService.execute(payload);
+            try { assemblySync?.enqueue(operation); }
+            catch { store.log("assembly_sync_enqueue_pending", "Уведомление будет восстановлено из подтверждённой операции", null); }
             send(res, operation.status === "uncertain" ? 202 : 200, {
               ok: true,
               operation,
@@ -2325,6 +2372,12 @@ export function createAgentServer(
               (s) => s.adapter === kind && s.enabled,
             );
           let refreshResult = null;
+          const beforeRefresh = source ? store.getSnapshot(source.id) : null;
+          if (
+            kind === "assembly" && refreshAssembly &&
+            (url.searchParams.get("refresh") === "1" || beforeRefresh?.value.schemaVersion !== 2)
+          )
+            refreshResult = await refreshAssembly();
           if (
             kind === "printing" &&
             url.searchParams.get("refresh") === "1" &&
@@ -2341,14 +2394,23 @@ export function createAgentServer(
             });
             return;
           }
+          if (kind === "assembly" && snapshot.value.schemaVersion !== 2) {
+            send(res, 503, {
+              ok: false,
+              error: "assembly_snapshot_upgrade_required",
+              message: "Сервер RITM ещё не обновил данные сборщиков. Требуется обновление серверной версии и синхронизация источников.",
+            });
+            return;
+          }
           const sourceCheck = store
             .overview()
             .checks.find((c) => c.id === source.id);
           const stale =
+            snapshot.value.stale === true ||
             !sourceCheck ||
             ["error", "stale", "unavailable"].includes(sourceCheck.status) ||
             now() - Date.parse(snapshot.at) > config.snapshotMaxAgeMs;
-          const payload = {
+          let payload = {
             ...snapshot.value,
             stale,
             snapshotAt: snapshot.at,
@@ -2363,9 +2425,7 @@ export function createAgentServer(
               url.searchParams.get("date") || todayMoscow(new Date(now()));
             const period = url.searchParams.get("period") || "day";
             try {
-              payload.rows = summarizeAssembly(payload.history, date, period);
-              payload.date = date;
-              payload.period = period;
+              payload = selectAssemblyPeriod(payload, date, period);
             } catch {
               send(res, 400, { ok: false, error: "invalid_period" });
               return;

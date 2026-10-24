@@ -15,13 +15,13 @@ export const sources: Source[] = [
   {
     id: "assembly",
     name: "Сборщики · FBO итого",
-    url: "https://docs.google.com/spreadsheets/d/1AuPraufSNHwEQHsVEwKR3dtiuEAqUgRrtZJDIQ9I5uo/edit",
+    url: "",
     state: "prepared",
   },
   {
     id: "printing",
     name: "Печать · сезонная и рулонная",
-    url: "https://docs.google.com/spreadsheets/d/1eNdUuk-2l83Pgv95LyqYKuOOfhAsEMm5tKLbhWBJiC4/edit",
+    url: "",
     state: "prepared",
   },
   { id: "stock", name: "Готовый товар на складе", url: "", state: "prepared" },

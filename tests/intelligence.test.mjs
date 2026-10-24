@@ -137,13 +137,15 @@ test("schema changes and Sheets HTTP errors cannot masquerade as no production",
     () => inspectAssemblyRows(csv([row()], ["Other"])),
     /schema changed/,
   );
-  await assert.rejects(() =>
-    loadAssembly(
+  const unavailable = await loadAssembly(
       "2026-10-08",
       "day",
       async () => new Response("no", { status: 503 }),
-    ),
   );
+  assert.equal(unavailable.sources.fbo.status, "unavailable");
+  assert.equal(unavailable.sources.assembly.status, "unavailable");
+  assert.equal(unavailable.stale, true);
+  assert.equal(unavailable.reconciliation.approvedTotals, null);
 });
 test("registry supports new departments with explicit generic rules and rejects unsafe config", () => {
   const extra = {
@@ -339,6 +341,48 @@ test("printing reads use the configured read-only Google token for approved CSV 
     "Bearer read-only-test-token",
   );
   assert.match(observed.url, /^https:\/\/docs\.google\.com\/spreadsheets\/d\//);
+});
+test("printing refresh receives the confirmed Assembly box links", async () => {
+  const store = new IncidentStore(":memory:"),
+    source = DEFAULT_SOURCES.find((item) => item.adapter === "printing"),
+    links = [
+      {
+        name: "OZON Москва",
+        boxSheetId: 200,
+        targetRollSheetId: 100,
+        boxRows: 1,
+        boxQuantity: 25,
+        positionKeys: ["row:5|BOX-A"],
+      },
+    ];
+  let observed;
+  try {
+    const monitor = new Monitor(store, config(), {
+      now: () => now,
+      getAssemblyBoxLinks: () => links,
+      loaders: {
+        printing: async (_source, _fetcher, _at, options) => {
+          observed = options.assemblyBoxLinks;
+          return {
+            ok: true,
+            schemaVersion: 2,
+            updatedAt: now.toISOString(),
+            sourceUpdatedAt: now.toISOString(),
+            events: [],
+            cutEvents: [],
+            supplies: [],
+            issues: [],
+            sheets: [],
+            quality: { status: "valid", invalidRecords: 0 },
+          };
+        },
+      },
+    });
+    await monitor.source(source);
+    assert.deepEqual(observed, links);
+  } finally {
+    store.close();
+  }
 });
 test("fresh partial printing reads replace stale snapshots while preserving the issue warning", async () => {
   const store = new IncidentStore(":memory:"),
@@ -623,7 +667,7 @@ test("successful Telegram delivery is persistent and 429 is rescheduled", async 
 test("protected API rejects anonymous reads, writes, foreign origins and schema-free actions; authenticated snapshots are stale-marked", async () => {
   const store = new IncidentStore(":memory:"),
     c = config();
-  store.snapshot(assemblySource.id, payload(), now.toISOString());
+  store.snapshot(assemblySource.id, { ...payload(), schemaVersion: 2 }, now.toISOString());
   store.check(
     assemblySource.id,
     { status: "error", kind: "source" },

@@ -16,7 +16,7 @@ import { RepairError } from "../agent/testSheetsWriter.js";
 import { createAgentServer } from "../agent/server.js";
 import { gzipSync } from "node:zlib";
 const doc = PRODUCTION_DOCTOR_DOCUMENTS.find(
-  (d) => d.documentId === "1YTQQ1Mg9kVv7EOQiN6wOvkvnHvsiXcwbhYOERUPy8rQ",
+  (d) => d.id === "doctor-shop-one",
 );
 const tab = doc.sheets.find((s) => s.gid === 1580315960);
 function harness() {

@@ -8,9 +8,13 @@ for (const file of [
   "src/csv",
   "src/supplySpreadsheet",
   "src/liveSupplyProgress",
+  "src/liveSupplyMarketplace",
+  "src/assemblyCoefficient",
   "tests/domain.test",
   "tests/supply-workflow.test",
   "tests/live-supply-progress.test",
+  "tests/live-supply-marketplace.test",
+  "tests/assembly-coefficient.test",
 ]) {
   mkdirSync(".checks/" + file.slice(0, file.lastIndexOf("/")), {
     recursive: true,
@@ -37,6 +41,8 @@ const result = spawnSync(
     ".checks/tests/domain.test.mjs",
     ".checks/tests/supply-workflow.test.mjs",
     ".checks/tests/live-supply-progress.test.mjs",
+    ".checks/tests/live-supply-marketplace.test.mjs",
+    ".checks/tests/assembly-coefficient.test.mjs",
   ],
   {
     stdio: "inherit",

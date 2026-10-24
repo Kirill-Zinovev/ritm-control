@@ -1,4 +1,5 @@
 import { sourceTimestamp } from "./timestamps.js";
+import { privateGoogleSource } from "./privateGoogleConfig.js";
 const RITM_BRIDGE = { timezone: "Europe/Moscow" };
 function ritmBridgeNumber_(v) {
   var n =
@@ -170,7 +171,7 @@ function columnName(n) {
     s = String.fromCharCode(65 + ((n - 1) % 26)) + s;
   return s;
 }
-export const SHEET_ID = "1eNdUuk-2l83Pgv95LyqYKuOOfhAsEMm5tKLbhWBJiC4";
+export const SHEET_ID = privateGoogleSource("seasonalPrintingId");
 export const SUPPLY_SHEETS = [
   [1040552228, "первая поставка НОВЫЙ ГОД"],
   [1971379034, "Вторая поставка НОВЫЙ ГОД"],
@@ -184,8 +185,8 @@ export const SUPPLY_SHEETS = [
   [201413533, "Третья поставка Хэллоуин"],
   [614244252, "Четвертая поставка Хэллоуин"],
 ];
-export const ROLL_PRINTING_SHEET_ID =
-  "1hojhKS4Av_yy5sUMJcsoeJ_MQRU3V5g9P-fP61PO6Cs";
+export const ROLL_PRINTING_SHEET_ID = privateGoogleSource("rollPrintingId");
+export const BOX_PRINTING_SHEET_ID = privateGoogleSource("boxPrintingId");
 export const ROLL_PRINTING_SHEET = {
   gid: 119710351,
   name: "OZON МОСКВА 10_10",
@@ -325,6 +326,7 @@ export function indexOrders(sheets) {
       site = "Красное здание",
       spreadsheetId = SHEET_ID,
       sourceUrl = sheetUrl(SHEET_ID, gid),
+      assemblyShipmentId = null,
     } = sheet;
     const headers = rows[headerRow - 1] || [];
     if (
@@ -342,8 +344,15 @@ export function indexOrders(sheets) {
           expected: "Артикул в E3 и Кол-во в O3",
         },
       });
-    const uidCol = (rows[uidHeaderRow - 1] || []).indexOf("UID");
-    if (uidCol < 0)
+    const uidHeaderCol = (rows[uidHeaderRow - 1] || []).indexOf("UID");
+    const uidCol = uidHeaderCol >= 0
+      ? uidHeaderCol
+      : sourceId === "box-printing"
+        ? 28
+        : -1;
+    // Existing box worksheets predate the UID column. Assembly transfer keys
+    // for those rows use their stable source row and article instead.
+    if (uidCol < 0 && sourceId !== "box-printing")
       throw Object.assign(new Error("UID column missing"), {
         issue: {
           source: name,
@@ -358,12 +367,13 @@ export function indexOrders(sheets) {
     rows.slice(dataStartRow - 1).forEach((r, i) => {
       const article = String(r[4] || "").trim();
       if (!article) return;
-      const raw = String(r[uidCol] || "").trim();
-      if (!raw) {
+      const row = i + dataStartRow;
+      const raw = uidCol < 0 ? "" : String(r[uidCol] || "").trim();
+      if (!raw && sourceId !== "box-printing") {
         index.issues.push({
           source: name,
-          row: i + dataStartRow,
-          cell: columnName(uidCol + 1) + (i + dataStartRow),
+          row,
+          cell: columnName(uidCol + 1) + row,
           code: "missing_uid",
           found: "",
           expected: "UID заказа",
@@ -371,17 +381,19 @@ export function indexOrders(sheets) {
         });
         return;
       }
-      const uid = raw.includes("::")
-        ? raw
-        : gid === 437912546
+      const uid = raw
+        ? raw.includes("::")
           ? raw
-          : gid + "::" + raw;
+          : gid === 437912546
+            ? raw
+            : gid + "::" + raw
+        : gid + "::row:" + row;
       if (index.byUid[uid])
         throw Object.assign(new Error("Duplicate order UID"), {
           issue: {
             source: name,
-            row: i + dataStartRow,
-            cell: columnName(uidCol + 1) + (i + dataStartRow),
+            row,
+            cell: (uidCol < 0 ? "E" : columnName(uidCol + 1)) + row,
             code: "duplicate_uid",
             message: "Повторяется UID заказа",
             found: raw,
@@ -389,7 +401,23 @@ export function indexOrders(sheets) {
           },
         });
       const quantity = ritmBridgeNumber_(r[14]),
-        shownArea = ritmBridgeNumber_(r[9]);
+        sourceArea = optionalNonnegative(r[9]),
+        shownArea = sourceArea ?? 0;
+      const dimensionsKnown = [r[5], r[7], r[8]].every(
+        (value) => optionalNonnegative(value) > 0,
+      );
+      // A positive value in J is a confirmed area even when dimensions are
+      // maintained manually. An empty/error J is never a confirmed zero.
+      const areaKnown = sourceArea !== null && (
+        sourceArea > 0 || quantity === 0 || dimensionsKnown ||
+        !["roll-printing", "box-printing"].includes(sourceId)
+      );
+      const areaCell = `J${i + dataStartRow}`;
+      const areaIssue = areaKnown ? null : sourceArea === null
+        ? String(r[9] ?? "").trim()
+          ? `${areaCell}: ${String(r[9]).trim()}`
+          : `${areaCell}: площадь не заполнена`
+        : `${areaCell}: нет подтверждённых размеров для расчёта площади`;
       const calculated =
         ritmBridgeNumber_(r[5]) *
         ritmBridgeNumber_(r[7]) *
@@ -397,34 +425,39 @@ export function indexOrders(sheets) {
         quantity;
       // J is F*H*I*O on all inspected supply tabs. Restore its display rounding only when consistent.
       const plannedArea =
-        Math.abs(calculated - shownArea) <= 0.00051 ? calculated : shownArea;
-      const remainingPrint =
-        sourceId === "roll-printing" ? optionalNonnegative(r[23]) : null;
+        dimensionsKnown && sourceArea !== null && Math.abs(calculated - shownArea) <= 0.00051
+          ? calculated
+          : shownArea;
+      const boxProgress = value => /^(?:TRUE|Готов)$/iu.test(String(value).trim()) ? quantity : /^(?:FALSE)$/iu.test(String(value).trim()) ? 0 : null;
+      const remainingPrint = sourceId === "box-printing"
+        ? boxProgress(r[17]) === null ? null : quantity - boxProgress(r[17])
+        : sourceId === "roll-printing" ? optionalNonnegative(r[23]) : null;
       const printProgressValue =
         sourceId === "roll-printing"
           ? optionalProgress(r[19], quantity)
           : null;
       const o = {
         uid,
-        rawUid: raw,
+        rawUid: raw || null,
         sheetId: gid,
         sheetName: name,
         journalAliases,
-        row: i + dataStartRow,
+        row,
         article,
+        assemblyShipmentId,
         quantity,
         plannedArea,
+        areaKnown,
+        areaIssue,
         // The roll-printing sheet carries live per-order progress in T/U and
         // the authoritative remaining print quantity in X. Keep empty cells
         // nullable so the UI can distinguish an unstarted row from bad data.
         printProgress:
-          printProgressValue !== null
-            ? printProgressValue
-            : remainingPrint !== null && remainingPrint <= quantity
-              ? Math.max(0, quantity - remainingPrint)
-              : null,
+          remainingPrint !== null && remainingPrint <= quantity
+            ? Math.max(0, quantity - remainingPrint)
+            : printProgressValue,
         cutProgress:
-          sourceId === "roll-printing"
+          sourceId === "box-printing" ? boxProgress(r[18]) : sourceId === "roll-printing"
             ? optionalProgress(r[20], quantity)
             : null,
         remainingPrint,
@@ -436,7 +469,7 @@ export function indexOrders(sheets) {
         sourceUrl,
       };
       index.byUid[uid] = o;
-      (index.byRaw[raw] || (index.byRaw[raw] = [])).push(o);
+      if (raw) (index.byRaw[raw] || (index.byRaw[raw] = [])).push(o);
       index.orders.push(o);
     });
   });
@@ -474,14 +507,46 @@ function printingSources(additionalSheets = []) {
   );
 }
 export async function loadPrinting(fetcher = fetch, options = {}) {
-  const sources = printingSources(options.additionalSheets || []),
+  const managed = (options.productionSupplies || []).flatMap(s => (s.parts || []).map(p => ({ ...p, shipmentId: s.id, name: s.name })));
+  const sources = printingSources(options.additionalSheets || []).map(source => ({ ...source,
+    supplies: source.supplies.map(sheet => ({ ...sheet,
+      assemblyShipmentId: managed.find(p => p.documentId === source.spreadsheetId && p.sheetId === sheet.gid)?.shipmentId,
+    })),
+  }));
+  const boxes = new Map(managed
+    .filter(p => p.department === "box" && p.documentId === BOX_PRINTING_SHEET_ID)
+    .map(p => [p.sheetId, p]));
+  for (const link of options.assemblyBoxLinks || []) {
+    const gid = Number(link?.boxSheetId);
+    const name = String(link?.name || "").trim();
+    if (!Number.isSafeInteger(gid) || gid <= 0 || !name || name.length > 100) continue;
+    const targetRollSheetId = Number.isSafeInteger(link.targetRollSheetId)
+      ? link.targetRollSheetId
+      : null;
+    const linkedRoll = managed.find(p => p.department === "roll" &&
+      p.documentId === ROLL_PRINTING_SHEET_ID && p.sheetId === targetRollSheetId);
+    const current = boxes.get(gid);
+    boxes.set(gid, {
+      ...(current || {}),
+      sheetId: gid,
+      name,
+      documentId: BOX_PRINTING_SHEET_ID,
+      department: "box",
+      shipmentId: targetRollSheetId === null
+        ? current?.shipmentId || `RITM-BOX-${gid}`
+        : linkedRoll?.shipmentId || `RITM-ROLL-${targetRollSheetId}`,
+    });
+  }
+  if (boxes.size) sources.push({ id: "box-printing", name: "OZON БОКС", site: "Бокс", spreadsheetId: BOX_PRINTING_SHEET_ID,
+    supplies: [...boxes.values()].map(p => ({ gid: p.sheetId, name: p.name, headerRow: 4, dataStartRow: 5, uidHeaderRow: 1, assemblyShipmentId: p.shipmentId })), journal: null });
+  const
     descriptors = sources.flatMap((source) => [
     ...source.supplies.map((sheet) => ({
       ...sheet,
       source,
       kind: "supply",
     })),
-    { ...source.journal, source, kind: "journal" },
+    ...(source.journal ? [{ ...source.journal, source, kind: "journal" }] : []),
   ]);
   const exports = await Promise.all(
     descriptors.map(async (sheet) => {
@@ -506,7 +571,7 @@ export async function loadPrinting(fetcher = fetch, options = {}) {
     const sourceExports = exports.filter((sheet) => sheet.source.id === source.id),
       supplyExports = sourceExports.filter((sheet) => sheet.kind === "supply"),
       journalExport = sourceExports.find((sheet) => sheet.kind === "journal");
-    if (!journalExport)
+    if (!journalExport && source.journal)
       throw new Error(`Printing journal missing: ${source.name}`);
     const sourceIndex = indexOrders(
       supplyExports.map((sheet) => ({
@@ -522,6 +587,13 @@ export async function loadPrinting(fetcher = fetch, options = {}) {
         sourceUrl: sheetUrl(source.spreadsheetId, sheet.gid),
       })),
     );
+    if (!source.journal) {
+      supplies.push(...sourceIndex.orders);
+      issues.push(...sourceIndex.issues);
+      sheets.push(...supplyExports.map(sheet => ({ sheetId: sheet.gid, name: sheet.name, sourceId: source.id, sourceName: source.name,
+        spreadsheetId: source.spreadsheetId, spreadsheetUrl: sheetUrl(source.spreadsheetId, sheet.gid), assemblyShipmentId: sheet.assemblyShipmentId })));
+      continue;
+    }
     const journal = journalExport.rows,
       expected = source.journal.expectedHeaders;
     if (
@@ -598,8 +670,8 @@ export async function loadPrinting(fetcher = fetch, options = {}) {
     name: source.name,
     spreadsheetId: source.spreadsheetId,
     spreadsheetUrl: sheetUrl(source.spreadsheetId, source.supplies[0].gid),
-    journalName: source.journal.sourceName,
-    journalUrl: sheetUrl(source.spreadsheetId, source.journal.gid),
+    journalName: source.journal?.sourceName || "",
+    journalUrl: source.journal ? sheetUrl(source.spreadsheetId, source.journal.gid) : "",
   }));
   return {
     ok: true,

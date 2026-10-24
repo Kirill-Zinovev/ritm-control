@@ -2,8 +2,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createSign } from "node:crypto";
+import {
+  privateGoogleSource,
+  privateTestWriterEmail,
+  protectedProductionDocumentIds,
+} from "../worker/privateGoogleConfig.js";
 export const TEST_TARGET = Object.freeze({
-  documentId: "1U1Amv3-tYo8Ju8eL5T6Eu4T7-qsPm1WCfledNEeKvVg",
+  documentId: privateGoogleSource("testWriterTargetId"),
   sheetId: 231140854,
   sheet: "Проверка формулы",
   cell: "G247",
@@ -11,14 +16,12 @@ export const TEST_TARGET = Object.freeze({
   original: 150,
   result: 1.24,
 });
-export const TEST_WRITER_EMAIL =
-  "ritm-test-writer@ritm-intelligence.iam.gserviceaccount.com";
+export const TEST_WRITER_EMAIL = privateTestWriterEmail();
 export const TEST_WRITE_SCOPE =
   "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.metadata.readonly";
-export const PRODUCTION_DOCUMENTS = Object.freeze([
-  "1AuPraufSNHwEQHsVEwKR3dtiuEAqUgRrtZJDIQ9I5uo",
-  "1eNdUuk-2l83Pgv95LyqYKuOOfhAsEMm5tKLbhWBJiC4",
-]);
+export const PRODUCTION_DOCUMENTS = Object.freeze(
+  protectedProductionDocumentIds(),
+);
 export class RepairError extends Error {
   constructor(code, message, status = 409) {
     super(message);
@@ -140,6 +143,16 @@ export class TestSheetsWriter {
     return this.cached.token;
   }
   async verifyIsolation() {
+    if (
+      !TEST_TARGET.documentId ||
+      !TEST_WRITER_EMAIL ||
+      !PRODUCTION_DOCUMENTS.length
+    )
+      throw new RepairError(
+        "isolation_configuration_missing",
+        "Изоляция заблокирована: не настроены локальные ID тестовой и производственных таблиц",
+        503,
+      );
     const token = await this.token();
     this.verifiedAt = null;
     const capabilities = [];

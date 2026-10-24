@@ -26,4 +26,5 @@ export {
   LoaderCircle as CircleNotch,
   Search as MagnifyingGlass,
   Trash2 as Trash,
+  Pencil as Pencil,
 } from "lucide-react";

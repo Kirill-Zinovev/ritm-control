@@ -8,7 +8,7 @@ import { createAgentServer } from "../agent/server.js";
 import { digest } from "../agent/diagnosticGrid.js";
 
 const SHOP_ID = "doctor-shop-one";
-const DOCUMENT_ID = "1YTQQ1Mg9kVv7EOQiN6wOvkvnHvsiXcwbhYOERUPy8rQ";
+const DOCUMENT_ID = "synthetic-google-sheet-id-0000000000000000";
 const INCIDENT_ID = "a".repeat(64);
 const SOURCE_SHEET = "Товары НОВАЯ ПЕЧАТЬ 20.07.2026";
 const PRODUCTION_SHEET = "Первый магазин НОВАЯ ПЕЧАТЬ 20.07.2026";

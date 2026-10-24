@@ -3,7 +3,9 @@ import {
   loadPrinting,
   parseCsv,
   ROLL_PRINTING_SHEET_ID,
+  BOX_PRINTING_SHEET_ID,
 } from "../worker/printing.js";
+import { loadAssemblyPacking, unavailableAssemblyPacking } from "./assemblyPacking.js";
 import { parseNonnegative, parseDay } from "../worker/assemblyDiagnostics.js";
 import { sourceTimestamp } from "../worker/timestamps.js";
 export function todayMoscow(now = new Date()) {
@@ -79,7 +81,7 @@ export async function loadSource(
   options = {},
 ) {
   if (source.adapter === "assembly")
-    return loadAssembly(todayMoscow(now), "day", fetcher);
+    return loadAssembly(todayMoscow(now), "day", fetcher, { includeHistory: true });
   if (source.adapter === "printing") {
     const authenticatedFetcher = options.googleReader
       ? async (url, init = {}) => {
@@ -90,7 +92,7 @@ export async function loadSource(
           if (
             parsed.hostname !== "docs.google.com" ||
             !documentMatch ||
-            ![source.documentId, ROLL_PRINTING_SHEET_ID].includes(
+            ![source.documentId, ROLL_PRINTING_SHEET_ID, BOX_PRINTING_SHEET_ID].includes(
               documentMatch[1],
             ) ||
             parsed.searchParams.get("format") !== "csv" ||
@@ -103,9 +105,22 @@ export async function loadSource(
           return fetcher(url, { ...init, headers });
         }
       : fetcher;
-    return loadPrinting(authenticatedFetcher, {
+    const printing = await loadPrinting(authenticatedFetcher, {
       additionalSheets: options.printingAdditionalSheets || [],
+      productionSupplies: options.productionSupplies || [],
+      assemblyBoxLinks: options.assemblyBoxLinks || [],
     });
+    const checkedAt = now instanceof Date ? now.toISOString() : new Date().toISOString();
+    return options.googleReader
+      ? loadAssemblyPacking(options.googleReader, printing, {
+          signal: options.signal,
+          checkedAt,
+        })
+      : unavailableAssemblyPacking(
+          printing,
+          checkedAt,
+          "Источник WorkLog не подключён к этому экземпляру RITM.",
+        );
   }
   const exports = await Promise.all(
     source.sheets
@@ -153,7 +168,7 @@ export function validateApi(payload, kind) {
   const finite = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0;
   if (kind === "assembly") {
     if (
-      payload.schemaVersion !== 1 ||
+      ![1, 2].includes(payload.schemaVersion) ||
       !Array.isArray(payload.rows) ||
       !Array.isArray(payload.history)
     )
@@ -163,8 +178,8 @@ export function validateApi(payload, kind) {
         !row ||
         typeof row.employee !== "string" ||
         !row.employee.trim() ||
+        (row.coefficient !== null && !finite(row.coefficient)) ||
         ![
-          "coefficient",
           "machineCut",
           "manualCut",
           "cut",
@@ -183,8 +198,11 @@ export function validateApi(payload, kind) {
     if (payload.history.some((r) => !parseDay(r.date)))
       throw new Error("API date violation");
     if (
-      new Set(payload.history.map((r) => r.date + "|" + r.employee)).size !==
-      payload.history.length
+      new Set(
+        payload.history.map(
+          (r) => r.date + "|" + (r.identityKey || r.employee),
+        ),
+      ).size !== payload.history.length
     )
       throw new Error("API duplicate daily records");
   } else {
@@ -222,6 +240,32 @@ export function validateApi(payload, kind) {
       )
     )
       throw new Error("API order schema violation");
+    if (
+      payload.packing &&
+      (![
+        "available",
+        "partial",
+        "unavailable",
+      ].includes(payload.packing.status) ||
+        typeof payload.packing.source !== "string" ||
+        !Number.isFinite(Date.parse(payload.packing.checkedAt)) ||
+        !Number.isSafeInteger(payload.packing.eventCount) ||
+        payload.packing.eventCount < 0 ||
+        !Number.isSafeInteger(payload.packing.invalidRecords) ||
+        payload.packing.invalidRecords < 0 ||
+        (payload.packing.sourceUpdatedAt != null &&
+          !Number.isFinite(Date.parse(payload.packing.sourceUpdatedAt))))
+    )
+      throw new Error("API packing source schema violation");
+    if (
+      payload.supplies.some(
+        (order) =>
+          order.packed !== undefined &&
+          order.packed !== null &&
+          (!Number.isSafeInteger(order.packed) || order.packed < 0),
+      )
+    )
+      throw new Error("API packing quantity violation");
   }
   return payload;
 }
