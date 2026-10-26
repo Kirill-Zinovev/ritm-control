@@ -1626,6 +1626,82 @@ td small {
     font-size: 24px;
   }
 }
+
+.ritm-auth-screen {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  padding: 24px;
+  isolation: isolate;
+  background: transparent;
+}
+.ritm-auth-screen .ritm-backdrop { inset: 0; }
+.ritm-auth-frame { position: relative; z-index: 1; width: min(100%, 440px); }
+.ritm-auth-card {
+  width: 100%;
+  padding: 32px;
+  border: 1px solid rgba(255,255,255,.86);
+  border-radius: 22px;
+  background: rgba(255,255,255,.96);
+  box-shadow: 0 24px 70px rgba(27,61,100,.18);
+}
+.ritm-auth-mark { display: inline-flex; align-items: baseline; color: #112b4d; font-size: 28px; font-weight: 850; letter-spacing: -.06em; }
+.ritm-auth-mark span { color: var(--ritm-teal); }
+.ritm-auth-eyebrow { margin: 22px 0 2px; color: #57708f; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.ritm-auth-card h1 { margin: 4px 0 8px; font-size: 28px; }
+.ritm-auth-copy { margin: 0 0 22px; color: var(--muted); }
+.ritm-auth-card form, .ritm-pin-change form { display: grid; gap: 15px; }
+.ritm-auth-card .button.primary { width: 100%; min-height: 46px; }
+.ritm-auth-footnote { display: block; margin-top: 18px; color: var(--muted); }
+.ritm-auth-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
+.ritm-pin-change { display: grid; gap: 14px; }
+.ritm-auth-screen .notice { margin: 0; }
+.sidebar-account-button {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: white;
+  color: #385574;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.sidebar-account-button:hover { border-color: #9bb9e8; color: var(--primary); }
+.sidebar-footer { flex-wrap: wrap; }
+.sidebar-account-actions { display: flex; width: 100%; justify-content: flex-end; gap: 6px; margin-top: 4px; }
+.manager-access-panel { display: grid; gap: 18px; max-height: min(72vh, 680px); overflow: auto; padding-right: 2px; }
+.manager-access-section { padding-top: 16px; border-top: 1px solid var(--border); }
+.manager-access-section h3 { margin: 0 0 12px; font-size: 15px; }
+.manager-create-form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end; }
+.manager-create-form .button { min-height: 42px; }
+.manager-access-section > small { display: block; margin-top: 9px; color: var(--muted); }
+.manager-access-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.manager-access-heading h3 { margin: 0; }
+.manager-users-list { display: grid; gap: 8px; margin-top: 12px; }
+.manager-user-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 11px; background: #fbfdff; }
+.manager-user-row > div:first-child { display: grid; gap: 2px; }
+.manager-user-row span, .manager-user-row small { color: var(--muted); }
+.manager-user-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.manager-user-actions .button { padding: 7px 9px; font-size: 12px; }
+.manager-empty { color: var(--muted); }
+.manager-temp-pin { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 12px; padding: 14px; border: 1px solid #b9d6ff; border-radius: 12px; background: #eef6ff; }
+.manager-temp-pin > div { display: grid; gap: 3px; }
+.manager-temp-pin > div span { color: var(--muted); font-size: 12px; }
+.manager-temp-pin code { padding: 8px 10px; border-radius: 8px; background: white; color: #173960; font-size: 16px; font-weight: 800; letter-spacing: .08em; }
+.manager-temp-pin .button { padding: 8px 10px; font-size: 12px; }
+@media (max-width: 680px) {
+  .ritm-auth-screen { padding: 16px; }
+  .ritm-auth-card { padding: 24px; border-radius: 17px; }
+  .manager-create-form { grid-template-columns: 1fr; }
+  .manager-user-row { align-items: flex-start; flex-direction: column; }
+  .manager-user-actions { justify-content: flex-start; }
+  .manager-temp-pin { grid-template-columns: 1fr auto; }
+  .manager-temp-pin > div { grid-column: 1 / -1; }
+}
 @media (max-width: 950px) {
   .sidebar {
     transform: translateX(-100%);

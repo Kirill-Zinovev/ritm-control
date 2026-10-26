@@ -15,6 +15,13 @@
       "when": 1792995017735,
       "tag": "0001_cloud_bridge",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1793004020918,
+      "tag": "0002_red_ezekiel",
+      "breakpoints": true
     }
   ]
 }

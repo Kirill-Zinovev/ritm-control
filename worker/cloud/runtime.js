@@ -4,6 +4,7 @@ import { cloudConfig, sourceId } from "./config.js";
 import { CloudSheetsReader } from "./googleSheets.js";
 import { CloudStore } from "./store.js";
 import { CloudError, json, readJson, requireOwner, requireMaintenance } from "./access.js";
+import { assertSameOrigin, changeManagerPin, createManagerUser, listManagerUsers, loginWithPin, logoutManager, resetManagerPin, resolvePrincipal, setManagerStatus } from "./auth.js";
 import { createServices } from "./services.js";
 import { AssemblyTransferService } from "../../agent/assemblyTransfer.js";
 import { importMigration } from "./migration.js";
@@ -12,8 +13,26 @@ import { externalLease } from "./externalLease.js";
 import { recordCutover } from "./cutover.js";
 import { exportCloud } from "./export.js";
 
-const signIn = "/signin-with-chatgpt?return_to=%2F%3Fpage%3Dsupplies";
+const signIn = "/?page=supplies";
 const methods = (request, allowed) => { if (!allowed.includes(request.method)) throw new CloudError("method_not_allowed", "Метод запроса не поддерживается.", 405); };
+
+function managerRouteAllowed(method, path) {
+  if (method === "GET") return path === "/api/printing" || [
+    "/api/roll-supplies/status", "/api/roll-supplies/operations",
+    "/api/assembly-transfers/sources", "/api/assembly-transfers/links",
+    "/api/assembly-transfers/source", "/api/assembly-transfers/operation",
+  ].includes(path);
+  return method === "POST" && [
+    "/api/roll-supplies", "/api/roll-supplies/preview",
+    "/api/assembly-transfers", "/api/assembly-transfers/preview",
+  ].includes(path);
+}
+
+function appendAudit(scope, principal, path, operation) {
+  if (principal?.role !== "manager") return;
+  const operationId = operation && typeof operation.id === "string" ? operation.id : "unknown";
+  scope.log("manager_supply_write", `${principal.id} ${path} ${operationId}`);
+}
 
 export async function drainOutbox(bindings, store, fetcher = fetch) {
   return store.withScope(async (scope) => {
@@ -97,10 +116,46 @@ async function readSnapshot(kind, url, bindings, store, options) {
 export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {}) {
   const url = new URL(request.url), path = url.pathname;
   try {
+    if (path === "/api/auth/login") {
+      methods(request, ["POST"]);
+      return await loginWithPin(request, bindings.DB);
+    }
+    if (path === "/api/auth/logout") {
+      methods(request, ["POST"]);
+      return await logoutManager(request, bindings.DB);
+    }
+    if (path === "/api/auth/change-pin") {
+      methods(request, ["POST"]);
+      const principal = await resolvePrincipal(request, bindings);
+      return json(await changeManagerPin(request, bindings.DB, principal));
+    }
+    if (path === "/api/auth/users") {
+      const caller = await resolvePrincipal(request, bindings);
+      if (caller?.role === "manager") throw new CloudError("owner_required", "Управлять учётными записями может только владелец RITM.", 403);
+      requireOwner(request, bindings, { write: request.method !== "GET" });
+      if (request.method === "GET") return json({ ok: true, users: await listManagerUsers(bindings.DB) });
+      methods(request, ["POST"]);
+      return json({ ok: true, user: await createManagerUser(bindings.DB, await readJson(request, 2048), request.headers.get("oai-authenticated-user-id")) }, 201);
+    }
+    const managerAction = path.match(/^\/api\/auth\/users\/([0-9a-f-]{36})\/(reset-pin|status)$/i);
+    if (managerAction) {
+      const caller = await resolvePrincipal(request, bindings);
+      if (caller?.role === "manager") throw new CloudError("owner_required", "Управлять учётными записями может только владелец RITM.", 403);
+      requireOwner(request, bindings, { write: true });
+      methods(request, ["POST"]);
+      const [, id, action] = managerAction;
+      const ownerId = request.headers.get("oai-authenticated-user-id");
+      if (action === "reset-pin") return json({ ok: true, ...await resetManagerPin(bindings.DB, id, ownerId) });
+      const input = await readJson(request, 1024);
+      if (input.status !== "active" && input.status !== "disabled") throw new CloudError("status_invalid", "Некорректный статус учётной записи.", 400);
+      await setManagerStatus(bindings.DB, id, input.status, ownerId);
+      return json({ ok: true, status: input.status });
+    }
     if (path === "/api/runtime") {
       methods(request, ["GET"]);
-      const id = request.headers.get("oai-authenticated-user-id");
-      return json({ ok: true, mode: "cloud", authenticated: !!id, authorized: !!id && cloudConfig(bindings).owners.includes(id), signInPath: signIn });
+      const principal = await resolvePrincipal(request, bindings);
+      const authorized = principal?.role === "owner" || principal?.role === "manager";
+      return json({ ok: true, mode: "cloud", authenticated: !!principal, authorized, role: authorized ? principal.role : null, displayName: authorized ? principal.displayName : null, username: authorized ? principal.username : null, mustChangePin: authorized && principal.role === "manager" ? principal.mustChangePin : false, signInPath: signIn });
     }
     // This reports only the caller's site-specific ID; it does not grant access.
     if (path === "/api/cloud/identity") {
@@ -109,14 +164,22 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
       if (!id) throw new CloudError("authentication_required", "Войдите через ChatGPT.", 401);
       return json({ ok: true, userId: id, authorized: cloudConfig(bindings).owners.includes(id) });
     }
-    let bridgeId = null;
+    let bridgeId = null, principal = null;
     if (request.headers.has("x-ritm-bridge-id")) bridgeId = await verifyBridge(request, bindings);
     else if (["/api/cloud/import", "/api/cloud/cutover", "/api/cloud/state"].includes(path) && request.headers.has("authorization")) {
       if (bindings.RITM_CLOUD_IMPORT_ENABLED !== "true") throw new CloudError("migration_service_disabled", "Служебный канал переноса закрыт.", 403);
       requireMaintenance(request, bindings, "RITM_MIGRATION_TOKEN");
     }
     else if (path === "/api/cloud/maintenance" && request.headers.has("authorization")) requireMaintenance(request, bindings);
-    else requireOwner(request, bindings, { write: request.method !== "GET" });
+    else {
+      principal = await resolvePrincipal(request, bindings);
+      if (principal?.role === "owner") requireOwner(request, bindings, { write: request.method !== "GET" });
+      else if (principal?.role === "manager") {
+        if (!managerRouteAllowed(request.method, path)) throw new CloudError("manager_route_forbidden", "У этой учётной записи есть доступ только к поставкам.", 403);
+        if (principal.mustChangePin) throw new CloudError("pin_change_required", "Перед продолжением задайте личный PIN.", 403);
+        if (request.method !== "GET") assertSameOrigin(request);
+      } else requireOwner(request, bindings, { write: request.method !== "GET" });
+    }
     const config = cloudConfig(bindings);
     if (!config.configured) throw new CloudError("cloud_not_configured", "Облачное подключение источников и хранилища ещё не настроено.");
     const store = new CloudStore(bindings.DB);
@@ -183,6 +246,7 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
             value = routed ? await services.production.execute(input) : await services.legacy.execute(input);
             services.queue.enqueue(value);
           }
+          appendAudit(scope, principal, path, value);
           await scope.checkpoint();
           return { ok: true, operation: value };
         } finally { services.savePreviews(); }

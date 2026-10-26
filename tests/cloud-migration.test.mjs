@@ -64,7 +64,8 @@ test("one D1 writer lease wins among 30 clients and an old fence cannot release 
     const success = attempts.filter((result) => result.status === "fulfilled");
     assert.equal(success.length, 1);
     const first = success[0].value;
-    at = 1101;
+    // acquire() clamps lease durations below one second to 1000 ms.
+    at = 2001;
     const next = await store.acquire();
     assert.ok(next.fence > first.fence);
     await assert.rejects(store.renew(first), /потеряла блокировку/);

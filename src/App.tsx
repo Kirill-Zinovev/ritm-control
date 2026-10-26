@@ -61,7 +61,8 @@ import { AssemblyAnalytics } from "./AssemblyAnalytics";
 import { DesignPreview } from "./DesignPreview";
 import { ProductionDashboard } from "./ProductionDashboard";
 import { RitmBackdrop } from "./RitmBackdrop";
-import { CloudAccessNotice } from "./CloudAccessNotice";
+import { useCloudAuth } from "./CloudAuth";
+import { ManagerAccessPanel } from "./ManagerAccessPanel";
 import {
   completeTotal,
   plannedAreaTotal,
@@ -145,7 +146,8 @@ function download(name: string, text: string, type = "text/csv;charset=utf-8") {
   URL.revokeObjectURL(url);
 }
 function AppShell() {
-  const [page, setPage] = useState<Page>(initialPage);
+  const cloudAuth = useCloudAuth();
+  const [page, setPage] = useState<Page>(() => cloudAuth.role === "manager" && !["supplies", "production"].includes(initialPage()) ? "supplies" : initialPage());
   const [date, setDate] = useState(() =>
     new Intl.DateTimeFormat("en-CA", {
       timeZone: "Europe/Moscow",
@@ -197,6 +199,7 @@ function AppShell() {
   });
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [discard, setDiscard] = useState(false);
+  const [accessOpen, setAccessOpen] = useState(false);
   const [importRecords, setImportRecords] = useState<Record<string, string>[]>(
     [],
   );
@@ -253,7 +256,8 @@ function AppShell() {
     return () => removeEventListener("beforeunload", guard);
   }, [dirty]);
   const go = (id: Page) => {
-    setPage(id);
+    const next = cloudAuth.role === "manager" && !["supplies", "production"].includes(id) ? "supplies" : id;
+    setPage(next);
     setPrinterProfileId(null);
     setQuery("");
     setSidebar(false);
@@ -875,8 +879,8 @@ function AppShell() {
           <br />
           для WB / Ozon
         </p>
-        <nav id="primary-navigation" aria-label="Основное меню">
-          {NAV.map((n) => (
+      <nav id="primary-navigation" aria-label="Основное меню">
+          {NAV.filter((n) => cloudAuth.role !== "manager" || ["supplies", "production"].includes(n.id)).map((n) => (
             <a
               key={n.id}
               href={`?page=${n.id}`}
@@ -893,12 +897,16 @@ function AppShell() {
           ))}
         </nav>
         <div className="sidebar-footer">
-          <span className="profile-initial">КЗ</span>
+          <span className="profile-initial">{(cloudAuth.displayName || "КЗ").slice(0, 1).toLocaleUpperCase("ru-RU")}</span>
           <div>
-            <strong>Кирилл</strong>
-            <small>Управление</small>
+            <strong>{cloudAuth.displayName || "Кирилл"}</strong>
+            <small>{cloudAuth.role === "manager" ? `Менеджер · ${cloudAuth.username || ""}` : "Управление"}</small>
           </div>
-          <Badge tone="nav-version">v0.1</Badge>
+          {(cloudAuth.role === "owner" || cloudAuth.role === "manager") && <div className="sidebar-account-actions">
+            {cloudAuth.role === "owner" && <button className="sidebar-account-button" type="button" onClick={() => setAccessOpen(true)}>Доступы</button>}
+            {cloudAuth.role === "manager" && <button className="sidebar-account-button" type="button" onClick={cloudAuth.openPinChange}>Сменить PIN</button>}
+            {cloudAuth.role === "manager" && <button className="sidebar-account-button" type="button" onClick={() => void cloudAuth.signOut()}>Выйти</button>}
+          </div>}
         </div>
       </aside>
       <main
@@ -999,7 +1007,6 @@ function AppShell() {
               </div>
             )}
         </header>
-        <CloudAccessNotice />
         {page !== "intelligence" && page !== "assembly" && (
           <div className="context-bar">
             {page !== "sources" && (
@@ -2511,6 +2518,7 @@ function AppShell() {
           <Busy />
         </div>
       )}
+      {cloudAuth.role === "owner" && <ManagerAccessPanel open={accessOpen} onClose={() => setAccessOpen(false)} />}
     </div>
   );
 }
