@@ -1,5 +1,5 @@
 import { CloudError } from "./access.js";
-import { sourceIds } from "./config.js";
+import { sourceIds, sourceId } from "./config.js";
 import { cloudFetch } from "./fetch.js";
 
 const tokenUrl = "https://oauth2.googleapis.com/token";
@@ -56,6 +56,7 @@ export class CloudSheetsReader {
     return value.access_token;
   }
   checkDocument(id) {
+    if (this.writer && id === sourceId(this.bindings, "photosId")) throw new CloudError("source_read_only", "Справочник фотографий доступен только для чтения.", 403);
     if (!this.allowed.has(id)) throw new CloudError("source_not_allowed", "Этот источник не разрешён для облачного RITM.", 403);
   }
   async authenticatedFetch(input, init = {}) {

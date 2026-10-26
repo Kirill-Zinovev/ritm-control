@@ -679,7 +679,7 @@ export async function loadPrinting(fetcher = fetch, options = {}) {
     );
   }
   const shopCatalog = assignCatalogStores(supplies, options.shopCatalogRows);
-  assignWorkloadDetails(supplies, options.shopCatalogRows);
+  assignWorkloadDetails(supplies, options.shopCatalogRows, options.photoCatalogRows);
   const sourceLinks = sources.map((source) => ({
     id: source.id,
     name: source.name,
@@ -718,8 +718,13 @@ function safeWorkloadPhoto(value) {
 
 // Reuse the catalog already read for stores. Never query another marketplace,
 // infer a machine from a product name, or change source rows.
-export function assignWorkloadDetails(orders, catalog) {
+export function assignWorkloadDetails(orders, catalog, photos = null) {
   const indices = new Map();
+  const photoIndex = new Map();
+  for (const row of Array.isArray(photos) ? photos : []) {
+    const key = normalizeCatalogArticle(row[0]);
+    if (key) photoIndex.set(key, [...(photoIndex.get(key) || []), row]);
+  }
   for (const market of ["OZON", "WB"]) {
     const rows = catalog?.[market];
     if (!Array.isArray(rows)) continue;
@@ -756,6 +761,14 @@ export function assignWorkloadDetails(orders, catalog) {
         order[field] = [...values][0];
         if (field === "machine" && order.machine) order.machineSource = "catalog";
       } else if (field === "machine") order.machineIssue = "В каталоге указаны разные станки";
+    }
+    // Only enrich articles confirmed in their own marketplace catalog. The photo
+    // workbook is shared; conflicting URLs or stores must not be guessed.
+    if (!order.photoUrl && Array.isArray(photos)) {
+      const candidates = (photoIndex.get(normalizeCatalogArticle(order.article)) || []).filter(row =>
+        !String(row[1] || "").trim() || String(row[1]).trim() === String(order.shop || "").trim());
+      const urls = new Set(candidates.map(row => safeWorkloadPhoto(row[3] || String(row[2] || "").split(";")[0])).filter(Boolean));
+      if (urls.size === 1) order.photoUrl = [...urls][0];
     }
   }
 }

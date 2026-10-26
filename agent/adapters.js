@@ -167,6 +167,21 @@ export async function readProductionShopCatalog(googleReader, signal) {
   };
 }
 
+export async function readWorkloadPhotos(reader, documentId, signal) {
+  if (!reader || !/^[A-Za-z0-9_-]{20,100}$/.test(documentId || "")) return null;
+  const url = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${documentId}/values:batchGet`);
+  url.searchParams.set("ranges", "'Фото'!A:D");
+  url.searchParams.set("valueRenderOption", "FORMATTED_VALUE");
+  const response = await reader.request(url, { method: "GET", signal });
+  if (!response.ok) throw new Error("Photo catalog unavailable");
+  const data = await response.json();
+  const result = data.valueRanges?.[0];
+  if (data.spreadsheetId !== documentId || data.valueRanges?.length !== 1 || !/^(?:'Фото'|Фото)!A1:D\d+$/.test(result?.range || "")) throw new Error("Photo catalog response invalid");
+  const rows = result.values || [];
+  if (String(rows[0]?.[0] || "").trim().toLowerCase() !== "артикул" || String(rows[0]?.[1] || "").trim().toLowerCase() !== "магазин") throw new Error("Photo catalog headers invalid");
+  return rows.slice(1);
+}
+
 export async function loadSource(
   source,
   fetcher,
@@ -199,6 +214,7 @@ export async function loadSource(
         }
       : fetcher;
     let shopCatalogRows = null;
+    let photoCatalogRows = null;
     if (options.googleReader) {
       try {
         shopCatalogRows = await readProductionShopCatalog(
@@ -208,12 +224,17 @@ export async function loadSource(
       } catch (error) {
         if (options.signal?.aborted) throw error;
       }
+      if (options.photoSourceId) {
+        try { photoCatalogRows = await readWorkloadPhotos(options.googleReader, options.photoSourceId, options.signal); }
+        catch (error) { if (options.signal?.aborted) throw error; }
+      }
     }
     const printing = await loadPrinting(authenticatedFetcher, {
       additionalSheets: options.printingAdditionalSheets || [],
       productionSupplies: options.productionSupplies || [],
       assemblyBoxLinks: options.assemblyBoxLinks || [],
       shopCatalogRows,
+      photoCatalogRows,
     });
     const checkedAt = now instanceof Date ? now.toISOString() : new Date().toISOString();
     return options.googleReader
