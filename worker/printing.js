@@ -716,8 +716,9 @@ function safeWorkloadPhoto(value) {
   } catch { return ""; }
 }
 
-// Reuse the catalog already read for stores. Never query another marketplace,
-// infer a machine from a product name, or change source rows.
+// The selected marketplace catalog is authoritative for the workload machine.
+// Supply columns can contain a broad print process rather than equipment.
+// Never infer equipment from that broad label or modify source production rows.
 export function assignWorkloadDetails(orders, catalog, photos = null) {
   const indices = new Map();
   const photoIndex = new Map();
@@ -755,12 +756,22 @@ export function assignWorkloadDetails(orders, catalog, photos = null) {
     const entries = indices.get(marketplaceForSupply(order.sheetName))?.get(normalizeCatalogArticle(order.article));
     if (!entries?.length) continue;
     for (const field of ["machine", "productName", "photoUrl"]) {
-      if (order[field] && !String(order[field]).trim().startsWith("#")) continue;
+      if (field !== "machine" && order[field] && !String(order[field]).trim().startsWith("#")) continue;
       const values = new Set(entries.map(entry => entry[field]));
       if (values.size === 1) {
-        order[field] = [...values][0];
-        if (field === "machine" && order.machine) order.machineSource = "catalog";
-      } else if (field === "machine") order.machineIssue = "В каталоге указаны разные станки";
+        const value = [...values][0];
+        if (field !== "machine" || value) order[field] = value;
+        if (field === "machine" && value) {
+          order.machineSource = "catalog";
+          order.machineIssue = ["бокс", "рулонная печать", "не найдено в базе"].includes(normal(value))
+            ? `В базе ${marketplaceForSupply(order.sheetName)} в поле «Станок» указано «${value}». Конкретный станок не указан.`
+            : null;
+        }
+      } else if (field === "machine") {
+        order.machine = "";
+        order.machineSource = null;
+        order.machineIssue = "В каталоге указаны разные станки";
+      }
     }
     // Only enrich articles confirmed in their own marketplace catalog. The photo
     // workbook is shared; conflicting URLs or stores must not be guessed.

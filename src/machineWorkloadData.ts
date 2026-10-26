@@ -127,7 +127,18 @@ export function buildMachineWorkload(
   return buildProductionGroups(live)
     .map((supply) => {
       const machines: WorkloadMachine[] = [];
-      for (const department of supply.departments) {
+      // This is a display grouping only: preserve original sheet identity and
+      // source-specific progress facts, but show catalog equipment in its lane.
+      const workloadDepartments = new Map<Department, LiveOrder[]>();
+      for (const sourceDepartment of supply.departments) {
+        for (const order of sourceDepartment.orders) {
+          const catalogMachine = order.machineSource === "catalog" ? resolveMachine(order.machine) : null;
+          const target = catalogMachine?.department || sourceDepartment.id;
+          workloadDepartments.set(target, [...(workloadDepartments.get(target) || []), order]);
+        }
+      }
+      for (const [departmentId, departmentOrders] of workloadDepartments) {
+        const department = { id: departmentId, orders: departmentOrders };
         const assigned = new Map<string, LiveOrder[]>();
         for (const order of department.orders) {
           const machine = resolveMachine(order.machine);
@@ -160,7 +171,9 @@ export function buildMachineWorkload(
                     (items.some((item) => item.machine)
                       ? `Станок не распознан или относится к другому участку: ${[...new Set(items.map((item) => item.machine).filter(Boolean))].join(", ")}`
                       : "Станок не указан в источнике")
-                  : "",
+                  : items.some(item => item.machineSource === "catalog" && (item.sourceId === "box-printing" ? "box" : "roll") !== department.id)
+                    ? `Станок и участок показаны по базе. Исходное задание находится в другом участке; производственные данные сохранены.`
+                    : "",
             }),
           );
           const machine = summarizeMachines(
