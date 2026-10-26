@@ -5,7 +5,8 @@ const SESSION_MS = 12 * 60 * 60 * 1000;
 const ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
 const LOCK_MS = 15 * 60 * 1000;
 const MAX_FAILURES = 5;
-const PBKDF2_ITERATIONS = 240_000;
+// Cloudflare Workers Web Crypto rejects PBKDF2 iteration counts above 100,000.
+const PBKDF2_ITERATIONS = 100_000;
 const textEncoder = new TextEncoder();
 const schemaByDb = new WeakMap();
 
