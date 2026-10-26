@@ -43,9 +43,9 @@
 
 Ссылки ниже были указаны для проекта. Они не означают, что интеграция уже работает. На первом шаге подключать их только для чтения и согласовать сопоставление столбцов с пользователем.
 
-- Итоги FBO: https://docs.google.com/spreadsheets/d/1AuPraufSNHwEQHsVEwKR3dtiuEAqUgRrtZJDIQ9I5uo/edit
-- Сезонная печать: https://docs.google.com/spreadsheets/d/1eNdUuk-2l83Pgv95LyqYKuOOfhAsEMm5tKLbhWBJiC4/edit
-- Детализация сборки: https://docs.google.com/spreadsheets/d/1jyxrNr9xN3-C3-FnsuJsWxLigTDRb1wK5zhALY_IdBY/edit
+- Итоги FBO: [закрытая ссылка на рабочую Google-таблицу]
+- Сезонная печать: [закрытая ссылка на рабочую Google-таблицу]
+- Детализация сборки: [закрытая ссылка на рабочую Google-таблицу]
 
 Файлы внутри папки `sources/` в исходном ChatGPT-проекте считать справочными и не изменять. Для локальной разработки работай с распакованной копией приложения.
 

@@ -1,0 +1,78 @@
+.assembly-transfer {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.assembly-transfer p {
+  margin: 0;
+  color: var(--muted);
+}
+.assembly-transfer-source {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 12px;
+}
+.assembly-transfer-review h3,
+.assembly-transfer > h3 {
+  margin: 0 0 4px;
+}
+.assembly-transfer-review span {
+  color: var(--muted);
+}
+.assembly-transfer-filter,
+.assembly-transfer-selection {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.assembly-transfer-filter input {
+  flex: 1;
+  min-width: 180px;
+}
+.assembly-transfer-filter span {
+  color: var(--muted);
+}
+.assembly-transfer-table {
+  max-height: 330px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.assembly-transfer-table table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 13px;
+}
+.assembly-transfer-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 1;
+}
+.assembly-transfer-table th,
+.assembly-transfer-table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.assembly-transfer-table td small {
+  display: block;
+  max-width: 280px;
+}
+.assembly-transfer-table input[type="checkbox"] {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--primary);
+}
+.assembly-transfer-table tbody tr:hover {
+  background: var(--bg);
+}
+@media (max-width: 600px) {
+  .assembly-transfer-source {
+    grid-template-columns: 1fr;
+  }
+  .assembly-transfer-table {
+    max-height: 280px;
+  }
+}

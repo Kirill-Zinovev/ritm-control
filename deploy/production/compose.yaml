@@ -1,0 +1,62 @@
+# No active service without explicit production profile and owner configuration.
+services:
+  agent:
+    profiles: ["production"]
+    build:
+      context: ../..
+      dockerfile: deploy/production/Dockerfile
+    image: ritm-intelligence:${RITM_VERSION:?Set verified git version}
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    ports: ["${RITM_BIND_IP:-127.0.0.1}:443:443", "${RITM_BIND_IP:-127.0.0.1}:80:80"]
+    environment:
+      RITM_BASE_URL: ${RITM_BASE_URL:?Set existing RITM site URL}
+      RITM_PUBLIC_ORIGIN: https://${RITM_AGENT_DOMAIN:?Set dedicated agent domain}
+      RITM_OWNER_TOKEN_FILE: /run/secrets/owner_token
+      RITM_GOOGLE_CREDENTIALS_FILE: /run/secrets/google_credentials
+      RITM_DOCTOR_DEMO_ENABLED: "false"
+      RITM_CHECK_INTERVAL_SECONDS: "600"
+      RITM_GOOGLE_MIN_INTERVAL_MS: "2000"
+      RITM_API_RATE_LIMIT: "180"
+      RITM_TELEGRAM_ENABLED: "false"
+    volumes: ["agent-data:/var/lib/ritm", "backups:/var/backups/ritm"]
+    secrets: ["owner_token", "google_credentials"]
+    stop_grace_period: 45s
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "3"}
+  proxy:
+    profiles: ["production"]
+    image: caddy:2.10.2-alpine
+    network_mode: service:agent
+    depends_on: ["agent"]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: ["ALL"]
+    cap_add: ["NET_BIND_SERVICE"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
+    environment:
+      RITM_AGENT_DOMAIN: ${RITM_AGENT_DOMAIN:?Set dedicated agent domain}
+      RITM_OWNER_IPS: ${RITM_OWNER_IPS:?Set permitted owner/VPN IPs}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "3"}
+secrets:
+  owner_token:
+    file: ${RITM_OWNER_TOKEN_PATH:?Set private file outside repository}
+  google_credentials:
+    file: ${RITM_GOOGLE_KEY_PATH:?Set private Google JSON outside repository}
+volumes:
+  agent-data:
+  backups:
+  caddy-data:
+  caddy-config:

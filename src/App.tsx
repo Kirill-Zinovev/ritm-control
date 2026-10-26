@@ -1,5 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { AICenter } from "./AICenter";
+import { TelegramMiniApp } from "./TelegramMiniApp";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Bot,
   ArrowsClockwise,
   CalendarBlank,
   ChartBar,
@@ -49,15 +52,28 @@ import {
   useLivePrinting,
   printingDataset,
   PRINTING_URL,
+  ROLL_PRINTING_URL,
   PRINTERS,
 } from "./livePrinting";
 import { importFields, importRows } from "./importer";
 import { FBO_URL, useLiveAssembly } from "./liveAssembly";
+import { AssemblyAnalytics } from "./AssemblyAnalytics";
+import { DesignPreview } from "./DesignPreview";
+import { ProductionDashboard } from "./ProductionDashboard";
+import { RitmBackdrop } from "./RitmBackdrop";
+import { CloudAccessNotice } from "./CloudAccessNotice";
 import {
-  AssemblyProfileDrawer,
-  PrinterProfilePage,
-  type PrinterRecord,
-} from "./EmployeeProfiles";
+  completeTotal,
+  plannedAreaTotal,
+  rollCut,
+  rollPrinted,
+} from "./liveSupplyProgress";
+const LiveSuppliesWorkspace = lazy(() =>
+  import("./LiveSupplies").then((module) => ({
+    default: module.LiveSuppliesWorkspace,
+  })),
+);
+import { PrinterProfilePage, type PrinterRecord } from "./EmployeeProfiles";
 import {
   Badge,
   Button,
@@ -77,9 +93,11 @@ const NAV = [
   { id: "production", label: "Производство", icon: ChartBar },
   { id: "stock", label: "Склад", icon: Cube },
   { id: "supplies", label: "Поставки", icon: Truck },
+  { id: "intelligence", label: "AI Center", icon: Bot },
   { id: "sources", label: "Источники данных", icon: Database },
 ] as const;
 const TITLES: Record<Page, string> = {
+  intelligence: "AI Center",
   overview: "Обзор производства",
   assembly: "Сборщики",
   printing: "Печать",
@@ -89,9 +107,10 @@ const TITLES: Record<Page, string> = {
   sources: "Источники данных",
 };
 const SUBTITLES: Record<Page, string> = {
+  intelligence: "RITM Intelligence · контроль источников и системы",
   overview: "Вся смена на одном экране",
-  assembly: "Дневная цель — коэффициент не ниже 1,00",
-  printing: "Фактический выпуск печатников · Красное здание",
+  assembly: "Производительность сотрудников · фактические дневные итоги",
+  printing: "Фактический выпуск · сезонная и рулонная печать",
   production: "План и выполненное по каждому артикулу",
   stock: "Готовый товар, ячейки хранения и свободный остаток",
   supplies: "Состав, сроки и готовность к отгрузке",
@@ -125,7 +144,7 @@ function download(name: string, text: string, type = "text/csv;charset=utf-8") {
   a.click();
   URL.revokeObjectURL(url);
 }
-export function App() {
+function AppShell() {
   const [page, setPage] = useState<Page>(initialPage);
   const [date, setDate] = useState(() =>
     new Intl.DateTimeFormat("en-CA", {
@@ -143,8 +162,15 @@ export function App() {
   const [real, setReal] = useState<Dataset>(() =>
     readStorage("ritm-real-v1", emptyDataset()),
   );
-  const live = useLivePrinting();
-  const assemblyLive = useLiveAssembly(date, period);
+  const live = useLivePrinting(
+    page !== "intelligence",
+    page === "printing" || page === "supplies" || page === "production",
+  );
+  const assemblyLive = useLiveAssembly(
+    date,
+    period,
+    page === "assembly" || page === "overview" || page === "sources",
+  );
   const data = mode === "demo" ? demo : printingDataset(real, live.value);
   const [supplyFilter, setSupplyFilter] = useState("all");
   const [sources, setSources] = useState<Source[]>(() =>
@@ -152,7 +178,6 @@ export function App() {
   );
   const [employee, setEmployee] = useState("e0");
   const [printer, setPrinter] = useState("all");
-  const [assemblyProfile, setAssemblyProfile] = useState<string | null>(null);
   const [printerProfileId, setPrinterProfileId] = useState<string | null>(null);
   const [supplyId, setSupplyId] = useState("П-0124");
   const [market, setMarket] = useState("Все маркетплейсы");
@@ -185,7 +210,18 @@ export function App() {
   const draftInitial = useRef("");
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    document.title = `${TITLES[page]} · RITM`;
+    const params = new URLSearchParams(location.search);
+    const preview = params.get("designPreview") === "1";
+    const view = params.get("view");
+    const previewTitle =
+      view === "wb"
+        ? "Поставка WB"
+        : view === "ozon"
+          ? "Поставка Ozon"
+          : "Обзор";
+    document.title = preview
+      ? `${previewTitle} · RITM · предпросмотр`
+      : `${TITLES[page]} · RITM`;
     const url = new URL(location.href);
     url.searchParams.set("page", page);
     history.replaceState(null, "", url);
@@ -193,7 +229,6 @@ export function App() {
   useEffect(() => {
     const onPop = () => {
       setPage(initialPage());
-      setAssemblyProfile(null);
       setPrinterProfileId(null);
     };
     addEventListener("popstate", onPop);
@@ -222,7 +257,6 @@ export function App() {
   }, [dirty]);
   const go = (id: Page) => {
     setPage(id);
-    setAssemblyProfile(null);
     setPrinterProfileId(null);
     setQuery("");
     setSidebar(false);
@@ -238,8 +272,12 @@ export function App() {
     }
   };
   const refresh = () => {
-    if (mode === "imported" && page === "assembly") {
+    if (page === "assembly") {
       void assemblyLive.reload();
+      return;
+    }
+    if (page === "production") {
+      void live.reload();
       return;
     }
     if (mode === "imported") {
@@ -257,9 +295,8 @@ export function App() {
       );
     }, 450);
   };
-  const assemblyRows = (assemblyLive.value?.rows || []).filter((row) => !query || (row.employee + " " + row.cutTypes.map((x) => x.name).join(" ") + " " + row.packTypes.map((x) => x.name).join(" ")).toLocaleLowerCase("ru").includes(query.toLocaleLowerCase("ru")));
-  const assemblyTotals = assemblyRows.reduce((sum, row) => ({ coefficient: sum.coefficient + row.coefficient, cut: sum.cut + row.cut, packed: sum.packed + row.packed, total: sum.total + row.total }), { coefficient: 0, cut: 0, packed: 0, total: 0 });
-  const activeSourceLoading = page === "assembly" ? assemblyLive.loading : live.loading;
+  const printingKnown = mode === "demo" || !!live.value;
+  const activeSourceLoading = live.loading;
   const contains = (value: string) =>
     value.toLocaleLowerCase("ru").includes(query.toLocaleLowerCase("ru"));
   const workPeople = data.employees.filter(
@@ -283,8 +320,36 @@ export function App() {
     (r) =>
       inPeriod(r.date, date, period) &&
       (site === "Все участки" || r.site === site) &&
-      (mode === "demo" || supplyFilter === "all" || r.source === supplyFilter),
+      (mode === "demo" ||
+        supplyFilter === "all" ||
+        (r.sourceId && r.sheetId
+          ? `${r.sourceId}::${r.sheetId}` === supplyFilter
+          : r.source === supplyFilter)),
   );
+  const cuttingEvents = (live.value?.cutEvents || []).filter(
+    (event) =>
+      inPeriod(event.date, date, period) &&
+      (site === "Все участки" || event.site === site) &&
+      (supplyFilter === "all" ||
+        (event.sourceId && event.sheetId
+          ? `${event.sourceId}::${event.sheetId}` === supplyFilter
+          : event.sheetName === supplyFilter)),
+  );
+  const cuttingByEmployee = new Map<
+    string,
+    { quantity: number; area: number; records: number }
+  >();
+  for (const event of cuttingEvents) {
+    const current = cuttingByEmployee.get(event.employee) || {
+      quantity: 0,
+      area: 0,
+      records: 0,
+    };
+    current.quantity += event.quantity;
+    current.area += event.area;
+    current.records += 1;
+    cuttingByEmployee.set(event.employee, current);
+  }
   const area = rolls.reduce((s, r) => s + r.area, 0);
   const printerPeople =
     mode === "imported"
@@ -300,30 +365,53 @@ export function App() {
       ? (live.value?.events || [])
           .filter((event) => event.employee === activePrinterProfile.name)
           .map((event) => ({
-            id: event.id, roll: event.roll || event.id, date: event.date,
-            article: event.article, quantity: event.quantity, area: event.area,
+            id: event.id,
+            roll: event.roll || event.id,
+            date: event.date,
+            article: event.article,
+            quantity: event.quantity,
+            area: event.area,
             supply: event.sheetName,
           }))
       : data.rolls
           .filter((record) => record.employee === activePrinterProfile.id)
           .map((record) => ({
-            id: record.id, roll: record.roll || record.id, date: record.date,
-            article: record.article, quantity: record.quantity, area: record.area,
+            id: record.id,
+            roll: record.roll || record.id,
+            date: record.date,
+            article: record.article,
+            quantity: record.quantity,
+            area: record.area,
             supply: record.source,
           }))
     : [];
   const supplyPrintingRows = (live.value?.sheets || []).map((sheet) => {
     const orders = live.value!.supplies.filter(
-      (o) => o.sheetId === sheet.sheetId,
+      (o) =>
+        o.sheetId === sheet.sheetId &&
+        (!o.sourceId || !sheet.sourceId || o.sourceId === sheet.sourceId),
     );
-    const facts = live.value!.events.filter((e) => e.sheetId === sheet.sheetId);
+    const facts = live.value!.events.filter(
+      (e) =>
+        e.sheetId === sheet.sheetId &&
+        (!e.sourceId || !sheet.sourceId || e.sourceId === sheet.sourceId),
+    );
+    const plannedArea = plannedAreaTotal(orders);
     return {
       ...sheet,
       orders: orders.length,
       plan: orders.reduce((n, o) => n + o.quantity, 0),
-      plannedArea: orders.reduce((n, o) => n + o.plannedArea, 0),
+      plannedArea: plannedArea.total ?? 0,
+      areaKnown: plannedArea.observed > 0 && plannedArea.missing === 0,
+      areaObservedOrders: plannedArea.observed,
+      areaMissingOrders: plannedArea.missing,
       quantity: facts.reduce((n, e) => n + e.quantity, 0),
       area: facts.reduce((n, e) => n + e.area, 0),
+      printed: completeTotal(orders.map(rollPrinted)),
+      cut: completeTotal(orders.map(rollCut)),
+      packed: completeTotal(
+        orders.map((o) => (typeof o.packed === "number" ? o.packed : null)),
+      ),
     };
   });
   const totals = data.supplies.reduce(
@@ -518,10 +606,40 @@ export function App() {
     }
   };
   const sourceLink = (kind: Kind) => {
+    if (kind === "printing") {
+      const linkedSources = live.value?.sources?.length
+        ? live.value.sources
+        : [
+            {
+              id: "seasonal-printing",
+              name: "Сезонная печать",
+              spreadsheetUrl: PRINTING_URL,
+            },
+            {
+              id: "roll-printing",
+              name: "Рулонная печать · OZON",
+              spreadsheetUrl: ROLL_PRINTING_URL,
+            },
+          ];
+      return (
+        <div className="source-actions">
+          {linkedSources.map((source) => (
+            <a
+              key={source.id}
+              className="button secondary"
+              href={source.spreadsheetUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <ArrowSquareOut size={17} />
+              {source.name}
+            </a>
+          ))}
+        </div>
+      );
+    }
     const url =
-      kind === "printing"
-        ? PRINTING_URL
-        : sources.find((s) => s.id === kind)?.url;
+      sources.find((s) => s.id === kind)?.url;
     return url ? (
       <a
         className="button secondary"
@@ -541,10 +659,15 @@ export function App() {
       <div className="panel-heading">
         <h2>Печать по поставкам</h2>
         <small>За всё время · план из J и O · факт из записей выпуска</small>
+        {page === "overview" && (
+          <Button kind="ghost" onClick={() => go("supplies")}>
+            Все поставки <CaretRight size={17} />
+          </Button>
+        )}
       </div>
       <DataTable
         rows={supplyPrintingRows}
-        rowKey={(r) => String(r.sheetId)}
+        rowKey={(r) => `${r.sourceId || "legacy"}:${r.sheetId}`}
         label="Печать всех поставок"
         pageSize={25}
         columns={[
@@ -553,7 +676,7 @@ export function App() {
             label: "Поставка",
             render: (r) => (
               <a
-                href={`${PRINTING_URL}#gid=${r.sheetId}`}
+                href={r.spreadsheetUrl || `${PRINTING_URL}#gid=${r.sheetId}`}
                 target="_blank"
                 rel="noreferrer"
               >
@@ -566,7 +689,14 @@ export function App() {
           {
             id: "plannedArea",
             label: "План, м²",
-            render: (r) => num(r.plannedArea, 2),
+            render: (r) => (
+              <span>
+                {r.areaObservedOrders > 0 ? num(r.plannedArea, 2) : "—"}
+                {r.areaMissingOrders > 0 && (
+                  <small>Без площади: {num(r.areaMissingOrders)}</small>
+                )}
+              </span>
+            ),
           },
           {
             id: "quantity",
@@ -698,8 +828,30 @@ export function App() {
       ]}
     />
   );
+  if (new URLSearchParams(location.search).get("designPreview") === "1") {
+    const actualPrintingArea = live.value
+      ? live.value.events
+          .filter((event) => inPeriod(event.date, date, period))
+          .reduce((sum, event) => sum + event.area, 0)
+      : null;
+    return (
+      <DesignPreview
+        live={live.value}
+        loading={live.loading}
+        error={live.error}
+        supplies={supplyPrintingRows}
+        printingArea={actualPrintingArea}
+        assemblyPeople={assemblyLive.value?.rows.length ?? null}
+        onRefresh={() => {
+          void live.reload();
+          void assemblyLive.reload();
+        }}
+      />
+    );
+  }
   return (
-    <div className="app">
+    <div className="app app--atmosphere">
+      <RitmBackdrop />
       <a className="skip-link" href="#main">
         К содержимому
       </a>
@@ -754,7 +906,11 @@ export function App() {
       </aside>
       <main
         id="main"
-        className={page === "printing" && printerProfileId ? "is-printer-profile" : undefined}
+        className={
+          page === "printing" && printerProfileId
+            ? "is-printer-profile"
+            : undefined
+        }
       >
         <header className="page-header">
           <div>
@@ -770,98 +926,152 @@ export function App() {
                 <span>Меню</span>
               </button>
               <h1>{TITLES[page]}</h1>
-              <Badge tone={mode === "demo" ? "warning" : page === "assembly" ? assemblyLive.error ? "warning" : assemblyLive.value ? "success" : "info" : "info"}>
-                {page === "assembly" && mode === "imported" ? assemblyLive.error ? "Ошибка FBO" : assemblyLive.value ? "FBO подключено" : "Подключаю FBO" : mode === "demo"
-                  ? "Демо-данные"
-                  : live.value
-                    ? "Рабочие данные"
-                    : "Подключение"}
-              </Badge>
+              {page !== "intelligence" && (
+                <Badge
+                  tone={
+                    page === "assembly"
+                      ? assemblyLive.error
+                        ? "warning"
+                        : assemblyLive.value
+                          ? "success"
+                          : "info"
+                      : page === "production"
+                        ? live.error
+                          ? "warning"
+                          : live.value
+                            ? "success"
+                            : "info"
+                        : mode === "demo"
+                          ? "warning"
+                          : "info"
+                  }
+                >
+                  {page === "assembly"
+                    ? assemblyLive.error
+                      ? "Ошибка загрузки"
+                      : assemblyLive.value
+                        ? "FBO подключено"
+                        : "Подключаю FBO"
+                    : page === "production"
+                      ? live.error
+                        ? "Ошибка источника"
+                        : live.value
+                          ? "Рабочие данные"
+                          : "Подключение"
+                      : mode === "demo"
+                        ? "Демо-данные"
+                        : live.value
+                          ? "Рабочие данные"
+                          : "Подключение"}
+                </Badge>
+              )}
             </div>
             <p>{SUBTITLES[page]}</p>
           </div>
-          <div className="header-controls">
-            <div
-              className="segments"
-              role="group"
-              aria-label="Период показателей"
-            >
-              {(["day", "week", "month"] as Period[]).map((p, i) => (
-                <button
-                  key={p}
-                  aria-pressed={period === p}
-                  className={period === p ? "selected" : ""}
-                  onClick={() => setPeriod(p)}
+          {page !== "intelligence" &&
+            page !== "assembly" &&
+            page !== "production" && (
+              <div className="header-controls">
+                <div
+                  className="segments"
+                  role="group"
+                  aria-label="Период показателей"
                 >
-                  {["День", "Неделя", "Месяц"][i]}
-                </button>
-              ))}
-            </div>
-            <label className="date-control">
-              <CalendarBlank size={18} />
-              <input
-                aria-label="Дата показателей"
-                type="date"
-                value={date}
-                onChange={(e) => {
-                  if (e.target.value) setDate(e.target.value);
-                }}
-              />
-            </label>
-          </div>
+                  {(["day", "week", "month"] as Period[]).map((p, i) => (
+                    <button
+                      key={p}
+                      aria-pressed={period === p}
+                      className={period === p ? "selected" : ""}
+                      onClick={() => setPeriod(p)}
+                    >
+                      {["День", "Неделя", "Месяц"][i]}
+                    </button>
+                  ))}
+                </div>
+                <label className="date-control">
+                  <CalendarBlank size={18} />
+                  <input
+                    aria-label="Дата показателей"
+                    type="date"
+                    value={date}
+                    onChange={(e) => {
+                      if (e.target.value) setDate(e.target.value);
+                    }}
+                  />
+                </label>
+              </div>
+            )}
         </header>
-        <div className="context-bar">
-          {page !== "sources" && (
-            <span>
-              {mode === "demo" ? (
-                <>Показан демонстрационный пример на {shortDate(date)}.</>
-              ) : (
-                <>
-                  {page === "assembly" && mode === "imported" ? (assemblyLive.loading ? "Читаю подключённую таблицу FBO…" : assemblyLive.error ? assemblyLive.value ? "Не удалось обновить FBO · показаны последние данные" : "Таблица FBO недоступна" : assemblyLive.value ? "FBO «Итого» подключена · " + assemblyLive.value.rows.length + " сборщиков · обновлено " + new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" }).format(new Date(assemblyLive.value.updatedAt)) : "Подключаю FBO…") : live.loading
-                    ? "Читаю рабочую таблицу…"
-                    : live.error
-                      ? live.value
-                        ? "Обновление не удалось · показаны последние полученные данные"
-                        : "Таблица недоступна"
-                      : live.value
-                        ? `Печать подключена · ${live.value.sheets.length} листов · обновлено ${new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" }).format(new Date(live.value.updatedAt))} · автообновление 5 мин`
-                        : "Подключаю печать…"}
-                </>
+        <CloudAccessNotice />
+        {page !== "intelligence" && page !== "assembly" && (
+          <div className="context-bar">
+            {page !== "sources" && (
+              <span>
+                {page === "production" ? (
+                  live.loading ? (
+                    "Обновляю данные поставок и выпуска…"
+                  ) : live.error ? (
+                    "Не удалось обновить производственные данные."
+                  ) : live.value ? (
+                    `Рабочие поставки · ${live.value.sheets.length} листов · обновлено ${new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" }).format(new Date(live.value.updatedAt))}`
+                  ) : (
+                    "Подключаю рабочие данные производства…"
+                  )
+                ) : mode === "demo" ? (
+                  <>Показан демонстрационный пример на {shortDate(date)}.</>
+                ) : (
+                  <>
+                    {live.loading
+                      ? "Читаю рабочую таблицу…"
+                      : live.error
+                        ? live.value
+                          ? "Обновление не удалось · показаны последние полученные данные"
+                          : "Таблица недоступна"
+                        : live.value
+                          ? `Печать подключена · ${live.value.sheets.length} листов · обновлено ${new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" }).format(new Date(live.value.updatedAt))} · автообновление 5 мин`
+                          : "Подключаю печать…"}
+                  </>
+                )}
+              </span>
+            )}
+            <div>
+              {page !== "production" && (
+                <select
+                  aria-label="Режим данных"
+                  value={mode}
+                  onChange={(e) => {
+                    setMode(e.target.value as "demo" | "imported");
+                    setEmployee("");
+                    setSupplyId("");
+                    setQuery("");
+                  }}
+                >
+                  <option value="demo">Демонстрация</option>
+                  <option value="imported">Рабочие данные</option>
+                </select>
               )}
-            </span>
-          )}
-          <div>
-            <select
-              aria-label="Режим данных"
-              value={mode}
-              onChange={(e) => {
-                setMode(e.target.value as "demo" | "imported");
-                setEmployee("");
-                setSupplyId("");
-                setQuery("");
-              }}
-            >
-              <option value="demo">Демонстрация</option>
-              <option value="imported">Рабочие данные</option>
-            </select>
-            <Button disabled={busy || activeSourceLoading} onClick={refresh}>
-              <ArrowsClockwise size={17} className={busy ? "spin" : ""} />
-              {busy || activeSourceLoading ? "Обновление" : "Обновить"}
-            </Button>
+              <Button disabled={busy || activeSourceLoading} onClick={refresh}>
+                <ArrowsClockwise size={17} className={busy ? "spin" : ""} />
+                {busy || activeSourceLoading ? "Обновление" : "Обновить"}
+              </Button>
+            </div>
           </div>
-        </div>
+        )}
+        {page === "intelligence" && <AICenter />}
         {page === "overview" && (
           <>
             <div className="metrics four">
               {metric(
                 mode === "imported" ? "Листов поставок" : "Поставки в работе",
-                num(
-                  mode === "imported"
-                    ? live.value?.sheets.length || 0
-                    : data.supplies.filter(
+                mode === "imported"
+                  ? live.value
+                    ? num(live.value.sheets.length)
+                    : "—"
+                  : num(
+                      data.supplies.filter(
                         (s) => lineTotals(s).shipped < lineTotals(s).plan,
                       ).length,
-                ),
+                    ),
                 Truck,
               )}
               {metric(
@@ -880,18 +1090,26 @@ export function App() {
                   ? "Дневная цель ≥ 1"
                   : "По среднему за рабочий день",
               )}
-              {metric("Напечатано за период", num(area, 1) + " м²", Printer)}
+              {metric(
+                "Напечатано за период",
+                printingKnown ? num(area, 1) + " м²" : "—",
+                Printer,
+              )}
             </div>
-            <section className="panel">
-              <div className="panel-heading">
-                <h2>Поставки и этапы</h2>
-                <Button kind="ghost" onClick={() => go("supplies")}>
-                  Все поставки
-                  <CaretRight size={17} />
-                </Button>
-              </div>
-              {supplyTable}
-            </section>
+            {mode === "imported" ? (
+              liveSupplyPanel
+            ) : (
+              <section className="panel">
+                <div className="panel-heading">
+                  <h2>Поставки и этапы</h2>
+                  <Button kind="ghost" onClick={() => go("supplies")}>
+                    Все поставки
+                    <CaretRight size={17} />
+                  </Button>
+                </div>
+                {supplyTable}
+              </section>
+            )}
             <div className="split overview-bottom">
               <section className="panel">
                 <div className="panel-heading">
@@ -932,11 +1150,19 @@ export function App() {
                         <div>
                           <strong>{s.name}</strong>
                           <small>
-                            {s.id === "assembly" ? (assemblyLive.value ? "FBO подключено · " + assemblyLive.value.rows.length + " сборщиков" : assemblyLive.loading ? "Читаю FBO…" : "Таблица FBO недоступна") : s.state === "imported"
-                              ? `Загружено ${s.rows} строк`
-                              : s.url
-                                ? "Ссылка подготовлена. Чтение ещё не настроено."
-                                : "Нужна свежая выгрузка остатков."}
+                            {s.id === "assembly"
+                              ? assemblyLive.value
+                                ? "FBO подключено · " +
+                                  assemblyLive.value.rows.length +
+                                  " сборщиков"
+                                : assemblyLive.loading
+                                  ? "Читаю FBO…"
+                                  : "Таблица FBO недоступна"
+                              : s.state === "imported"
+                                ? `Загружено ${s.rows} строк`
+                                : s.url
+                                  ? "Ссылка подготовлена. Чтение ещё не настроено."
+                                  : "Нужна свежая выгрузка остатков."}
                           </small>
                         </div>
                         <CaretRight size={19} />
@@ -951,313 +1177,13 @@ export function App() {
             </div>
           </>
         )}
-        {page === "assembly" && mode === "imported" && (
-          <>
-            <div className="metrics four">
-              {metric("Сборщики с выпуском", num(assemblyRows.length), Users)}
-              {metric("Общий коэффициент", num(assemblyTotals.coefficient, 3), ChartBar, "Сумма кэфов за выбранный период")}
-              {metric("Порезано", num(assemblyTotals.cut), Scissors, "Штук")}
-              {metric("Упаковано", num(assemblyTotals.packed), Package, num(assemblyTotals.total) + " шт. всего")}
-            </div>
-            <section className="panel assembly-report">
-              <div className="panel-heading">
-                <div>
-                  <h2>Выпуск сборщиков · FBO итого</h2>
-                  <p className="panel-note">Коэффициент, количество штук и виды изделий загружаются из подключённой таблицы.</p>
-                </div>
-                <div className="assembly-actions">
-                  <Search label="Найти сборщика или изделие" value={query} onChange={setQuery} />
-                  <a className="button secondary" href={FBO_URL} target="_blank" rel="noreferrer">
-                    Открыть FBO <ArrowSquareOut size={16} />
-                  </a>
-                </div>
-              </div>
-              {assemblyLive.error && <Notice tone="warning">{assemblyLive.error}</Notice>}
-              {!assemblyRows.length && assemblyLive.loading ? (
-                <Busy label="Читаю FBO итого…" />
-              ) : !assemblyRows.length ? (
-                <Empty title="Нет выпуска за этот период">Проверь дату или выбери другой период.</Empty>
-              ) : (
-                <div className="assembly-table-wrap">
-                  <table className="assembly-live-table">
-                    <thead><tr>
-                      <th>Сборщик</th>
-                      <th>Общий кэф</th>
-                      <th><span className="assembly-th-icon"><Scissors aria-hidden="true" size={17} /><span>Порезал · шт. и виды</span></span></th>
-                      <th><span className="assembly-th-icon"><Package aria-hidden="true" size={17} /><span>Упаковал · шт. и виды</span></span></th>
-                      <th>Всего, шт.</th>
-                    </tr></thead>
-                    <tbody>{assemblyRows.map((row) => (
-                      <tr key={row.employee}>
-                        <th scope="row">
-                          <button
-                            className="assembly-employee-link"
-                            type="button"
-                            onClick={() => setAssemblyProfile(row.employee)}
-                          >
-                            {row.employee}
-                            <span>Открыть профиль</span>
-                          </button>
-                        </th>
-                        <td className={`assembly-coefficient${row.coefficient > 0 ? " is-positive" : ""}`}>{num(row.coefficient, 3)}</td>
-                        <td><strong>{num(row.cut)}</strong><small>{row.cutTypes.map((item) => item.name + " × " + num(item.quantity)).join(" · ") || "—"}</small></td>
-                        <td><strong>{num(row.packed)}</strong><small>{row.packTypes.map((item) => item.name + " × " + num(item.quantity)).join(" · ") || "—"}</small></td>
-                        <td className="assembly-total">{num(row.total)}</td>
-                      </tr>
-                    ))}</tbody>
-                    <tfoot><tr>
-                      <th>Итого</th><td className={`assembly-coefficient${assemblyTotals.coefficient > 0 ? " is-positive" : ""}`}>{num(assemblyTotals.coefficient, 3)}</td>
-                      <td>{num(assemblyTotals.cut)} шт.</td><td>{num(assemblyTotals.packed)} шт.</td><td>{num(assemblyTotals.total)}</td>
-                    </tr></tfoot>
-                  </table>
-                </div>
-              )}
-              <p className="panel-note">Данные по коэффициенту и видам взяты из «FBO итого». За неделю и месяц коэффициенты суммируются по дневным строкам источника.</p>
-            </section>
-          </>
-        )}
-        {page === "assembly" && mode === "demo" && (
-          <>
-            <div className="metrics three">
-              {metric(
-                "Сотрудников с учётом работы",
-                num(scoreRows.length),
-                Users,
-              )}
-              {metric(
-                "Достигли цели",
-                `${achieved} из ${scoreRows.length}`,
-                CheckCircle,
-              )}
-              {metric(
-                "Нет результата",
-                num(scoreRows.filter((s) => s.value === null).length),
-                Database,
-              )}
-            </div>
-            <div className="split staff-split">
-              <section className="panel">
-                <div className="panel-heading">
-                  <h2>Результаты смены</h2>
-                  <Search
-                    label="Найти сотрудника"
-                    value={query}
-                    onChange={setQuery}
-                  />
-                </div>
-                <DataTable
-                  rows={scoreRows.filter((e) => contains(e.name))}
-                  columns={staffColumns}
-                  rowKey={(e) => e.id}
-                  label="Коэффициенты сборщиков"
-                  onSelect={(e) => setEmployee(e.id)}
-                  selected={activeEmployee?.id}
-                />
-                <p className="panel-note">
-                  Выходные и отсутствия исключаются из рабочих дней. Неизвестные
-                  данные показываем отдельно.
-                </p>
-              </section>
-              <section className="panel employee-panel">
-                {activeEmployee && selectedScore ? (
-                  <>
-                    <div className="employee-heading">
-                      <span className="avatar">
-                        {activeEmployee.name
-                          .split(" ")
-                          .map((s) => s[0])
-                          .slice(0, 2)
-                          .join("")}
-                      </span>
-                      <div>
-                        <h2>{activeEmployee.name}</h2>
-                        <p>Сборщик</p>
-                      </div>
-                    </div>
-                    <div className="employee-score">
-                      <strong>
-                        {selectedScore.value === null
-                          ? "—"
-                          : num(selectedScore.value, 2)}
-                      </strong>
-                      <div>
-                        <b>
-                          {selectedScore.value === null
-                            ? "Нет результата"
-                            : num(selectedScore.value * 100) + "%"}
-                        </b>
-                        <span>
-                          {period === "day"
-                            ? "дневной нормы"
-                            : "среднее за рабочий день"}
-                        </span>
-                      </div>
-                    </div>
-                    {selectedScore.value !== null && (
-                      <div className="goal-progress">
-                        <Progress
-                          value={selectedScore.value}
-                          plan={1}
-                          showValue={false}
-                        />
-                        <small>Цель 1,00</small>
-                      </div>
-                    )}
-                    <h3>Вклад операций {period !== "day" && "за период"}</h3>
-                    <div className="operation-list">
-                      {(["Резка", "Ручная работа", "Упаковка"] as const).map(
-                        (o) => (
-                          <div key={o}>
-                            <span>{o}</span>
-                            <strong>
-                              {num(
-                                selectedScore.work
-                                  .filter((w) => w.operation === o)
-                                  .reduce((s, w) => s + coefficient(w), 0),
-                                2,
-                              )}
-                            </strong>
-                          </div>
-                        ),
-                      )}
-                      <div className="total">
-                        <b>Итого коэффициент</b>
-                        <strong>{num(selectedScore.total, 2)}</strong>
-                      </div>
-                    </div>
-                    <div className="section-label">
-                      <h3>Выполнение по дням</h3>
-                      <small>
-                        {new Intl.DateTimeFormat("ru-RU", {
-                          month: "long",
-                          year: "numeric",
-                          timeZone: "Europe/Moscow",
-                        }).format(new Date(date + "T12:00:00Z"))}
-                      </small>
-                    </div>
-                    <div className="calendar-days">
-                      {Array.from({ length: 7 }, (_, i) => {
-                        const day = Math.max(1, Number(date.slice(8)) - 6) + i;
-                        const d = `${date.slice(0, 8)}${String(day).padStart(2, "0")}`;
-                        const shift = data.shifts.find(
-                          (s) =>
-                            s.date === d && s.employee === activeEmployee.id,
-                        );
-                        const result = employeeResult(
-                          data,
-                          activeEmployee.id,
-                          d,
-                          "day",
-                        );
-                        return (
-                          <button
-                            key={d}
-                            className={`day-cell ${d === date ? "current" : ""}`}
-                            onClick={() => {
-                              setDate(d);
-                              setPeriod("day");
-                            }}
-                          >
-                            <small>
-                              {day}
-                              <span>
-                                {new Intl.DateTimeFormat("ru-RU", {
-                                  weekday: "short",
-                                  timeZone: "Europe/Moscow",
-                                }).format(new Date(d + "T12:00:00Z"))}
-                              </span>
-                            </small>
-                            {shift && !shift.working ? (
-                              <span className="calendar-value off">
-                                Выходной
-                              </span>
-                            ) : (
-                              <span
-                                className={`calendar-value ${result.value === null ? "off" : result.value >= 1 ? "success" : "warning"}`}
-                              >
-                                {result.value === null
-                                  ? "—"
-                                  : num(result.value, 2)}
-                              </span>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    <div className="mini-summary">
-                      <div>
-                        <small>Рабочих дней в периоде</small>
-                        <b>{selectedScore.working || "Нет учёта выходов"}</b>
-                      </div>
-                      <div>
-                        <small>Цель достигнута</small>
-                        <b>
-                          {selectedScore.working
-                            ? `${selectedScore.complete} из ${selectedScore.working}`
-                            : "—"}
-                        </b>
-                      </div>
-                    </div>
-                    {!data.shifts.length && (
-                      <Notice>
-                        Для среднего за рабочий день нужен учёт выходов на
-                        смену.
-                      </Notice>
-                    )}
-                  </>
-                ) : (
-                  <Empty title="Нет записей сборщиков">
-                    Загрузи таблицу операций в разделе «Источники данных».
-                  </Empty>
-                )}
-              </section>
-            </div>
-            <section className="panel">
-              <div className="panel-heading">
-                <h2>Выполненные операции</h2>
-                {sourceLink("assembly")}
-              </div>
-              <DataTable
-                rows={selectedScore?.work || []}
-                rowKey={(w) => w.id}
-                label="Расшифровка коэффициента"
-                columns={[
-                  {
-                    id: "date",
-                    label: "Дата",
-                    render: (w) => shortDate(w.date),
-                    sort: (w) => w.date,
-                  },
-                  {
-                    id: "article",
-                    label: "Артикул",
-                    render: (w) => <strong>{w.article}</strong>,
-                  },
-                  { id: "op", label: "Операция", render: (w) => w.operation },
-                  {
-                    id: "qty",
-                    label: "Количество",
-                    render: (w) => num(w.quantity),
-                  },
-                  { id: "norm", label: "Норма", render: (w) => num(w.norm) },
-                  {
-                    id: "coef",
-                    label: "Коэффициент",
-                    render: (w) => (
-                      <strong className="green">
-                        {num(coefficient(w), 2)}
-                      </strong>
-                    ),
-                  },
-                  {
-                    id: "source",
-                    label: "Источник",
-                    render: (w) => <small>{w.source}</small>,
-                  },
-                ]}
-              />
-            </section>
-          </>
+        {page === "assembly" && (
+          <AssemblyAnalytics
+            value={assemblyLive.value}
+            loading={assemblyLive.loading}
+            error={assemblyLive.error}
+            onRefresh={() => void assemblyLive.reload()}
+          />
         )}
         {page === "printing" && printerProfileId && activePrinterProfile ? (
           <PrinterProfilePage
@@ -1272,6 +1198,20 @@ export function App() {
           />
         ) : page === "printing" ? (
           <>
+            {mode === "imported" && live.value?.stale && (
+              <Notice tone="warning">
+                Данные печати устарели. Показан проверенный снимок от{" "}
+                {live.value.updatedAt}.
+              </Notice>
+            )}
+            {mode === "imported" &&
+              live.value?.quality?.status === "partial" && (
+                <Notice tone="warning">
+                  Источник печати содержит некорректные записи. Показатели
+                  неполные; снижение выпуска нельзя считать доказательством
+                  ухудшения работы сотрудников.
+                </Notice>
+              )}
             {mode === "imported" && live.error && (
               <Notice tone="warning">
                 {live.error}{" "}
@@ -1288,7 +1228,7 @@ export function App() {
                   }
                 >
                   {live.loading
-                    ? "Загружаю все поставки и журнал выпуска."
+                    ? "Загружаю листы заказов и журналы выпуска."
                     : "Повторите обновление. Показатели появятся после успешного чтения."}
                 </Empty>
               </section>
@@ -1302,9 +1242,18 @@ export function App() {
                       value={supplyFilter}
                       onChange={(e) => setSupplyFilter(e.target.value)}
                     >
-                      <option value="all">Все 11 поставок</option>
+                      <option value="all">
+                        Все поставки ({live.value?.sheets.length || 0})
+                      </option>
                       {live.value?.sheets.map((s) => (
-                        <option key={s.sheetId} value={s.name}>
+                        <option
+                          key={`${s.sourceId || "legacy"}:${s.sheetId}`}
+                          value={
+                            s.sourceId
+                              ? `${s.sourceId}::${s.sheetId}`
+                              : s.name
+                          }
+                        >
                           {s.name}
                         </option>
                       ))}
@@ -1312,16 +1261,28 @@ export function App() {
                   </div>
                 )}
                 <div className="metrics three">
-                  {metric("Учтено за период", num(area, 2) + " м²", Printer)}
-                  {metric("Записей выпуска", num(rolls.length), Package)}
-                  {metric("Сотрудников", num(printerPeople.length), Users)}
+                  {metric(
+                    "Учтено за период",
+                    printingKnown ? num(area, 2) + " м²" : "—",
+                    Printer,
+                  )}
+                  {metric(
+                    "Записей выпуска",
+                    printingKnown ? num(rolls.length) : "—",
+                    Package,
+                  )}
+                  {metric(
+                    "Сотрудников",
+                    printingKnown ? num(printerPeople.length) : "—",
+                    Users,
+                  )}
                 </div>
                 <div className="split">
                   <section className="panel">
                     <div className="panel-heading">
                       <h2>Выработка по сотрудникам</h2>
                       <select
-                        aria-label="Участок печати"
+                        aria-label="Площадка или источник печати"
                         value={site}
                         onChange={(e) => setSite(e.target.value)}
                       >
@@ -1368,7 +1329,7 @@ export function App() {
                   </section>
                   <section className="panel">
                     <div className="panel-heading">
-                      <h2>По участкам</h2>
+                      <h2>По площадкам и источникам</h2>
                     </div>
                     <div className="site-rows">
                       {[...new Set(rolls.map((r) => r.site))].map((s) => {
@@ -1395,6 +1356,33 @@ export function App() {
                     </div>
                   </section>
                 </div>
+                {mode === "imported" && live.value && (
+                  <section className="panel">
+                    <div className="panel-heading">
+                      <h2>Порезка по журналу</h2>
+                      <strong>
+                        {num(cuttingEvents.reduce((sum, event) => sum + event.quantity, 0))} шт. · {num(cuttingEvents.reduce((sum, event) => sum + event.area, 0), 2)} м²
+                      </strong>
+                    </div>
+                    {cuttingByEmployee.size ? (
+                      <div className="site-rows">
+                        {[...cuttingByEmployee.entries()].map(
+                          ([employee, totals]) => (
+                            <div key={employee}>
+                              <strong>{employee}</strong>
+                              <small>{totals.records} записей</small>
+                              <b>
+                                {num(totals.quantity)} шт. · {num(totals.area, 2)} м²
+                              </b>
+                            </div>
+                          ),
+                        )}
+                      </div>
+                    ) : (
+                      <Empty title="Нет подтверждённых записей порезки за период" />
+                    )}
+                  </section>
+                )}
                 <section className="panel">
                   <div className="panel-heading">
                     <h2>Динамика по дням</h2>
@@ -1550,79 +1538,11 @@ export function App() {
           </>
         ) : null}
         {page === "production" && (
-          <>
-            <div className="toolbar">
-              <Search
-                label="Найти артикул или поставку"
-                value={query}
-                onChange={setQuery}
-              />
-              <Notice>
-                Печать, резку и упаковку считаем отдельно по количеству.
-              </Notice>
-            </div>
-            <section className="panel">
-              <div className="panel-heading">
-                <h2>Работа по артикулам</h2>
-              </div>
-              <DataTable
-                rows={data.supplies
-                  .flatMap((s) => s.lines.map((l) => ({ ...l, supply: s })))
-                  .filter((l) => contains(l.article + " " + l.supply.name))}
-                rowKey={(l) => l.supply.id + l.article}
-                label="Производство по артикулам"
-                onSelect={(l) => {
-                  setSupplyId(l.supply.id);
-                  go("supplies");
-                }}
-                columns={[
-                  {
-                    id: "article",
-                    label: "Артикул",
-                    render: (l) => <strong>{l.article}</strong>,
-                    sort: (l) => l.article,
-                  },
-                  {
-                    id: "supply",
-                    label: "Поставка",
-                    render: (l) => (
-                      <>
-                        <span>
-                          {l.supply.market} · {l.supply.name}
-                        </span>
-                        <small>{l.supply.id}</small>
-                      </>
-                    ),
-                  },
-                  { id: "plan", label: "План", render: (l) => num(l.plan) },
-                  {
-                    id: "printed",
-                    label: "Напечатано",
-                    render: (l) => <Progress value={l.printed} plan={l.plan} />,
-                  },
-                  {
-                    id: "cut",
-                    label: "Порезано",
-                    render: (l) => <Progress value={l.cut} plan={l.plan} />,
-                  },
-                  {
-                    id: "packed",
-                    label: "Упаковано",
-                    render: (l) => <Progress value={l.packed} plan={l.plan} />,
-                  },
-                  {
-                    id: "rest",
-                    label: "Осталось упаковать",
-                    render: (l) => num(Math.max(0, l.plan - l.packed)),
-                  },
-                ]}
-              />
-            </section>
-            <Notice>
-              В первой версии позиции поставок связываются вручную. Одинаковый
-              артикул в разных поставках учитывается отдельно.
-            </Notice>
-          </>
+          <ProductionDashboard
+            live={live.value}
+            loading={live.loading}
+            error={live.error}
+          />
         )}
         {page === "stock" && (
           <>
@@ -1719,30 +1639,16 @@ export function App() {
         )}
         {page === "supplies" && (
           <>
-            {mode === "imported" &&
-              (live.value ? (
-                liveSupplyPanel
-              ) : (
-                <section className="panel">
-                  <Empty
-                    title={
-                      live.loading
-                        ? "Читаю поставки"
-                        : "Нет подключения к таблице"
-                    }
-                  >
-                    {live.error || "Загружаю все листы рабочей таблицы."}
-                  </Empty>
-                </section>
-              ))}
-            {mode === "imported" && (
-              <Notice>
-                Каждый рабочий лист — отдельная поставка. Здесь показаны план и
-                подтверждённый выпуск печати. Порезку, упаковку и отгрузку
-                подключим отдельно.
-              </Notice>
-            )}
-            {(mode === "demo" || data.supplies.length > 0) && (
+            {mode === "imported" ? (
+              <Suspense fallback={<section className="panel"><Empty title="Открываю поставки">Загружаю рабочий экран поставок.</Empty></section>}>
+                <LiveSuppliesWorkspace
+                  live={live.value}
+                  loading={live.loading}
+                  error={live.error}
+                  onRefresh={live.reload}
+                />
+              </Suspense>
+            ) : (
               <>
                 <div className="toolbar">
                   <select
@@ -2088,32 +1994,50 @@ export function App() {
                     </span>
                     <Badge
                       tone={
-                        s.id === "assembly" ? (assemblyLive.value ? assemblyLive.error ? "warning" : "success" : assemblyLive.error ? "warning" : "neutral") : s.id === "printing"
-                          ? live.value
-                            ? live.error
+                        s.id === "assembly"
+                          ? assemblyLive.value
+                            ? assemblyLive.error
                               ? "warning"
                               : "success"
-                            : live.error
+                            : assemblyLive.error
                               ? "warning"
                               : "neutral"
-                          : s.state === "imported"
-                            ? "success"
-                            : "neutral"
+                          : s.id === "printing"
+                            ? live.value
+                              ? live.error
+                                ? "warning"
+                                : "success"
+                              : live.error
+                                ? "warning"
+                                : "neutral"
+                            : s.state === "imported"
+                              ? "success"
+                              : "neutral"
                       }
                     >
-                      {s.id === "assembly" ? (assemblyLive.value ? assemblyLive.error ? "Ошибка обновления" : "Подключено" : assemblyLive.loading ? "Читаю FBO…" : assemblyLive.error ? "Нет связи" : "Ожидает подключения") : s.id === "printing"
-                        ? live.value
-                          ? live.error
+                      {s.id === "assembly"
+                        ? assemblyLive.value
+                          ? assemblyLive.error
                             ? "Ошибка обновления"
                             : "Подключено"
-                          : live.loading
-                            ? "Подключаю…"
-                            : live.error
+                          : assemblyLive.loading
+                            ? "Читаю FBO…"
+                            : assemblyLive.error
                               ? "Нет связи"
                               : "Ожидает подключения"
-                        : s.state === "imported"
-                          ? "CSV загружен"
-                          : "Не подключено"}
+                        : s.id === "printing"
+                          ? live.value
+                            ? live.error
+                              ? "Ошибка обновления"
+                              : "Подключено"
+                            : live.loading
+                              ? "Подключаю…"
+                              : live.error
+                                ? "Нет связи"
+                                : "Ожидает подключения"
+                          : s.state === "imported"
+                            ? "CSV загружен"
+                            : "Не подключено"}
                     </Badge>
                   </div>
                   <h2>{s.name}</h2>
@@ -2139,13 +2063,40 @@ export function App() {
                   )}
                   {s.id === "assembly" && (
                     <div className="source-facts">
-                      <b>{assemblyLive.value ? assemblyLive.value.rows.length + " сборщиков · " + num(assemblyLive.value.rows.reduce((sum, row) => sum + row.total, 0)) + " шт." : assemblyLive.loading ? "Читаю FBO…" : "Ожидаю чтения FBO"}</b>
-                      {assemblyLive.value && <small>Последнее успешное чтение: {new Intl.DateTimeFormat("ru-RU", { dateStyle: "short", timeStyle: "short", timeZone: "Europe/Moscow" }).format(new Date(assemblyLive.value.updatedAt))} (Москва)</small>}
+                      <b>
+                        {assemblyLive.value
+                          ? assemblyLive.value.rows.length +
+                            " сборщиков · " +
+                            num(
+                              assemblyLive.value.rows.reduce(
+                                (sum, row) => sum + row.total,
+                                0,
+                              ),
+                            ) +
+                            " шт."
+                          : assemblyLive.loading
+                            ? "Читаю FBO…"
+                            : "Ожидаю чтения FBO"}
+                      </b>
+                      {assemblyLive.value && (
+                        <small>
+                          Последнее успешное чтение:{" "}
+                          {new Intl.DateTimeFormat("ru-RU", {
+                            dateStyle: "short",
+                            timeStyle: "short",
+                            timeZone: "Europe/Moscow",
+                          }).format(
+                            new Date(assemblyLive.value.updatedAt),
+                          )}{" "}
+                          (Москва)
+                        </small>
+                      )}
                     </div>
                   )}
                   {s.id === "assembly" && assemblyLive.error && (
                     <Notice tone="warning">{assemblyLive.error}</Notice>
-                  )}                  {s.id === "printing" && (
+                  )}{" "}
+                  {s.id === "printing" && (
                     <div className="source-facts">
                       <b>
                         {live.value
@@ -2186,7 +2137,10 @@ export function App() {
                     {s.id === "assembly" ? (
                       <>
                         {sourceLink("assembly")}
-                        <Button disabled={assemblyLive.loading} onClick={() => void assemblyLive.reload()}>
+                        <Button
+                          disabled={assemblyLive.loading}
+                          onClick={() => void assemblyLive.reload()}
+                        >
                           Обновить FBO
                         </Button>
                       </>
@@ -2310,16 +2264,6 @@ export function App() {
             </Notice>
           </>
         )}
-        {page === "assembly" && mode === "imported" && (
-          <AssemblyProfileDrawer
-            employee={assemblyProfile}
-            selectedDate={date}
-            history={assemblyLive.value?.history || []}
-            loading={assemblyLive.loading}
-            error={assemblyLive.error}
-            onClose={() => setAssemblyProfile(null)}
-          />
-        )}
       </main>
       <div className="toast-region" role="status" aria-live="polite">
         {toast && (
@@ -2430,6 +2374,7 @@ export function App() {
               error={formErrors.lines}
             >
               <textarea
+                className="resize-none"
                 rows={6}
                 style={{ resize: "none" }}
                 value={draft.lines}
@@ -2571,4 +2516,9 @@ export function App() {
       )}
     </div>
   );
+}
+
+export function App() {
+  const isMiniApp = new URLSearchParams(location.search).get("mini") === "1";
+  return isMiniApp ? <TelegramMiniApp /> : <AppShell />;
 }

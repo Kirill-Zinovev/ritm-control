@@ -1,4 +1,5 @@
 export {
+  Bot,
   RefreshCw as ArrowsClockwise,
   CalendarDays as CalendarBlank,
   ChartNoAxesColumn as ChartBar,
@@ -20,8 +21,11 @@ export {
   Download as DownloadSimple,
   Upload as UploadSimple,
   ChevronRight as CaretRight,
+  ChevronDown as CaretDown,
   ArrowLeft,
   ArrowRight,
   LoaderCircle as CircleNotch,
   Search as MagnifyingGlass,
+  Trash2 as Trash,
+  Pencil as Pencil,
 } from "lucide-react";

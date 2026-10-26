@@ -7,15 +7,26 @@
     "dev": "vite --configLoader native",
     "build": "vite build --configLoader native && node scripts/prepare-sites-build.mjs",
     "preview": "vite preview",
-    "test:sites": "node --test tests/sites-worker.test.mjs tests/printing.test.mjs tests/assembly.test.mjs",
+    "test:sites": "node --import ./tests/cloud-env.mjs --test tests/sites-worker.test.mjs tests/printing.test.mjs tests/assembly.test.mjs",
     "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "test:cloud": "npm run build && node --import ./tests/cloud-env.mjs --test tests/cloud-migration.test.mjs tests/cloud-worker.test.mjs tests/cloud-bridge.test.mjs tests/cloud-cutover.test.mjs",
+    "test:migration-domain": "node --import ./tests/cloud-env.mjs --test tests/intelligence-assembly-sync.test.mjs tests/intelligence-assembly-transfer.test.mjs tests/intelligence-production-supplies.test.mjs tests/intelligence-roll-supply.test.mjs",
+    "migration:export": "node scripts/export-sites-migration.mjs",
     "test:domain": "node scripts/test-domain.mjs",
+    "test:assembly-app": "node --test tests/assembly-supply-sync.test.mjs",
+    "test:assembly-load": "node --test tests/assembly-load-simulation.test.mjs",
     "format": "prettier --write src tests scripts tsconfig.json DESIGN.md UX-CONTRACT.md README.md",
-    "format:check": "prettier --check src tests/domain.test.ts scripts/test-domain.mjs tsconfig.json DESIGN.md UX-CONTRACT.md README.md"
+    "format:check": "prettier --check src tests/domain.test.ts scripts/test-domain.mjs tsconfig.json DESIGN.md UX-CONTRACT.md README.md",
+    "intelligence": "node agent/index.js",
+    "intelligence:check": "node agent/index.js --once",
+    "test:intelligence": "node --test tests/intelligence*.test.mjs tests/assembly-packing.test.mjs"
   },
   "dependencies": {
+    "@noble/hashes": "2.4.0",
     "@radix-ui/react-dialog": "https://registry.npmjs.org/@radix-ui/react-dialog/-/react-dialog-1.1.23.tgz",
     "@vitejs/plugin-react": "5.0.4",
+    "exceljs": "4.4.0",
     "lucide-react": "https://registry.npmjs.org/lucide-react/-/lucide-react-0.525.0.tgz",
     "react": "19.2.0",
     "react-dom": "19.2.0",
@@ -24,6 +35,9 @@
   "devDependencies": {
     "@types/react": "https://registry.npmjs.org/@types/react/-/react-19.2.14.tgz",
     "@types/react-dom": "https://registry.npmjs.org/@types/react-dom/-/react-dom-19.2.3.tgz",
+    "drizzle-kit": "0.31.11",
+    "drizzle-orm": "0.45.4",
+    "miniflare": "4.20260730.0",
     "prettier": "https://registry.npmjs.org/prettier/-/prettier-3.7.4.tgz",
     "typescript": "https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz"
   }

@@ -1,0 +1,108 @@
+export async function flushTelegram(
+  store,
+  config,
+  { fetcher = fetch, now = new Date(), signal, telegramAssistant = null } = {},
+) {
+  if (!config.enabled || !config.token || !config.chatId)
+    return { status: "not_configured" };
+  // No incoming commands or repair approvals in stage 1.
+  const pending = store.db
+    .prepare(
+      "SELECT * FROM outbox WHERE status='pending' AND next_at<=? ORDER BY next_at LIMIT 10",
+    )
+    .all(now.toISOString());
+  for (const entry of pending) {
+    const incident = store.getIncident(entry.incident_id);
+    if (
+      !incident ||
+      (incident.monitorStatus || incident.status) !== "open" ||
+      incident.status === "ignored" ||
+      (!["critical", "high"].includes(incident.severity) &&
+        !(
+          incident.kind === "table_doctor" &&
+          incident.verification === "rule_confirmed"
+        ))
+    ) {
+      store.db
+        .prepare("UPDATE outbox SET status='cancelled' WHERE id=?")
+        .run(entry.id);
+      continue;
+    }
+    store.db
+      .prepare(
+        "UPDATE outbox SET status='sending',attempts=attempts+1 WHERE id=?",
+      )
+      .run(entry.id);
+    try {
+      let delivered = false;
+      if (telegramAssistant?.sendIncident) {
+        delivered = await telegramAssistant.sendIncident(incident);
+      } else {
+        const response = await fetcher(
+          "https://api.telegram.org/bot" + config.token + "/sendMessage",
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              chat_id: config.chatId,
+              text: [
+                "⚠️ RITM: требуется проверка",
+                incident.title,
+                `Источник: ${incident.sourceName}`,
+                `Ячейка: ${incident.sheet || "лист"}!${incident.cell || "не указана"}`,
+                "Запись не выполняется автоматически.",
+              ].filter(Boolean).join("\n").slice(0, 1800),
+              disable_web_page_preview: true,
+              ...(incident.sourceUrl?.startsWith("https://")
+                ? { reply_markup: { inline_keyboard: [[{ text: "Открыть источник", url: incident.sourceUrl }]] } }
+                : {}),
+            }),
+            signal: AbortSignal.any([AbortSignal.timeout(15000), signal].filter(Boolean)),
+          },
+        );
+        const result = await response.json();
+        delivered = response.ok && result.ok;
+        if (!delivered) {
+          const retry = response.status === 429 || response.status >= 500;
+          const attempts = entry.attempts + 1;
+          const seconds = Math.min(Math.max(Number(result.parameters?.retry_after) || 60 * 2 ** attempts, 30), 86400);
+          store.db.prepare("UPDATE outbox SET status=?,next_at=? WHERE id=?").run(retry && attempts < 5 ? "pending" : "failed", new Date(now.getTime() + seconds * 1000).toISOString(), entry.id);
+          store.log("notification_failed", "Telegram отклонил уведомление: HTTP " + response.status + ". Проверки продолжаются.", incident.id);
+          continue;
+        }
+      }
+      if (delivered) {
+        store.db
+          .prepare("UPDATE outbox SET status='sent' WHERE id=?")
+          .run(entry.id);
+        store.log(
+          "notification_sent",
+          "Уведомление владельцу отправлено",
+          incident.id,
+        );
+      }
+    } catch {
+      // Network loss after sending may mean delivery succeeded. Do not duplicate it automatically.
+      store.db
+        .prepare("UPDATE outbox SET status='uncertain' WHERE id=?")
+        .run(entry.id);
+      store.log(
+        "notification_uncertain",
+        "Результат отправки Telegram неизвестен; повтор заблокирован, мониторинг продолжается.",
+        incident.id,
+      );
+    }
+  }
+  return {
+    status: "configured",
+    pending: store.db
+      .prepare("SELECT count(*) AS n FROM outbox WHERE status='pending'")
+      .get().n,
+    uncertain: store.db
+      .prepare("SELECT count(*) AS n FROM outbox WHERE status='uncertain'")
+      .get().n,
+    failed: store.db
+      .prepare("SELECT count(*) AS n FROM outbox WHERE status='failed'")
+      .get().n,
+  };
+}

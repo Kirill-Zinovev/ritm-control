@@ -1,0 +1,15 @@
+{$RITM_AGENT_DOMAIN} {
+  @denied not remote_ip {$RITM_OWNER_IPS}
+  respond @denied "Доступ ограничен владельцем" 403
+  request_body {
+    max_size 8KB
+  }
+  header {
+    Strict-Transport-Security "max-age=31536000"
+    X-Content-Type-Options "nosniff"
+    Referrer-Policy "no-referrer"
+  }
+  reverse_proxy 127.0.0.1:4318 {
+    header_up Host 127.0.0.1:4318
+  }
+}

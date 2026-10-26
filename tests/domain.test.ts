@@ -121,6 +121,30 @@ test("supply validation rejects duplicates, nonpositive quantity and inverted da
     2,
   );
 });
+test("supply validation accepts pasted Excel rows with spaces after semicolons", () => {
+  const parsed = validateSupply(
+    "OZON Волгоград",
+    "2026-10-14",
+    "2026-10-13",
+    [
+      "JA0037.A0225; 170",
+      "NT0006.A4692; 60",
+      "KS0002.A7665; 300",
+      "KT0072.A0094; 200",
+    ].join("\n"),
+  );
+
+  assert.deepEqual(parsed.errors, {});
+  assert.deepEqual(
+    parsed.lines.map(({ article, plan }) => [article, plan]),
+    [
+      ["JA0037.A0225", 170],
+      ["NT0006.A4692", 60],
+      ["KS0002.A7665", 300],
+      ["KT0072.A0094", 200],
+    ],
+  );
+});
 test("CSV parser supports quotes, decimal comma, multiline cells and rejects damaged input", () => {
   const parsed = CSV.parse('id;area;note\r\na;"18,6";"first\nsecond"\r\n');
   assert.equal(parsed.errors.length, 0);

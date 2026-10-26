@@ -1,0 +1,380 @@
+import { loadAssembly } from "../worker/assembly.js";
+import {
+  loadPrinting,
+  parseCsv,
+  CATALOG_ID,
+  ROLL_PRINTING_SHEET_ID,
+  BOX_PRINTING_SHEET_ID,
+} from "../worker/printing.js";
+import { loadAssemblyPacking, unavailableAssemblyPacking } from "./assemblyPacking.js";
+import { parseNonnegative, parseDay } from "../worker/assemblyDiagnostics.js";
+import { sourceTimestamp } from "../worker/timestamps.js";
+export function todayMoscow(now = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Moscow",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
+}
+export function columnIndex(column) {
+  return (
+    [...column].reduce((n, char) => n * 26 + char.charCodeAt(0) - 64, 0) - 1
+  );
+}
+export function inspectGeneric(rows, sheet) {
+  const issues = [],
+    active = rows.slice(sheet.dataStartRow - 1);
+  for (const check of sheet.checks) {
+    const col = columnIndex(check.column);
+    if (check.header && rows[sheet.headerRow - 1]?.[col] !== check.header) {
+      const error = new Error("CSV schema changed");
+      error.issue = {
+        code: "schema_changed",
+        source: sheet.name,
+        cell: check.column + sheet.headerRow,
+        found: rows[sheet.headerRow - 1]?.[col] || "",
+        expected: check.header,
+        message: "Изменился утверждённый заголовок",
+      };
+      throw error;
+    }
+    const counts = new Map();
+    if (check.type === "unique")
+      for (const row of active) {
+        const key = String(row[col] || "").trim();
+        if (key) counts.set(key, (counts.get(key) || 0) + 1);
+      }
+    active.forEach((row, index) => {
+      if (row.every((v) => !String(v).trim())) return;
+      const raw = String(row[col] ?? "").trim();
+      const bad =
+        check.type === "required"
+          ? !raw
+          : check.type === "unique"
+            ? !raw || counts.get(raw) > 1
+            : check.type === "date"
+              ? !parseDay(raw)
+              : parseNonnegative(raw, check.type === "integer") === null;
+      if (bad)
+        issues.push({
+          code:
+            check.type === "unique"
+              ? raw
+                ? "duplicate_uid"
+                : "missing_uid"
+              : "invalid_" + check.type,
+          source: sheet.name,
+          row: sheet.dataStartRow + index,
+          cell: check.column + (sheet.dataStartRow + index),
+          found: raw.slice(0, 500),
+          expected: check.expected || check.type,
+          message: "Нарушено утверждённое правило столбца " + check.column,
+        });
+    });
+  }
+  return issues;
+}
+
+export async function readProductionShopCatalog(googleReader, signal) {
+  if (!googleReader || !CATALOG_ID) return null;
+  const token = await googleReader.accessToken(signal);
+  const url = new URL(
+    `https://sheets.googleapis.com/v4/spreadsheets/${CATALOG_ID}/values:batchGet`,
+  );
+  const requestedRanges = [
+    { sheet: "WB", startColumn: "A", endColumn: "B", query: "'WB'!A:B" },
+    { sheet: "WB", startColumn: "T", endColumn: "T", query: "'WB'!T:T" },
+    {
+      sheet: "OZON",
+      startColumn: "A",
+      endColumn: "B",
+      query: "'OZON'!A:B",
+    },
+    { sheet: "OZON", startColumn: "P", endColumn: "P", query: "'OZON'!P:P" },
+  ];
+  for (const range of requestedRanges)
+    url.searchParams.append("ranges", range.query);
+  url.searchParams.set("valueRenderOption", "FORMATTED_VALUE");
+  url.searchParams.set("majorDimension", "ROWS");
+  const response = await googleReader.request(url, {
+    method: "GET",
+    redirect: "error",
+    headers: { authorization: `Bearer ${token}` },
+    signal: AbortSignal.any(
+      [signal, AbortSignal.timeout(25000)].filter(Boolean),
+    ),
+    ritmPriority: -1,
+  });
+  if (!response.ok) throw new Error("Shop catalog unavailable");
+  const data = await response.json();
+  const returnedRangeMatches = (value, expected) => {
+    const match = String(value || "").match(
+      /^(?:'((?:[^']|'')+)'|([^!]+))!([A-Z]+)(\d+)?(?::([A-Z]+)(\d+)?)?$/u,
+    );
+    if (!match) return false;
+    const sheet = (match[1] || match[2]).replaceAll("''", "'"),
+      startColumn = match[3],
+      startRow = Number(match[4] || 1),
+      endColumn = match[5] || startColumn,
+      endRow = match[6] ? Number(match[6]) : null;
+    return (
+      sheet === expected.sheet &&
+      startColumn === expected.startColumn &&
+      endColumn === expected.endColumn &&
+      startRow === 1 &&
+      (endRow === null || endRow >= startRow)
+    );
+  };
+  if (
+    data.spreadsheetId !== CATALOG_ID ||
+    !Array.isArray(data.valueRanges) ||
+    data.valueRanges.length !== requestedRanges.length ||
+    !requestedRanges.every(
+      (range, index) =>
+        returnedRangeMatches(data.valueRanges[index]?.range, range),
+    )
+  )
+    throw new Error("Shop catalog response invalid");
+  const rowsFromColumns = (columns, width, placements) => {
+    const rowCount = Math.max(
+      0,
+      ...columns.map((column) => column.length),
+    );
+    return Array.from({ length: rowCount }, (_, index) => {
+      const row = Array(width).fill("");
+      columns.forEach((column, columnIndex) => {
+        const values = column[index] || [];
+        for (let offset = 0; offset < placements[columnIndex].count; offset++)
+          row[placements[columnIndex].start + offset] = values[offset] || "";
+      });
+      return row;
+    });
+  };
+  return {
+    WB: rowsFromColumns(
+      [data.valueRanges[0].values || [], data.valueRanges[1].values || []],
+      20,
+      [
+        { start: 0, count: 2 },
+        { start: 19, count: 1 },
+      ],
+    ),
+    OZON: rowsFromColumns(
+      [data.valueRanges[2].values || [], data.valueRanges[3].values || []],
+      16,
+      [
+        { start: 0, count: 2 },
+        { start: 15, count: 1 },
+      ],
+    ),
+  };
+}
+
+export async function loadSource(
+  source,
+  fetcher,
+  now = new Date(),
+  options = {},
+) {
+  if (source.adapter === "assembly")
+    return loadAssembly(todayMoscow(now), "day", fetcher, { includeHistory: true });
+  if (source.adapter === "printing") {
+    const authenticatedFetcher = options.googleReader
+      ? async (url, init = {}) => {
+          const parsed = new URL(url),
+            documentMatch = parsed.pathname.match(
+              /^\/spreadsheets\/d\/([A-Za-z0-9_-]+)\/export$/,
+            );
+          if (
+            parsed.hostname !== "docs.google.com" ||
+            !documentMatch ||
+            ![source.documentId, ROLL_PRINTING_SHEET_ID, BOX_PRINTING_SHEET_ID].includes(
+              documentMatch[1],
+            ) ||
+            parsed.searchParams.get("format") !== "csv" ||
+            !/^\d+$/.test(parsed.searchParams.get("gid") || "")
+          )
+            throw new Error("Unapproved printing export URL");
+          const token = await options.googleReader.accessToken(init.signal),
+            headers = new Headers(init.headers);
+          headers.set("authorization", "Bearer " + token);
+          return fetcher(url, { ...init, headers });
+        }
+      : fetcher;
+    let shopCatalogRows = null;
+    if (options.googleReader) {
+      try {
+        shopCatalogRows = await readProductionShopCatalog(
+          options.googleReader,
+          options.signal,
+        );
+      } catch (error) {
+        if (options.signal?.aborted) throw error;
+      }
+    }
+    const printing = await loadPrinting(authenticatedFetcher, {
+      additionalSheets: options.printingAdditionalSheets || [],
+      productionSupplies: options.productionSupplies || [],
+      assemblyBoxLinks: options.assemblyBoxLinks || [],
+      shopCatalogRows,
+    });
+    const checkedAt = now instanceof Date ? now.toISOString() : new Date().toISOString();
+    return options.googleReader
+      ? loadAssemblyPacking(options.googleReader, printing, {
+          signal: options.signal,
+          checkedAt,
+        })
+      : unavailableAssemblyPacking(
+          printing,
+          checkedAt,
+          "Источник WorkLog не подключён к этому экземпляру RITM.",
+        );
+  }
+  const exports = await Promise.all(
+    source.sheets
+      .filter((s) => s.status !== "not_configured")
+      .map(async (sheet) => {
+        const response = await fetcher(
+          "https://docs.google.com/spreadsheets/d/" +
+            source.documentId +
+            "/export?format=csv&gid=" +
+            sheet.gid,
+        );
+        if (!response.ok) throw new Error("CSV source unavailable");
+        const rows = parseCsv(await response.text());
+        return { sheet, rows, issues: inspectGeneric(rows, sheet) };
+      }),
+  );
+  const issues = exports.flatMap((s) => s.issues);
+  const times = exports.flatMap(({ sheet, rows }) =>
+    sheet.updatedAtColumn
+      ? rows
+          .slice(sheet.dataStartRow - 1)
+          .map((r) => sourceTimestamp(r[columnIndex(sheet.updatedAtColumn)]))
+          .filter(Boolean)
+      : [],
+  );
+  return {
+    ok: true,
+    updatedAt: now.toISOString(),
+    sourceUpdatedAt: times.sort().at(-1) || null,
+    issues,
+    quality: { status: issues.length ? "partial" : "valid" },
+    recordCount: exports.reduce(
+      (n, s) => n + s.rows.length - s.sheet.dataStartRow + 1,
+      0,
+    ),
+  };
+}
+export function validateApi(payload, kind) {
+  if (
+    !payload ||
+    payload.ok !== true ||
+    !Number.isFinite(Date.parse(payload.updatedAt))
+  )
+    throw new Error("API schema changed");
+  const finite = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0;
+  if (kind === "assembly") {
+    if (
+      ![1, 2].includes(payload.schemaVersion) ||
+      !Array.isArray(payload.rows) ||
+      !Array.isArray(payload.history)
+    )
+      throw new Error("API schema changed");
+    for (const row of [...payload.rows, ...payload.history]) {
+      if (
+        !row ||
+        typeof row.employee !== "string" ||
+        !row.employee.trim() ||
+        (row.coefficient !== null && !finite(row.coefficient)) ||
+        ![
+          "machineCut",
+          "manualCut",
+          "cut",
+          "packed",
+          "total",
+          "days",
+        ].every((k) => finite(row[k])) ||
+        !Array.isArray(row.cutTypes) ||
+        !Array.isArray(row.packTypes) ||
+        [...row.cutTypes, ...row.packTypes].some(
+          (x) => !x || typeof x.name !== "string" || !finite(x.quantity),
+        )
+      )
+        throw new Error("API numeric/schema violation");
+    }
+    if (payload.history.some((r) => !parseDay(r.date)))
+      throw new Error("API date violation");
+    if (
+      new Set(
+        payload.history.map(
+          (r) => r.date + "|" + (r.identityKey || r.employee),
+        ),
+      ).size !== payload.history.length
+    )
+      throw new Error("API duplicate daily records");
+  } else {
+    if (
+      payload.schemaVersion !== 2 ||
+      !Array.isArray(payload.events) ||
+      !Array.isArray(payload.supplies) ||
+      !Array.isArray(payload.issues) ||
+      !Array.isArray(payload.sheets)
+    )
+      throw new Error("API schema changed");
+    const ids = new Set();
+    for (const e of payload.events) {
+      if (
+        !e?.id ||
+        ids.has(e.id) ||
+        !e.uid ||
+        !e.employee ||
+        !parseDay(e.date) ||
+        !finite(e.area) ||
+        e.area <= 0 ||
+        !Number.isSafeInteger(e.quantity) ||
+        e.quantity <= 0
+      )
+        throw new Error("API invalid or duplicate printing event");
+      ids.add(e.id);
+    }
+    if (
+      payload.supplies.some(
+        (r) =>
+          !r?.uid ||
+          !Number.isSafeInteger(r.quantity) ||
+          r.quantity < 0 ||
+          !finite(r.plannedArea),
+      )
+    )
+      throw new Error("API order schema violation");
+    if (
+      payload.packing &&
+      (![
+        "available",
+        "partial",
+        "unavailable",
+      ].includes(payload.packing.status) ||
+        typeof payload.packing.source !== "string" ||
+        !Number.isFinite(Date.parse(payload.packing.checkedAt)) ||
+        !Number.isSafeInteger(payload.packing.eventCount) ||
+        payload.packing.eventCount < 0 ||
+        !Number.isSafeInteger(payload.packing.invalidRecords) ||
+        payload.packing.invalidRecords < 0 ||
+        (payload.packing.sourceUpdatedAt != null &&
+          !Number.isFinite(Date.parse(payload.packing.sourceUpdatedAt))))
+    )
+      throw new Error("API packing source schema violation");
+    if (
+      payload.supplies.some(
+        (order) =>
+          order.packed !== undefined &&
+          order.packed !== null &&
+          (!Number.isSafeInteger(order.packed) || order.packed < 0),
+      )
+    )
+      throw new Error("API packing quantity violation");
+  }
+  return payload;
+}

@@ -11,6 +11,12 @@ export default defineConfig({
     include: ["react", "react-dom/client"],
   },
   server: {
+    proxy: {
+      "/api/intelligence": {
+        target: "http://127.0.0.1:4318",
+        changeOrigin: true,
+      },
+    },
     host: "0.0.0.0",
     allowedHosts: ["terminal.local"],
     warmup: {

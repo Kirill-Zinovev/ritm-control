@@ -1,17 +1,23 @@
-# Design QA
+# Design QA — RITM AI Center, 2026-10-08
 
-- Source visual truth: the four most recent detailed RITM mockups in the conversation (overview, assembly, printing, supplies).
-- Intended viewports: desktop 1600 x 1200; narrow fallback 390px.
-- Source image dimensions: conversation display; no original files are available in the project folder.
-- Browser preview opened on 2026-10-07 at `http://127.0.0.1:4173/`.
-- Mobile navigation: at a narrow responsive viewport (667px screenshot), the Menu control appears, opens a drawer with all seven destinations and the active item highlighted, and exposes its expanded state. Selecting Supplies changes the route and closes the drawer.
-- Mobile supplies layout: the first browser screenshot showed page-level horizontal overflow, with supply cards extending beyond the viewport. `src/styles.css` now sets `min-width: 0` on supply layout children and uses a zero-minimum mobile grid track. After rebuilding, the two-column supply list fits the viewport and the page-level horizontal scrollbar is gone.
-- Routes visually inspected: overview, assembly, and supplies. The other pages are covered by server-render checks but have not been visually compared in the browser.
-- Full comparison against mockups, dialog flows, CSV import wizard, keyboard-only traversal, and browser console remain pending. No claim of 1:1 fidelity is made.
+Изменение сохраняет существующие RITM shell, левую навигацию, токены и общие примитивы. Desktop-only решение из AGENTS.md соблюдено.
 
-- Employee profiles follow the two selected conversation mocks: assembler opens a right-side drawer; printer opens a full profile.
-- Local preview smoke checks returned HTTP 200 for the app and both APIs. FBO returned 8 selected-period rows and 486 daily entries; printing returned 46 journal events, 624 supplies, and 0 source issues.
-- Typecheck, worker/domain tests, production build, and whitespace validation pass.
-- Visual comparison and interaction QA for the new profiles remain unavailable because this session has no configured browser tool or agent-browser executable.
+Chrome/Playwright: реальная страница локального агента проверена на 1440×1000 и 1100×900. AI Center использует существующие Button, Field, Notice, Badge, DataTable и Radix Modal. Вход, filters, empty state, source links, history, logout и disabled chat проверены. Incident details и server pagination проверены с явно изолированной QA-записью; она не попала в реальный журнал.
 
-final result: blocked
+После браузерной проверки Field получил отдельное aria-labelledby для подписи: доступное имя select больше не включает тексты всех вариантов. Исправление действует и для существующих форм.
+
+Скриншот реального overview сохранён в временном каталоге QA; на нём 2 источника и 0 активных проблем, соответствующие текущему хранилищу. Нет демонстрационных инцидентов. Отсутствующая формульная диагностика, AI и Telegram явно обозначены.
+
+Нет неожиданных console/pageerror. Левое меню остаётся видимым при 1100px. Keyboard Enter/Escape для incident modal проверены; полный keyboard regression всех прежних ERP-форм в этом этапе не выполнялся.
+
+DESIGN.md lint: 0 ошибок, 9 предупреждений orphaned-tokens. Premium strict audit оставляет одно ложное срабатывание общего Button: статический анализатор не видит действие через spread props. Реальные действия подтверждены браузером; strict audit не заявляется прошедшим.
+
+## Поставки — карточки готовности участка, 2026-10-24
+
+Референс: `C:\Users\73B5~1\AppData\Local\Temp\codex-clipboard-3bc144a1-be74-4e97-a426-92f7c192c255.png` (1680×941). Проверка реализации: `http://localhost:4318/?page=supplies`, скриншот через CUA при viewport 934×878; снимок просмотрен, но отдельным файлом не сохранялся.
+
+В карточках сверены состояния печати, резки, упаковки Assembly из WorkLog и отправки. Значения отображаются из текущей выбранной поставки; отсутствие показаний и частичные данные остаются явно обозначены. Для WorkLog показывается время проверки источника, поскольку время последней операции по поставке источник не предоставляет.
+
+На узком viewport блок перестраивается в две колонки, карточки упаковки и отправки занимают всю строку, а на телефоне колонки становятся одиночными. На широком экране сохраняется референсный порядок из четырёх колонок с увеличенной карточкой упаковки. Таблица состава и общий каркас страницы не менялись этим изменением.
+
+Проверки: `npm run typecheck` и `npx vite build --configLoader native` завершились успешно. В production-сборке остаётся предупреждение Vite о крупном vendor chunk. Рабочие таблицы и опубликованный deployment не менялись.
