@@ -716,6 +716,15 @@ function safeWorkloadPhoto(value) {
   } catch { return ""; }
 }
 
+function photoUrlFromSourceRow(row) {
+  const primary = safeWorkloadPhoto(row?.[3]);
+  if (primary) return primary;
+  return String(row?.[2] || "")
+    .split(/[;\r\n]+/)
+    .map((value) => safeWorkloadPhoto(value))
+    .find(Boolean) || "";
+}
+
 // The selected marketplace catalog is authoritative for the workload machine.
 // Supply columns can contain a broad print process rather than equipment.
 // Never infer equipment from that broad label or modify source production rows.
@@ -753,33 +762,34 @@ export function assignWorkloadDetails(orders, catalog, photos = null) {
     indices.set(market, records);
   }
   for (const order of orders) {
-    const entries = indices.get(marketplaceForSupply(order.sheetName))?.get(normalizeCatalogArticle(order.article));
-    if (!entries?.length) continue;
-    for (const field of ["machine", "productName", "photoUrl"]) {
-      if (field !== "machine" && order[field] && !String(order[field]).trim().startsWith("#")) continue;
-      const values = new Set(entries.map(entry => entry[field]));
-      if (values.size === 1) {
-        const value = [...values][0];
-        if (field !== "machine" || value) order[field] = value;
-        if (field === "machine" && value) {
-          order.machineSource = "catalog";
-          order.machineIssue = ["бокс", "рулонная печать", "не найдено в базе"].includes(normal(value))
-            ? `В базе ${marketplaceForSupply(order.sheetName)} в поле «Станок» указано «${value}». Конкретный станок не указан.`
-            : null;
+    const articleKey = normalizeCatalogArticle(order.article);
+    const entries = indices.get(marketplaceForSupply(order.sheetName))?.get(articleKey);
+    if (entries?.length) {
+      for (const field of ["machine", "productName"]) {
+        if (field !== "machine" && order[field] && !String(order[field]).trim().startsWith("#")) continue;
+        const values = new Set(entries.map(entry => entry[field]));
+        if (values.size === 1) {
+          const value = [...values][0];
+          if (field !== "machine" || value) order[field] = value;
+          if (field === "machine" && value) {
+            order.machineSource = "catalog";
+            order.machineIssue = ["бокс", "рулонная печать", "не найдено в базе"].includes(normal(value))
+              ? `В базе ${marketplaceForSupply(order.sheetName)} в поле «Станок» указано «${value}». Конкретный станок не указан.`
+              : null;
+          }
+        } else if (field === "machine") {
+          order.machine = "";
+          order.machineSource = null;
+          order.machineIssue = "В каталоге указаны разные станки";
         }
-      } else if (field === "machine") {
-        order.machine = "";
-        order.machineSource = null;
-        order.machineIssue = "В каталоге указаны разные станки";
       }
     }
-    // Only enrich articles confirmed in their own marketplace catalog. The photo
-    // workbook is shared; conflicting URLs or stores must not be guessed.
-    if (!order.photoUrl && Array.isArray(photos)) {
-      const candidates = (photoIndex.get(normalizeCatalogArticle(order.article)) || []).filter(row =>
-        !String(row[1] || "").trim() || String(row[1]).trim() === String(order.shop || "").trim());
-      const urls = new Set(candidates.map(row => safeWorkloadPhoto(row[3] || String(row[2] || "").split(";")[0])).filter(Boolean));
-      if (urls.size === 1) order.photoUrl = [...urls][0];
+    // The photo register is keyed by article. A product image does not belong to
+    // a store, and missing marketplace catalog rows must not suppress a photo.
+    if (!order.photoUrl) {
+      const sourcePhoto = (photoIndex.get(articleKey) || []).map(photoUrlFromSourceRow).find(Boolean) || "";
+      const catalogPhoto = entries?.map(entry => entry.photoUrl).find(Boolean) || "";
+      order.photoUrl = sourcePhoto || catalogPhoto;
     }
   }
 }
