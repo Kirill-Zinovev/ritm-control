@@ -5,6 +5,7 @@ import { AssemblyTransferService } from "../../agent/assemblyTransfer.js";
 import { CloudSheetsReader } from "./googleSheets.js";
 import { cloudConfig } from "./config.js";
 import { CloudError } from "./access.js";
+import { cloudFetch } from "./fetch.js";
 
 export function requireCutover(bindings, scope) {
   const config = cloudConfig(bindings), cutover = scope.meta("cloudCutover");
@@ -32,10 +33,10 @@ export async function createServices(bindings, scope, { fetcher = fetch, refresh
     if (url.protocol !== "https:" || url.hostname !== "sheets.googleapis.com" || url.username || url.password || !match || !config.sources.includes(match[1]))
       throw new CloudError("google_request_forbidden", "Запрос к этому источнику не разрешён.", 403);
     if ((init.method || "GET") !== "GET") await guard(match[1]);
-    return fetcher(url.href, init);
+    return cloudFetch(fetcher,url.href,init);
   };
   const writers = reader.configured ? Object.fromEntries(Object.entries(DEPARTMENTS).map(([department, target]) => [department, new ProductionSupplyWriter({ department, credentialWriter: writerCredentials, fetcher: guardedFetch, documentId: target.documentId, template: target.template })])) : null;
-  const queue = new AssemblySyncQueue(scope, { secret: bindings.RITM_ASSEMBLY_SYNC_SECRET || "", fetchImpl: fetcher, beforeDeliver: () => guard() });
+  const queue = new AssemblySyncQueue(scope, { secret: bindings.RITM_ASSEMBLY_SYNC_SECRET || "", fetchImpl: (...args) => cloudFetch(fetcher,...args), beforeDeliver: () => guard() });
   // No process-owned timers in Sites. Requests and the protected maintenance
   // endpoint drain the same durable outbox; the scheduler survives closed tabs.
   queue.schedule = () => {};

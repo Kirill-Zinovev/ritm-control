@@ -14,10 +14,17 @@ import { importMigration } from "../worker/cloud/migration.js";
 import { sourceId } from "../worker/cloud/config.js";
 import { digest } from "../worker/cloud/store.js";
 import { cloudSchemaStatements } from "./helpers/cloud-schema.mjs";
+import { cloudFetch } from "../worker/cloud/fetch.js";
 
 const schema = cloudSchemaStatements().join(";\n");
 function fixture(options = {}) { const db = new LocalD1(); db.db.exec(schema); return { db, store: new CloudStore(db, options) }; }
 const env = { ...bindings, RITM_OWNER_USER_IDS: "owner-site-id" };
+
+test("edge transport rejects unexpected redirects without using unsupported redirect:error",async()=>{
+  let calls=0;const fetcher=async function(input,init){assert.equal(this,undefined);assert.equal(init.redirect,'manual');calls++;return new Response(null,{status:302,headers:{location:'https://unapproved.test/'}});};
+  await assert.rejects(cloudFetch(fetcher,'https://sheets.googleapis.com/test',{redirect:'error'}),{code:'unexpected_redirect'});assert.equal(calls,1);
+  assert.equal((await cloudFetch(fetcher,'https://docs.google.com/test',{redirect:'manual'})).status,302);
+});
 
 test("cloud reader calls the platform fetch without rebinding its receiver", async () => {
   let calls = 0;

@@ -1,5 +1,6 @@
 import { CloudError } from "./access.js";
 import { sourceIds } from "./config.js";
+import { cloudFetch } from "./fetch.js";
 
 const tokenUrl = "https://oauth2.googleapis.com/token";
 const readScope = "https://www.googleapis.com/auth/spreadsheets.readonly";
@@ -16,7 +17,7 @@ export class CloudSheetsReader {
   constructor(bindings, { writer = false, fetcher = fetch, now = Date.now, beforeWrite = null } = {}) {
     this.bindings = bindings;
     this.writer = writer;
-    this.fetcher = (...args) => fetcher(...args);
+    this.fetcher = (...args) => cloudFetch(fetcher,...args);
     this.now = now;
     this.beforeWrite = beforeWrite;
     this.allowed = new Set(sourceIds(bindings));
