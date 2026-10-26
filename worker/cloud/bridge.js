@@ -1,7 +1,7 @@
 import { createHash, createHmac } from "node:crypto";
 import { CloudError, readBytes } from "./access.js";
 
-const reads = new Set(["/api/printing", "/api/assembly", "/api/roll-supplies/status", "/api/roll-supplies/operations", "/api/assembly-transfers/sources", "/api/assembly-transfers/links", "/api/assembly-transfers/source", "/api/assembly-transfers/operation", "/api/cloud/registry", "/api/cloud/bridge-lease"]);
+const reads = new Set(["/api/printing", "/api/assembly", "/api/roll-supplies/status", "/api/roll-supplies/operations", "/api/assembly-transfers/sources", "/api/assembly-transfers/links", "/api/assembly-transfers/source", "/api/assembly-transfers/operation", "/api/cloud/registry", "/api/cloud/bridge-lease", "/api/cloud/export"]);
 const writes = new Set(["/api/roll-supplies", "/api/roll-supplies/preview", "/api/assembly-transfers", "/api/assembly-transfers/preview", "/api/cloud/bridge-lease"]);
 export const isOperationalRoute = (method, pathname) => (method === "GET" ? reads : method === "POST" ? writes : new Set()).has(pathname);
 export function bridgeSignature(secret, { method, path, timestamp, nonce, body = "" }) {

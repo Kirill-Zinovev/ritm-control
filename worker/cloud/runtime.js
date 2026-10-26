@@ -10,6 +10,7 @@ import { importMigration } from "./migration.js";
 import { verifyBridge } from "./bridge.js";
 import { externalLease } from "./externalLease.js";
 import { recordCutover } from "./cutover.js";
+import { exportCloud } from "./export.js";
 
 const signIn = "/signin-with-chatgpt?return_to=%2F%3Fpage%3Dsupplies";
 const methods = (request, allowed) => { if (!allowed.includes(request.method)) throw new CloudError("method_not_allowed", "Метод запроса не поддерживается.", 405); };
@@ -100,6 +101,7 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
     const config = cloudConfig(bindings);
     if (!config.configured) throw new CloudError("cloud_not_configured", "Облачное подключение источников и хранилища ещё не настроено.");
     const store = new CloudStore(bindings.DB);
+    if (path === "/api/cloud/export") { methods(request,["GET"]);return json(await exportCloud(bindings,store)); }
     if (path === "/api/cloud/state") {
       methods(request, ["GET"]); const scope=await store.scope();
       return json({ok:true,migrationReady:scope.meta("migrationReady")===true,cutover:scope.meta("cloudCutover")||null,productionOperations:scope.meta("productionSupplyOperations")?.length||0,rollOperations:[...scope.operations.values()].filter(row=>row.kind==="roll").length,syncEvents:scope.events.size,pendingSync:scope.syncEvents().filter(row=>!row.delivered_at).length});
