@@ -30,7 +30,7 @@ export async function maintenance(bindings, store, { fetcher = fetch, refresh = 
   if (refresh) {
     result.refreshed = [];
     for (const kind of ["printing", "assembly"]) {
-      try { const value = await refreshSnapshot(kind, bindings, store, { fetcher }); result.refreshed.push({ kind, ok: value.refreshFailed !== true, snapshotAt: value.snapshotAt }); }
+      try { const value = await refreshSnapshot(kind, bindings, store, { fetcher }); result.refreshed.push({ kind, ok: value.refreshFailed !== true, snapshotAt: value.snapshotAt, failure: value.refreshFailure }); }
       catch (error) { result.refreshed.push({ kind, ok: false, error: error.code || "refresh_failed" }); }
     }
     result.ok = result.refreshed.every(row => row.ok);
@@ -55,7 +55,8 @@ export async function refreshSnapshot(kind, bindings, store, { scope = null, fet
     return { ...value, stale: false, snapshotAt: new Date(store.now()).toISOString(), refreshFailed: false };
   } catch (error) {
     if (!previous) throw error;
-    return { ...previous.value, stale: true, snapshotAt: new Date(previous.at).toISOString(), refreshFailed: true, staleReason: "Не удалось обновить источник. Показан предыдущий проверенный снимок." };
+    const failure = { code: error.code || error.name || "refresh_failed", message: String(error.message || "Refresh failed").slice(0,160) };
+    return { ...previous.value, stale: true, snapshotAt: new Date(previous.at).toISOString(), refreshFailed: true, refreshFailure: failure, staleReason: "Не удалось обновить источник. Показан предыдущий проверенный снимок." };
   } finally { await store.release(lease); }
 }
 
