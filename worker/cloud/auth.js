@@ -86,7 +86,7 @@ function parseCookie(request) {
 }
 
 function sessionCookie(token, maxAge = SESSION_MS / 1000) {
-  return `${COOKIE}=${token}; Path=/; Max-Age=${Math.max(0, Math.floor(maxAge))}; HttpOnly; Secure; SameSite=Strict`;
+  return `${COOKIE}=${token}; Path=/; Max-Age=${Math.max(0, Math.floor(maxAge))}; HttpOnly; Secure; SameSite=Lax`;
 }
 
 export function clearSessionCookie() {

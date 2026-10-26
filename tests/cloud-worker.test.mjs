@@ -71,7 +71,7 @@ test("RITM manager PIN login grants business sections except AI and owner admini
     const setCookie = login.headers.get("set-cookie") || "";
     assert.match(setCookie, /HttpOnly/);
     assert.match(setCookie, /Secure/);
-    assert.match(setCookie, /SameSite=Strict/);
+    assert.match(setCookie, /SameSite=Lax/);
     const cookie = setCookie.split(";")[0];
     assert.match(cookie, /^__Host-ritm_session=/);
 
