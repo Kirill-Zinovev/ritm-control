@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { RitmBackdrop } from "./RitmBackdrop";
+import { clearManagerSession, saveManagerSession } from "./managerSession";
 import { Button, Field, Modal, Notice } from "./ui";
 
 type Runtime = {
@@ -71,7 +72,7 @@ export function CloudAuthGate({ children }: { children: ReactNode }) {
   }, [runtime, refresh]);
 
   const signOut = useCallback(async () => {
-    try { await postAuth("/api/auth/logout"); } finally { location.assign("/?page=supplies"); }
+    try { await postAuth("/api/auth/logout"); } finally { clearManagerSession(); location.assign("/?page=supplies"); }
   }, []);
   const openPinChange = useCallback(() => setPinChangeOpen(true), []);
 
@@ -81,7 +82,7 @@ export function CloudAuthGate({ children }: { children: ReactNode }) {
     <LoginCard onSuccess={async () => {
       const next = await readRuntime();
       if (next === "local" || !next.authorized || !next.role)
-        throw new Error("PIN принят, но вход не подтвердился. Разрешите cookie для RITM и попробуйте ещё раз.");
+        throw new Error("PIN принят, но браузер не сохранил сессию RITM. Разрешите хранение данных сайта и попробуйте снова.");
       setRuntime(next);
       setError("");
     }} />
@@ -113,7 +114,11 @@ function LoginCard({ onSuccess }: { onSuccess: () => Promise<void> }) {
   const [error, setError] = useState("");
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setBusy(true); setError("");
-    try { await postAuth("/api/auth/login", { username, pin }); await onSuccess(); }
+    try {
+      const result = await postAuth("/api/auth/login", { username, pin });
+      if (typeof result.sessionToken === "string") saveManagerSession(result.sessionToken);
+      await onSuccess();
+    }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Не удалось войти."); }
     finally { setBusy(false); }
   };

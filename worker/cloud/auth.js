@@ -85,6 +85,11 @@ function parseCookie(request) {
   return null;
 }
 
+function parseSessionToken(request) {
+  const bearer = request.headers.get("authorization")?.match(/^Bearer ([A-Za-z0-9_-]{40,50})$/i)?.[1];
+  return bearer || parseCookie(request);
+}
+
 function sessionCookie(token, maxAge = SESSION_MS / 1000) {
   return `${COOKIE}=${token}; Path=/; Max-Age=${Math.max(0, Math.floor(maxAge))}; HttpOnly; Secure; SameSite=Lax`;
 }
@@ -163,7 +168,7 @@ function setCookie(response, value) {
 }
 
 export async function getManagerSession(request, db, now = Date.now()) {
-  const token = parseCookie(request);
+  const token = parseSessionToken(request);
   if (!token) return null;
   await ensureAuthSchema(db);
   const tokenHash = await sha256(token);
@@ -183,7 +188,7 @@ export async function resolvePrincipal(request, bindings, now = Date.now()) {
   const id = request.headers.get("oai-authenticated-user-id");
   const owners = String(bindings.RITM_OWNER_USER_IDS || "").split(",").map((value) => value.trim()).filter(Boolean);
   if (id && owners.includes(id)) return { role: "owner", id, displayName: "Кирилл", username: null, mustChangePin: false };
-  if (request.headers.has("cookie")) {
+  if (request.headers.has("cookie") || request.headers.has("authorization")) {
     const manager = await getManagerSession(request, bindings.DB, now);
     if (manager) return manager;
   }
@@ -224,13 +229,13 @@ export async function loginWithPin(request, db, now = Date.now()) {
     db.prepare("UPDATE ritm_manager_users SET last_login_at=?,updated_at=? WHERE id=?").bind(now, now, user.id),
     db.prepare("DELETE FROM ritm_manager_login_limits WHERE username=?").bind(username),
   ]);
-  const response = Response.json({ ok: true, role: "manager", username: user.username, displayName: user.display_name, mustChangePin: user.must_change_pin === 1 }, { headers: { "cache-control": "no-store" } });
+  const response = Response.json({ ok: true, role: "manager", username: user.username, displayName: user.display_name, mustChangePin: user.must_change_pin === 1, sessionToken: token }, { headers: { "cache-control": "no-store" } });
   return setCookie(response, sessionCookie(token));
 }
 
 export async function logoutManager(request, db) {
   assertSameOrigin(request);
-  const token = parseCookie(request);
+  const token = parseSessionToken(request);
   if (token) {
     await ensureAuthSchema(db);
     await db.prepare("DELETE FROM ritm_manager_sessions WHERE token_hash=?").bind(await sha256(token)).run();

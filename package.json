@@ -10,7 +10,7 @@
     "test:sites": "node --import ./tests/cloud-env.mjs --test tests/sites-worker.test.mjs tests/printing.test.mjs tests/assembly.test.mjs",
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
-    "test:cloud": "npm run build && node --import ./tests/cloud-env.mjs --test tests/cloud-migration.test.mjs tests/cloud-worker.test.mjs tests/cloud-bridge.test.mjs tests/cloud-cutover.test.mjs",
+    "test:cloud": "npm run build && node --import ./tests/cloud-env.mjs --test tests/cloud-migration.test.mjs tests/cloud-worker.test.mjs tests/cloud-bridge.test.mjs tests/cloud-cutover.test.mjs tests/manager-session.test.mjs",
     "test:migration-domain": "node --import ./tests/cloud-env.mjs --test tests/intelligence-assembly-sync.test.mjs tests/intelligence-assembly-transfer.test.mjs tests/intelligence-production-supplies.test.mjs tests/intelligence-roll-supply.test.mjs",
     "migration:export": "node scripts/export-sites-migration.mjs",
     "test:domain": "node scripts/test-domain.mjs",

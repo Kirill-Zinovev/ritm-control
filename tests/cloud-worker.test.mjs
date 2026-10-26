@@ -74,11 +74,16 @@ test("RITM manager PIN login grants business sections except AI and owner admini
     assert.match(setCookie, /SameSite=Lax/);
     const cookie = setCookie.split(";")[0];
     assert.match(cookie, /^__Host-ritm_session=/);
+    const loginBody = await login.json();
+    assert.match(loginBody.sessionToken, /^[A-Za-z0-9_-]{40,50}$/);
+    const sessionHeaders = { authorization: `Bearer ${loginBody.sessionToken}` };
 
     const runtimeBeforePinChange = await mf.dispatchFetch("https://ritm.test/api/runtime", { headers: { cookie } });
     const managerBeforePinChange = await runtimeBeforePinChange.json();
     assert.equal(managerBeforePinChange.role, "manager");
     assert.equal(managerBeforePinChange.mustChangePin, true);
+    const runtimeByBearer = await mf.dispatchFetch("https://ritm.test/api/runtime", { headers: sessionHeaders });
+    assert.equal((await runtimeByBearer.json()).role, "manager");
     const blockedBeforePinChange = await mf.dispatchFetch("https://ritm.test/api/roll-supplies/status", { headers: { cookie } });
     assert.equal(blockedBeforePinChange.status, 403);
 
@@ -91,16 +96,19 @@ test("RITM manager PIN login grants business sections except AI and owner admini
 
     await db.prepare("INSERT INTO cloud_state(key,value,updated_at) VALUES('migrationReady','true',?)").bind(Date.now()).run();
     assert.equal((await mf.dispatchFetch("https://ritm.test/api/roll-supplies/status", { headers: { cookie } })).status, 200);
-    assert.equal((await mf.dispatchFetch("https://ritm.test/api/cloud/registry", { headers: { cookie } })).status, 200);
-    assert.equal((await mf.dispatchFetch("https://ritm.test/api/assembly-transfers/links", { headers: { cookie } })).status, 200);
+    assert.equal((await mf.dispatchFetch("https://ritm.test/api/roll-supplies/status", { headers: sessionHeaders })).status, 200);
+    assert.equal((await mf.dispatchFetch("https://ritm.test/api/cloud/registry", { headers: sessionHeaders })).status, 200);
+    assert.equal((await mf.dispatchFetch("https://ritm.test/api/assembly-transfers/links", { headers: sessionHeaders })).status, 200);
     const assemblyAccess = await mf.dispatchFetch("https://ritm.test/api/assembly", { headers: { cookie } });
     assert.notEqual(assemblyAccess.status, 403);
     assert.notEqual((await assemblyAccess.json()).error, "manager_route_forbidden");
     for (const path of ["/api/cloud/state", "/api/intelligence/status", "/api/auth/users"]) {
       const denied = await mf.dispatchFetch("https://ritm.test" + path, { headers: { cookie } });
       assert.equal(denied.status, 403, path);
+      const bearerDenied = await mf.dispatchFetch("https://ritm.test" + path, { headers: sessionHeaders });
+      assert.equal(bearerDenied.status, 403, path);
     }
-    const supplyPreview = await mf.dispatchFetch("https://ritm.test/api/roll-supplies/preview", { method: "POST", headers: { cookie, origin: "https://ritm.test", "content-type": "application/json" }, body: JSON.stringify({}) });
+    const supplyPreview = await mf.dispatchFetch("https://ritm.test/api/roll-supplies/preview", { method: "POST", headers: { ...sessionHeaders, origin: "https://ritm.test", "content-type": "application/json" }, body: JSON.stringify({}) });
     const previewResult = await supplyPreview.json();
     assert.equal(previewResult.ok, false);
     assert.notEqual(previewResult.error, "manager_route_forbidden");
@@ -111,5 +119,7 @@ test("RITM manager PIN login grants business sections except AI and owner admini
     const afterDisable = await mf.dispatchFetch("https://ritm.test/api/runtime", { headers: { cookie } });
     const disabledRuntime = await afterDisable.json();
     assert.equal(disabledRuntime.authorized, false);
+    const bearerAfterDisable = await mf.dispatchFetch("https://ritm.test/api/runtime", { headers: sessionHeaders });
+    assert.equal((await bearerAfterDisable.json()).authorized, false);
   } finally { await mf.dispose(); }
 });
