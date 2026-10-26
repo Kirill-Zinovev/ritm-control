@@ -56,9 +56,12 @@ export type LivePrinting = {
   ok: true;
   schemaVersion: 2;
   updatedAt: string;
+  snapshotAt?: string;
   stale?: boolean;
   sourceStatus?: string;
   refreshFailed?: boolean;
+  refreshInProgress?: boolean;
+  refreshRetryAfterMs?: number;
   staleReason?: string | null;
   sourceUpdatedAt?: string | null;
   quality?: { status: string; invalidRecords: number };
@@ -127,20 +130,39 @@ export function printingDataset(
     rolls,
   };
 }
-export function useLivePrinting(enabled = true, refreshSource = false) {
+export function useLivePrinting(enabled = true) {
   const [value, setValue] = useState<LivePrinting | null>(null),
     [loading, setLoading] = useState(false),
     [error, setError] = useState("");
   const active = useRef<AbortController | null>(null);
-  const reload = useCallback(async () => {
-    active.current?.abort();
+  const retryTimer = useRef<number | null>(null);
+  const pending = useRef(false);
+  const pendingForce = useRef(false);
+  const reloadRef = useRef<(force?: boolean) => Promise<void>>(async () => {});
+  const scheduleRetry = useCallback((delayMs: number) => {
+    if (retryTimer.current !== null) window.clearTimeout(retryTimer.current);
+    retryTimer.current = window.setTimeout(() => {
+      retryTimer.current = null;
+      if (document.visibilityState === "visible") void reloadRef.current(false);
+    }, delayMs + Math.floor(Math.random() * 5000));
+  }, []);
+  const reload = useCallback(async (force = false) => {
+    if (active.current) {
+      pending.current = true;
+      pendingForce.current ||= force;
+      return;
+    }
+    if (retryTimer.current !== null) {
+      window.clearTimeout(retryTimer.current);
+      retryTimer.current = null;
+    }
     const controller = new AbortController();
     active.current = controller;
     setLoading(true);
     setError("");
     try {
       const r = await fetch(
-        refreshSource ? "/api/printing?refresh=1" : "/api/printing",
+        force ? "/api/printing?refresh=1" : "/api/printing",
         {
           cache: "no-store",
           signal: AbortSignal.any([
@@ -211,31 +233,56 @@ export function useLivePrinting(enabled = true, refreshSource = false) {
         )
       )
         throw new Error("source");
-      if (!controller.signal.aborted) setValue({ ...j, cutEvents });
+      if (!controller.signal.aborted) {
+        setValue({ ...j, cutEvents });
+        if (j.stale === true) {
+          setError(j.staleReason || "Данные устарели. Повторяю обновление.");
+          scheduleRetry(
+            Number.isFinite(j.refreshRetryAfterMs)
+              ? Math.max(5000, Math.min(120000, j.refreshRetryAfterMs))
+              : j.refreshInProgress
+                ? 15000
+                : 60000,
+          );
+        } else setError("");
+      }
     } catch (cause) {
-      if (!controller.signal.aborted)
-        setError(
-          cause instanceof Error
-            ? cause.message
-            : "Таблица временно недоступна. Нажмите «Обновить».",
-        );
+      if (!controller.signal.aborted) {
+        const message = cause instanceof Error
+          ? cause.message
+          : "Таблица временно недоступна. Повторяю проверку.";
+        setError(message);
+        if (!/войдите|доступ не подтверждён/i.test(message)) scheduleRetry(60000);
+      }
     } finally {
       if (active.current === controller) {
         active.current = null;
         setLoading(false);
+        if (pending.current) {
+          const nextForce = pendingForce.current;
+          pending.current = false;
+          pendingForce.current = false;
+          window.setTimeout(() => void reloadRef.current(nextForce), 0);
+        }
       }
     }
-  }, [refreshSource]);
+  }, [scheduleRetry]);
+  reloadRef.current = reload;
   useEffect(() => {
     if (!enabled) return;
-    void reload();
-    const timer = setInterval(() => {
-      if (document.visibilityState === "visible") void reload();
-    }, 300000);
+    const updateIfVisible = () => {
+      if (document.visibilityState === "visible") void reload(false);
+    };
+    void reload(false);
+    const timer = window.setInterval(updateIfVisible, 300000);
+    document.addEventListener("visibilitychange", updateIfVisible);
     return () => {
-      clearInterval(timer);
-      active.current?.abort();
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", updateIfVisible);
+      if (retryTimer.current !== null) window.clearTimeout(retryTimer.current);
+      retryTimer.current = null;
     };
   }, [reload, enabled]);
+  useEffect(() => () => active.current?.abort(), []);
   return { value, loading, error, reload };
 }

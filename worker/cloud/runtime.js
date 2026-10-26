@@ -40,7 +40,9 @@ export async function maintenance(bindings, store, { fetcher = fetch, refresh = 
 }
 export async function refreshSnapshot(kind, bindings, store, { scope = null, fetcher = fetch } = {}) {
   const previous = await store.snapshot(kind);
-  const lease = await store.acquire("refresh:" + kind);
+  // Source reads are short. A canceled browser request must not block refreshes
+  // for the full production-write lease window.
+  const lease = await store.acquire("refresh:" + kind, 60000);
   try {
     const current = scope || await store.scope();
     if (!current.meta("migrationReady")) throw new CloudError("migration_not_imported", "Реестр поставок ещё не перенесён и не сверен. Неполная сводка не показана.");
@@ -54,25 +56,42 @@ export async function refreshSnapshot(kind, bindings, store, { scope = null, fet
     validateApi(value, kind);
     if (value.stale === true) throw new CloudError("source_incomplete", "Источник не подтвердил свежую полную сводку.");
     await store.saveSnapshot(kind, value, lease);
-    return { ...value, stale: false, snapshotAt: new Date(store.now()).toISOString(), refreshFailed: false };
+    return { ...value, stale: false, snapshotAt: new Date(store.now()).toISOString(), refreshFailed: false, refreshInProgress: false };
   } catch (error) {
     if (!previous) throw error;
     const failure = { code: error.code || error.name || "refresh_failed", message: String(error.message || "Refresh failed").slice(0,160) };
-    return { ...previous.value, stale: true, snapshotAt: new Date(previous.at).toISOString(), refreshFailed: true, refreshFailure: failure, staleReason: "Не удалось обновить источник. Показан предыдущий проверенный снимок." };
+    return { ...previous.value, stale: true, snapshotAt: new Date(previous.at).toISOString(), refreshFailed: true, refreshInProgress: false, refreshRetryAfterMs: 60000, refreshFailure: failure, staleReason: "Не удалось обновить источник. Показан предыдущий проверенный снимок." };
   } finally { await store.release(lease); }
 }
 
 async function readSnapshot(kind, url, bindings, store, options) {
   const snapshot = await store.snapshot(kind);
   let payload;
-  if (!snapshot || url.searchParams.get("refresh") === "1" || store.now() - snapshot.at > cloudConfig(bindings).snapshotMaxAgeMs) {
+  if (!snapshot || url.searchParams.get("refresh") === "1" || store.now() - snapshot.at >= cloudConfig(bindings).snapshotMaxAgeMs) {
     try { payload = await refreshSnapshot(kind, bindings, store, options); }
     catch (error) {
       if (!snapshot) throw error;
-      payload = { ...snapshot.value, stale: true, snapshotAt: new Date(snapshot.at).toISOString(), refreshFailed: true, staleReason: "Обновление выполняется или источник недоступен. Показан предыдущий снимок." };
+      const refreshInProgress = error?.code === "cloud_operation_busy";
+      payload = {
+        ...snapshot.value,
+        stale: true,
+        snapshotAt: new Date(snapshot.at).toISOString(),
+        refreshFailed: !refreshInProgress,
+        refreshInProgress,
+        refreshRetryAfterMs: refreshInProgress ? 15000 : 60000,
+        staleReason: refreshInProgress
+          ? "Обновление уже выполняется. Пока показан предыдущий проверенный снимок."
+          : "Обновить источник пока не удалось. Показан предыдущий проверенный снимок.",
+      };
     }
-  } else payload = { ...snapshot.value, stale: false, snapshotAt: new Date(snapshot.at).toISOString(), refreshFailed: false };
-  return kind === "assembly" ? selectAssemblyPeriod(payload, url.searchParams.get("date") || todayMoscow(), url.searchParams.get("period") || "day") : payload;
+  } else payload = { ...snapshot.value, stale: false, snapshotAt: new Date(snapshot.at).toISOString(), refreshFailed: false, refreshInProgress: false };
+  if (kind !== "assembly") return payload;
+  const selected = selectAssemblyPeriod(
+    payload,
+    url.searchParams.get("date") || todayMoscow(),
+    url.searchParams.get("period") || "day",
+  );
+  return selected.stale === true ? { ...selected, staleSnapshot: true } : selected;
 }
 
 export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {}) {

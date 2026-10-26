@@ -162,10 +162,7 @@ function AppShell() {
   const [real, setReal] = useState<Dataset>(() =>
     readStorage("ritm-real-v1", emptyDataset()),
   );
-  const live = useLivePrinting(
-    page !== "intelligence",
-    page === "printing" || page === "supplies" || page === "production",
-  );
+  const live = useLivePrinting(page !== "intelligence");
   const assemblyLive = useLiveAssembly(
     date,
     period,
@@ -273,15 +270,15 @@ function AppShell() {
   };
   const refresh = () => {
     if (page === "assembly") {
-      void assemblyLive.reload();
+      void assemblyLive.reload(true);
       return;
     }
     if (page === "production") {
-      void live.reload();
+      void live.reload(true);
       return;
     }
     if (mode === "imported") {
-      void live.reload();
+      void live.reload(true);
       return;
     }
     if (busy) return;
@@ -843,8 +840,8 @@ function AppShell() {
         printingArea={actualPrintingArea}
         assemblyPeople={assemblyLive.value?.rows.length ?? null}
         onRefresh={() => {
-          void live.reload();
-          void assemblyLive.reload();
+          void live.reload(true);
+          void assemblyLive.reload(true);
         }}
       />
     );
@@ -1013,7 +1010,7 @@ function AppShell() {
                   ) : live.error ? (
                     "Не удалось обновить производственные данные."
                   ) : live.value ? (
-                    `Рабочие поставки · ${live.value.sheets.length} листов · обновлено ${new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" }).format(new Date(live.value.updatedAt))}`
+                    `Рабочие поставки · ${live.value.sheets.length} листов · обновлено ${new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" }).format(new Date(live.value.snapshotAt || live.value.updatedAt))} · автообновление 5 мин при открытой вкладке`
                   ) : (
                     "Подключаю рабочие данные производства…"
                   )
@@ -1028,7 +1025,7 @@ function AppShell() {
                           ? "Обновление не удалось · показаны последние полученные данные"
                           : "Таблица недоступна"
                         : live.value
-                          ? `Печать подключена · ${live.value.sheets.length} листов · обновлено ${new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" }).format(new Date(live.value.updatedAt))} · автообновление 5 мин`
+                          ? `Печать подключена · ${live.value.sheets.length} листов · обновлено ${new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" }).format(new Date(live.value.snapshotAt || live.value.updatedAt))} · автообновление 5 мин при открытой вкладке`
                           : "Подключаю печать…"}
                   </>
                 )}
@@ -1182,7 +1179,7 @@ function AppShell() {
             value={assemblyLive.value}
             loading={assemblyLive.loading}
             error={assemblyLive.error}
-            onRefresh={() => void assemblyLive.reload()}
+            onRefresh={() => void assemblyLive.reload(true)}
           />
         )}
         {page === "printing" && printerProfileId && activePrinterProfile ? (
@@ -1200,8 +1197,8 @@ function AppShell() {
           <>
             {mode === "imported" && live.value?.stale && (
               <Notice tone="warning">
-                Данные печати устарели. Показан проверенный снимок от{" "}
-                {live.value.updatedAt}.
+                {live.value.staleReason || "Данные печати устарели. Показан проверенный снимок."}{" "}
+                {live.value.snapshotAt || live.value.updatedAt}
               </Notice>
             )}
             {mode === "imported" &&
@@ -1645,7 +1642,7 @@ function AppShell() {
                   live={live.value}
                   loading={live.loading}
                   error={live.error}
-                  onRefresh={live.reload}
+                  onRefresh={() => live.reload(true)}
                 />
               </Suspense>
             ) : (
@@ -2139,7 +2136,7 @@ function AppShell() {
                         {sourceLink("assembly")}
                         <Button
                           disabled={assemblyLive.loading}
-                          onClick={() => void assemblyLive.reload()}
+                          onClick={() => void assemblyLive.reload(true)}
                         >
                           Обновить FBO
                         </Button>
@@ -2149,7 +2146,7 @@ function AppShell() {
                         {sourceLink("printing")}
                         <Button
                           disabled={live.loading}
-                          onClick={() => void live.reload()}
+                          onClick={() => void live.reload(true)}
                         >
                           Обновить таблицу
                         </Button>

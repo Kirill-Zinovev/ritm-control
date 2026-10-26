@@ -97,17 +97,20 @@ export class CloudStore {
     this.db = db.withSession ? db.withSession("first-primary") : db;
     this.now = now; this.leaseMs = leaseMs;
   }
-  async acquire(name = "production") {
+  async acquire(name = "production", requestedLeaseMs = this.leaseMs) {
     const owner = crypto.randomUUID(), at = this.now();
-    const row = await this.db.prepare("INSERT INTO cloud_leases(name,owner,expires_at,fence) VALUES(?,?,?,1) ON CONFLICT(name) DO UPDATE SET owner=excluded.owner,expires_at=excluded.expires_at,fence=cloud_leases.fence+1 WHERE cloud_leases.expires_at<=? RETURNING fence").bind(name, owner, at + this.leaseMs, at).first();
+    const leaseMs = Number.isFinite(requestedLeaseMs)
+      ? Math.max(1000, Math.min(this.leaseMs, requestedLeaseMs))
+      : this.leaseMs;
+    const row = await this.db.prepare("INSERT INTO cloud_leases(name,owner,expires_at,fence) VALUES(?,?,?,1) ON CONFLICT(name) DO UPDATE SET owner=excluded.owner,expires_at=excluded.expires_at,fence=cloud_leases.fence+1 WHERE cloud_leases.expires_at<=? RETURNING fence").bind(name, owner, at + leaseMs, at).first();
     if (!row) throw new CloudError("cloud_operation_busy", "Другая операция ещё выполняется. Обновите её состояние.", 409);
-    return { name, owner, fence: row.fence };
+    return { name, owner, fence: row.fence, ...(leaseMs === this.leaseMs ? {} : { leaseMs }) };
   }
   async release(lease) {
     await this.db.prepare("UPDATE cloud_leases SET expires_at=0 WHERE name=? AND owner=? AND fence=?").bind(lease.name, lease.owner, lease.fence).run();
   }
   async renew(lease) {
-    const result = await this.db.prepare("UPDATE cloud_leases SET expires_at=? WHERE name=? AND owner=? AND fence=? AND expires_at>?").bind(this.now() + this.leaseMs, lease.name, lease.owner, lease.fence, this.now()).run();
+    const result = await this.db.prepare("UPDATE cloud_leases SET expires_at=? WHERE name=? AND owner=? AND fence=? AND expires_at>?").bind(this.now() + (lease.leaseMs || this.leaseMs), lease.name, lease.owner, lease.fence, this.now()).run();
     if (result.meta?.changes !== 1) throw new CloudError("cloud_lease_lost", "Операция потеряла блокировку. Нужна проверка результата.", 409);
   }
   async scope(lease = null) {

@@ -79,8 +79,13 @@ export type LiveAssembly = {
   date: string;
   period: "day" | "week" | "month";
   updatedAt: string;
+  snapshotAt?: string;
   stale?: boolean;
   staleSnapshot?: boolean;
+  refreshFailed?: boolean;
+  refreshInProgress?: boolean;
+  refreshRetryAfterMs?: number;
+  staleReason?: string | null;
   sourceUpdatedAt?: string | null;
   quality?: { status: string; invalidRecords: number };
   sources?: {
@@ -294,9 +299,31 @@ export function useLiveAssembly(
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const active = useRef<AbortController | null>(null);
+  const retryTimer = useRef<number | null>(null);
+  const pending = useRef(false);
+  const pendingForce = useRef(false);
+  const requestKey = useRef(`${date}|${period}`);
+  requestKey.current = `${date}|${period}`;
+  const reloadRef = useRef<(force?: boolean) => Promise<void>>(async () => {});
+  const scheduleRetry = useCallback((delayMs: number) => {
+    if (retryTimer.current !== null) window.clearTimeout(retryTimer.current);
+    retryTimer.current = window.setTimeout(() => {
+      retryTimer.current = null;
+      if (document.visibilityState === "visible") void reloadRef.current(false);
+    }, delayMs + Math.floor(Math.random() * 5000));
+  }, []);
 
-  const reload = useCallback(async (refreshSources = true) => {
-    active.current?.abort();
+  const reload = useCallback(async (force = false) => {
+    if (active.current) {
+      pending.current = true;
+      pendingForce.current ||= force;
+      return;
+    }
+    if (retryTimer.current !== null) {
+      window.clearTimeout(retryTimer.current);
+      retryTimer.current = null;
+    }
+    const key = `${date}|${period}`;
     const controller = new AbortController();
     active.current = controller;
     setLoading(true);
@@ -306,7 +333,7 @@ export function useLiveAssembly(
         encodeURIComponent(date) +
         "&period=" +
         encodeURIComponent(period) +
-        (refreshSources ? "&refresh=1" : "");
+        (force ? "&refresh=1" : "");
       const response = await fetch("/api/assembly" + query, {
         cache: "no-store",
         signal: AbortSignal.any([
@@ -339,7 +366,7 @@ export function useLiveAssembly(
         !Number.isFinite(Date.parse(data.updatedAt))
       )
         throw new Error("source");
-      if (!controller.signal.aborted) {
+      if (!controller.signal.aborted && requestKey.current === key) {
         const unavailableMessages = [
           data.sources?.fbo?.status !== "available"
             ? data.sources.fbo.message || "FBO недоступен."
@@ -348,16 +375,20 @@ export function useLiveAssembly(
             ? data.sources.assembly.message || "WorkLog недоступен."
             : "",
         ].filter(Boolean);
-        setError(unavailableMessages.join(" "));
+        const stale = data.stale === true || !hasBothSources(data);
+        const warning = data.staleReason || unavailableMessages.join(" ");
+        setError(stale ? warning || "Данные сборщиков устарели. Повторяю обновление." : "");
         if (hasBothSources(data)) {
           setValue(data);
-          try {
-            localStorage.setItem(
-              snapshotKey(date, period),
-              JSON.stringify(data),
-            );
-          } catch {
-            // A full browser cache must not block fresh source data.
+          if (!stale) {
+            try {
+              localStorage.setItem(
+                snapshotKey(date, period),
+                JSON.stringify(data),
+              );
+            } catch {
+              // A full browser cache must not block fresh source data.
+            }
           }
         } else {
           const cached = readSnapshot(date, period);
@@ -371,14 +402,23 @@ export function useLiveAssembly(
             return lastGood ? keepLastGoodSnapshot(data, lastGood) : data;
           });
         }
+        if (stale) {
+          scheduleRetry(
+            Number.isFinite(data.refreshRetryAfterMs)
+              ? Math.max(5000, Math.min(120000, data.refreshRetryAfterMs))
+              : data.refreshInProgress
+                ? 15000
+                : 60000,
+          );
+        }
       }
     } catch (cause) {
-      if (!controller.signal.aborted) {
-        setError(
+      if (!controller.signal.aborted && requestKey.current === key) {
+        const message =
           cause instanceof Error && !["source", "TimeoutError", "AbortError", "TypeError"].includes(cause.message) && cause.name === "Error"
             ? cause.message
-            : "Не удалось обновить источники. Показаны последние полученные данные.",
-        );
+            : "Не удалось обновить источники. Показаны последние полученные данные.";
+        setError(message);
         const cached = readSnapshot(date, period);
         setValue((previous) => {
           const lastGood =
@@ -387,26 +427,40 @@ export function useLiveAssembly(
               : cached;
           return lastGood ? { ...lastGood, stale: true } : null;
         });
+        if (!/войдите|доступ не подтверждён/i.test(message)) scheduleRetry(60000);
       }
     } finally {
       if (active.current === controller) {
         active.current = null;
         setLoading(false);
+        if (pending.current) {
+          const nextForce = pendingForce.current;
+          pending.current = false;
+          pendingForce.current = false;
+          window.setTimeout(() => void reloadRef.current(nextForce), 0);
+        }
       }
     }
-  }, [date, period]);
+  }, [date, period, scheduleRetry]);
+  reloadRef.current = reload;
 
   useEffect(() => {
     if (!enabled) return;
     void reload(false);
-    const timer = setInterval(() => {
-      if (document.visibilityState === "visible") void reload();
-    }, 300000);
+    const updateIfVisible = () => {
+      if (document.visibilityState === "visible") void reload(false);
+    };
+    const timer = window.setInterval(updateIfVisible, 300000);
+    document.addEventListener("visibilitychange", updateIfVisible);
     return () => {
-      clearInterval(timer);
-      active.current?.abort();
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", updateIfVisible);
+      if (retryTimer.current !== null) window.clearTimeout(retryTimer.current);
+      retryTimer.current = null;
     };
   }, [reload, enabled]);
+
+  useEffect(() => () => active.current?.abort(), []);
 
   return { value, loading, error, reload };
 }
