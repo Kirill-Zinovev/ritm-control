@@ -111,6 +111,7 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
     if (path === "/api/cloud/registry") {
       methods(request, ["GET"]);
       const scope = await store.scope();
+      if (scope.meta("migrationReady") !== true) throw new CloudError("migration_not_imported", "Реестр ещё не перенесён. Локальное состояние сохранено.", 503);
       const transfer = new AssemblyTransferService(scope, { backfill: false });
       return json({ ok: true, registeredSheets: scope.meta("rollPrintingAdditionalSheets") || [], productionSupplies: scope.meta("productionSupplies") || [], assemblyBoxLinks: transfer.links() });
     }

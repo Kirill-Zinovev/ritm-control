@@ -36,7 +36,7 @@ test("real Workers runtime handles cloud owner access and D1 without any local f
     const path = "/api/cloud/registry", timestamp = String(Date.now()), nonce = crypto.randomUUID();
     const bridgeHeaders = { "x-ritm-bridge-id": "local-test", "x-ritm-bridge-at": timestamp, "x-ritm-bridge-nonce": nonce, "x-ritm-bridge-signature": bridgeSignature(bridgeSecret, { method: "GET", path, timestamp, nonce }) };
     const registry = await mf.dispatchFetch("https://ritm.test" + path, { headers: bridgeHeaders });
-    assert.equal(registry.status, 200); assert.deepEqual((await registry.json()).registeredSheets, []);
+    assert.equal(registry.status, 503); assert.equal((await registry.json()).error, "migration_not_imported");
     const replay = await mf.dispatchFetch("https://ritm.test" + path, { headers: bridgeHeaders });
     assert.equal(replay.status, 409);
     assert.equal(outbound, 0);
