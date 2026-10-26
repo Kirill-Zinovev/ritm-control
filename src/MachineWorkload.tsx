@@ -112,7 +112,7 @@ function Photo({ src }: { src: string }) {
   ) : (
     <span
       className="mw-photo mw-photo-empty"
-      title="Фото не передано источником"
+      title={src ? "Не удалось загрузить фото из источника" : "Фото не найдено по артикулу в базе"}
     >
       <Package size={21} aria-hidden="true" />
     </span>

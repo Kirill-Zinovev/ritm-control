@@ -22,7 +22,8 @@ test('photo rows verified in the production catalog resolve by SKU even when the
   ['KS0002.A7854','2','','https://basket-44.wbbasket.ru/vol12530/part1253052/1253052089/images/big/1.webp'],
   ['RT0001.A0057','2','','https://basket-45.wbbasket.ru/vol12727/part1272792/1272792742/images/big/1.webp'],
  ];
- const orders=rows.map(([article],index)=>({sheetName:'OZON Москва',article,shop:index===2?'1':'1'}));
+ const orders=rows.map(([article])=>({sheetName:'OZON Москва',article,shop:'1'}));
+ orders[0].photoUrl='https://old.example/stale.webp';
  assignWorkloadDetails(orders,null,rows);
  assert.deepEqual(orders.map(order=>order.photoUrl),rows.map(row=>row[3]));
 });

@@ -786,11 +786,10 @@ export function assignWorkloadDetails(orders, catalog, photos = null) {
     }
     // The photo register is keyed by article. A product image does not belong to
     // a store, and missing marketplace catalog rows must not suppress a photo.
-    if (!order.photoUrl) {
-      const sourcePhoto = (photoIndex.get(articleKey) || []).map(photoUrlFromSourceRow).find(Boolean) || "";
-      const catalogPhoto = entries?.map(entry => entry.photoUrl).find(Boolean) || "";
-      order.photoUrl = sourcePhoto || catalogPhoto;
-    }
+    const sourcePhoto = (photoIndex.get(articleKey) || []).map(photoUrlFromSourceRow).find(Boolean) || "";
+    const catalogPhoto = entries?.map(entry => entry.photoUrl).find(Boolean) || "";
+    if (sourcePhoto) order.photoUrl = sourcePhoto;
+    else if (!order.photoUrl) order.photoUrl = catalogPhoto;
   }
 }
 
