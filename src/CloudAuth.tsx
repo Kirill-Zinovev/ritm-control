@@ -78,7 +78,13 @@ export function CloudAuthGate({ children }: { children: ReactNode }) {
   if (loading || runtime === null) return <AuthFrame><div className="ritm-auth-card"><span className="ritm-auth-mark">RITM<span>/</span></span><p>{error || "Проверяю доступ…"}</p>{error && <Button kind="primary" onClick={() => void refresh()}>Повторить</Button>}</div></AuthFrame>;
   if (runtime === "local") return <AuthContext.Provider value={{ mode: "local", role: "local", displayName: null, username: null, signOut: async () => {}, openPinChange: () => {} }}>{children}</AuthContext.Provider>;
   if (!runtime.authorized || !runtime.role) return <AuthFrame>
-    <LoginCard onSuccess={async () => { await refresh(); }} />
+    <LoginCard onSuccess={async () => {
+      const next = await readRuntime();
+      if (next === "local" || !next.authorized || !next.role)
+        throw new Error("PIN принят, но вход не подтвердился. Разрешите cookie для RITM и попробуйте ещё раз.");
+      setRuntime(next);
+      setError("");
+    }} />
   </AuthFrame>;
   if (runtime.mustChangePin) return <AuthFrame>
     <PinForm forced onClose={() => {}} onSaved={() => void refresh()} />
