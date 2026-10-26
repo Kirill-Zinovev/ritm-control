@@ -16,7 +16,7 @@ export class CloudSheetsReader {
   constructor(bindings, { writer = false, fetcher = fetch, now = Date.now, beforeWrite = null } = {}) {
     this.bindings = bindings;
     this.writer = writer;
-    this.fetcher = fetcher;
+    this.fetcher = (...args) => fetcher(...args);
     this.now = now;
     this.beforeWrite = beforeWrite;
     this.allowed = new Set(sourceIds(bindings));

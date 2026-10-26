@@ -19,6 +19,17 @@ const schema = cloudSchemaStatements().join(";\n");
 function fixture(options = {}) { const db = new LocalD1(); db.db.exec(schema); return { db, store: new CloudStore(db, options) }; }
 const env = { ...bindings, RITM_OWNER_USER_IDS: "owner-site-id" };
 
+test("cloud reader calls the platform fetch without rebinding its receiver", async () => {
+  let calls = 0;
+  const reader = new CloudSheetsReader(env, { fetcher: async function () {
+    assert.equal(this, undefined, "Workers fetch must retain its global invocation semantics"); calls++;
+    return Response.json({ spreadsheetId: env.RITM_GOOGLE_CATALOG_ID, sheets: [] });
+  } });
+  reader.cached = { token: "synthetic-token", expires: Date.now() + 3600000 };
+  await reader.get(env.RITM_GOOGLE_CATALOG_ID, { fields: "spreadsheetId,sheets.properties" });
+  assert.equal(calls, 1);
+});
+
 test("portable SHA-256 and signed Assembly events match Node including Cyrillic", () => {
   for (const input of ["", "abc", "OZON МОСКВА 10_10", "😀".repeat(1000)]) {
     assert.equal(createHash("sha256").update(input).digest("hex"), nodeHash("sha256").update(input).digest("hex"));

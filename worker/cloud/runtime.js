@@ -51,6 +51,7 @@ export async function refreshSnapshot(kind, bindings, store, { scope = null, fet
       productionSupplies: current.meta("productionSupplies") || [], assemblyBoxLinks: transfer.links(),
     });
     validateApi(value, kind);
+    if (value.stale === true) throw new CloudError("source_incomplete", "Источник не подтвердил свежую полную сводку.");
     await store.saveSnapshot(kind, value, lease);
     return { ...value, stale: false, snapshotAt: new Date(store.now()).toISOString(), refreshFailed: false };
   } catch (error) {

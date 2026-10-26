@@ -513,7 +513,7 @@ export class RollSupplySheetsWriter {
     this.template = template;
     this.box = box;
     this.formulaColumns = box ? [6, 10] : FORMULA_COLUMNS;
-    this.fetcher = fetcher;
+    this.fetcher = (...args) => fetcher(...args);
     this.timeoutMs = timeoutMs;
     this.preparedTemplates = new Map();
   }

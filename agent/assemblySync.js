@@ -10,6 +10,7 @@ export class AssemblySyncQueue {
   constructor(store, { secret = "", fetchImpl = fetch, now = Date.now, beforeDeliver = null } = {}) {
     if (secret && !/^[a-f0-9]{64}$/i.test(secret)) throw new Error("Invalid Assembly sync key");
     Object.assign(this, { store, secret, fetchImpl, now, beforeDeliver });
+    this.fetchImpl = (...args) => fetchImpl(...args);
     this.persistence = supplyPersistence(store);
     this.persistence.ensureSyncSchema();
     this.timer = null;
