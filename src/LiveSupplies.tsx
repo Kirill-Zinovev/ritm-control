@@ -521,7 +521,7 @@ export function LiveSuppliesWorkspace({
   onRefresh,
 }: Props) {
   const [writer, setWriter] = useState<WriterState | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(() => new URLSearchParams(location.search).get("supplySheet"));
   const [search, setSearch] = useState("");
   const [onlyMissingArea, setOnlyMissingArea] = useState(false);
   const [dialog, setDialog] = useState<"create" | "append" | null>(null);

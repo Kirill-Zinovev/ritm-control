@@ -1,5 +1,9 @@
 # Prototype Instructions
 
+## Owner-confirmed machine workload (2026-10-26)
+
+The machine workload screen uses the last approved shipment-centered mock: expandable canonical shipment cards with roll/box lanes, machine rows, article drilldown and a right-side machine summary. Offer views by shipment and by machine, marketplace/shipment/department/machine/readiness filters and article search. No separate task creation/distribution button, machine rates, norms or ETA. Derive tasks from the same active production snapshot, with no shadow task registry. A confirmed source creation/deletion appears through that shared snapshot; failed reads retain the previous snapshot with an explicit stale warning. Preserve journals, saved KPI and carton history. Machine assignments come from the supply machine column; missing/error values may use only the shipment's matching marketplace catalog. Unknown/conflicting/cross-department assignments remain visible under their original department's unknown-machine group. Show printing readiness and cutting facts separately. Unfinished work does not prove equipment is currently running; do not invent active/idle states. Photos/names are optional source-backed details. The owner authorized publication after checks on 2026-10-26; Assembly remains its existing independent application.
+
 ## Owner-confirmed refresh for every Assembly supply (2026-10-22)
 
 Manual «Обновить» refreshes current product details, photos, labels, store numbers, carton capacities and operation norms for every supply type using its marketplace. Bypass reference caches on manual refresh, retire obsolete confirmed carton capacities even if the reread is missing/conflicting/unavailable, and show the actual reason rather than claim the catalog has no norm. Preserve work events, saved historical coefficients, carton contents and source printing/catalog sheets. The owner authorized publication to the existing Assembly URL.
@@ -158,3 +162,7 @@ Use the existing production writer only when its owner configuration is enabled.
 Article cards show only active work records, and the record count excludes cancelled events. Hide the records toggle and panel when there are no active records. Preserve cancelled events and their audit in storage.
 
 In the work-entry modal, show the confirmed remaining quantity for the selected operation prominently, plus a clearly labelled local estimate after the entered quantity; if plan or fact is missing, show that the remainder is unknown. Use comfortably readable text. In the supply article list, show a product-type column and client-side product-type and status filters; keep the status filter in the status column heading on desktop and available in the mobile toolbar. Filtering must use the loaded snapshot and must not call Sheets. Use bright, compact wordmark-style badges for OZON and WB shipments, without oversized square logo tiles.
+
+## Owner-confirmed visual system direction (2026-10-26)
+
+Keep the light RITM palette, approved pale blue atmospheric background, white navigation and working surfaces, blue primary actions and restrained teal brand accent. The owner chose the Linear/Vercel/Raycast reference for precision, hierarchy, type scale, density and interaction states, not for a dark theme or marketing layout. Apply the shared system through `src/styles.css`, `src/ui.tsx` and `DESIGN.md`; preserve routes, current page structure, domain logic, APIs and production data. No remote fonts or second UI framework. Work locally until the owner separately requests publication.

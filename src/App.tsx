@@ -8,6 +8,7 @@ import {
   ChartBar,
   CheckCircle,
   Cube,
+  Factory,
   Database,
   House,
   List,
@@ -60,6 +61,7 @@ import { FBO_URL, useLiveAssembly } from "./liveAssembly";
 import { AssemblyAnalytics } from "./AssemblyAnalytics";
 import { DesignPreview } from "./DesignPreview";
 import { ProductionDashboard } from "./ProductionDashboard";
+import { MachineWorkload } from "./MachineWorkload";
 import { RitmBackdrop } from "./RitmBackdrop";
 import { useCloudAuth } from "./CloudAuth";
 import { ManagerAccessPanel } from "./ManagerAccessPanel";
@@ -92,6 +94,7 @@ const NAV = [
   { id: "assembly", label: "Сборщики", icon: Users },
   { id: "printing", label: "Печать", icon: Printer },
   { id: "production", label: "Производство", icon: ChartBar },
+  { id: "machines", label: "Загрузка станков", icon: Factory },
   { id: "stock", label: "Склад", icon: Cube },
   { id: "supplies", label: "Поставки", icon: Truck },
   { id: "intelligence", label: "AI Center", icon: Bot },
@@ -103,6 +106,7 @@ const TITLES: Record<Page, string> = {
   assembly: "Сборщики",
   printing: "Печать",
   production: "Производство",
+  machines: "Загруженность станков",
   stock: "Склад",
   supplies: "Поставки",
   sources: "Источники данных",
@@ -113,6 +117,7 @@ const SUBTITLES: Record<Page, string> = {
   assembly: "Производительность сотрудников · фактические дневные итоги",
   printing: "Фактический выпуск · сезонная и рулонная печать",
   production: "План и выполненное по каждому артикулу",
+  machines: "Поставки, участки и прогресс по станкам",
   stock: "Готовый товар, ячейки хранения и свободный остаток",
   supplies: "Состав, сроки и готовность к отгрузке",
   sources: "Подготовка подключения и проверка исходных данных",
@@ -280,7 +285,7 @@ function AppShell() {
       void assemblyLive.reload(true);
       return;
     }
-    if (page === "production") {
+    if (page === "production" || page === "machines") {
       void live.reload(true);
       return;
     }
@@ -917,7 +922,7 @@ function AppShell() {
         className={
           page === "printing" && printerProfileId
             ? "is-printer-profile"
-            : undefined
+            : page === "machines" ? "machine-workload-page" : undefined
         }
       >
         <header className="page-header">
@@ -943,7 +948,7 @@ function AppShell() {
                         : assemblyLive.value
                           ? "success"
                           : "info"
-                      : page === "production"
+                      : page === "production" || page === "machines"
                         ? live.error
                           ? "warning"
                           : live.value
@@ -960,7 +965,7 @@ function AppShell() {
                       : assemblyLive.value
                         ? "FBO подключено"
                         : "Подключаю FBO"
-                    : page === "production"
+                    : page === "production" || page === "machines"
                       ? live.error
                         ? "Ошибка источника"
                         : live.value
@@ -978,7 +983,7 @@ function AppShell() {
           </div>
           {page !== "intelligence" &&
             page !== "assembly" &&
-            page !== "production" && (
+            page !== "production" && page !== "machines" && (
               <div className="header-controls">
                 <div
                   className="segments"
@@ -1010,7 +1015,7 @@ function AppShell() {
               </div>
             )}
         </header>
-        {page !== "intelligence" && page !== "assembly" && (
+        {page !== "intelligence" && page !== "assembly" && page !== "machines" && (
           <div className="context-bar">
             {page !== "sources" && (
               <span>
@@ -1544,6 +1549,7 @@ function AppShell() {
             )}
           </>
         ) : null}
+        {page === "machines" && <MachineWorkload live={live.value} loading={live.loading} error={live.error} onRefresh={() => void live.reload(true)} />}
         {page === "production" && (
           <ProductionDashboard
             live={live.value}

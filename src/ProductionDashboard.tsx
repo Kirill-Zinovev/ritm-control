@@ -780,7 +780,18 @@ export function ProductionDashboard({
                 ? "Загружаю поставки…"
                 : live
                   ? "По выбранным фильтрам данных нет."
-                  : "Проверенные рабочие данные не загружены."}
+                  : (
+                    <>
+                      <span className="production-empty-icon" aria-hidden="true">
+                        <MagnifyingGlass size={24} strokeWidth={1.8} />
+                      </span>
+                      <strong>Проверенные данные не загружены</strong>
+                      <span>
+                        После успешного чтения рабочей таблицы здесь появятся
+                        поставки, направления и прогресс.
+                      </span>
+                    </>
+                  )}
             </div>
           )}
         </div>

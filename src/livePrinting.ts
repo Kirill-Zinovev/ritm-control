@@ -38,6 +38,11 @@ export type LiveOrder = {
   article: string;
   quantity: number;
   plannedArea: number;
+  machine?: string | null;
+  machineSource?: "supply" | "catalog" | null;
+  machineIssue?: string | null;
+  productName?: string | null;
+  photoUrl?: string | null;
   printProgress?: number | null;
   cutProgress?: number | null;
   remainingPrint?: number | null;

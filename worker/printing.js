@@ -331,6 +331,9 @@ export function indexOrders(sheets) {
     } = sheet;
     const headers = rows[headerRow - 1] || [];
     const shopColumn = headers.findIndex((header) => normal(header) === "магазин");
+    const machineColumn = headers.findIndex((header) => normal(header) === "станок");
+    const photoColumn = headers.findIndex((header) => normal(header) === "фото");
+    const nameColumn = headers.findIndex((header) => ["наименование", "название", "название товара"].includes(normal(header)));
     if (
       normal(headers[4]) !== "артикул" ||
       normal(headers[14]) !== "кол-во"
@@ -446,6 +449,10 @@ export function indexOrders(sheets) {
         journalAliases,
         row,
         article,
+        machine: machineColumn >= 0 ? String(r[machineColumn] || "").trim() : "",
+        machineSource: machineColumn >= 0 && String(r[machineColumn] || "").trim() ? "supply" : null,
+        productName: nameColumn >= 0 ? String(r[nameColumn] || "").trim() : "",
+        photoUrl: safeWorkloadPhoto(photoColumn >= 0 ? r[photoColumn] : ""),
         assemblyShipmentId,
         quantity,
         plannedArea,
@@ -672,6 +679,7 @@ export async function loadPrinting(fetcher = fetch, options = {}) {
     );
   }
   const shopCatalog = assignCatalogStores(supplies, options.shopCatalogRows);
+  assignWorkloadDetails(supplies, options.shopCatalogRows);
   const sourceLinks = sources.map((source) => ({
     id: source.id,
     name: source.name,
@@ -699,6 +707,57 @@ export async function loadPrinting(fetcher = fetch, options = {}) {
     sheets,
     shopCatalog,
   };
+}
+
+function safeWorkloadPhoto(value) {
+  try {
+    const url = new URL(String(value || "").trim());
+    return url.protocol === "https:" && !url.username && !url.password ? url.href : "";
+  } catch { return ""; }
+}
+
+// Reuse the catalog already read for stores. Never query another marketplace,
+// infer a machine from a product name, or change source rows.
+export function assignWorkloadDetails(orders, catalog) {
+  const indices = new Map();
+  for (const market of ["OZON", "WB"]) {
+    const rows = catalog?.[market];
+    if (!Array.isArray(rows)) continue;
+    const headerIndex = rows.slice(0, 10).findIndex(row => row.some(h => ["артикул", "артикул (oz)"].includes(normal(h))));
+    if (headerIndex < 0) continue;
+    const headers = rows[headerIndex].map(normal);
+    const articleColumns = headers.flatMap((h, i) => ["артикул", "артикул (oz)"].includes(h) ? [i] : []);
+    if (market === "OZON" && !articleColumns.includes(1)) articleColumns.push(1);
+    const columns = {
+      machine: headers.findIndex(h => h === (market === "WB" ? "вид станка по умолчанию" : "станок")),
+      productName: headers.findIndex(h => ["наименование", "название", "название товара"].includes(h)),
+      photoUrl: headers.findIndex(h => ["фото", "ссылка на фото", "ссылка на фотографию"].includes(h)),
+    };
+    const records = new Map();
+    for (const row of rows.slice(headerIndex + 1)) {
+      for (const key of new Set(articleColumns.map(i => normalizeCatalogArticle(row[i])).filter(v => v && !v.startsWith("#")))) {
+        const entries = records.get(key) || [];
+        entries.push(Object.fromEntries(Object.entries(columns).map(([field, col]) => {
+          const raw = String(row[col] || "").trim();
+          return [field, field === "photoUrl" ? safeWorkloadPhoto(raw) : raw.startsWith("#") ? "" : raw];
+        })));
+        records.set(key, entries);
+      }
+    }
+    indices.set(market, records);
+  }
+  for (const order of orders) {
+    const entries = indices.get(marketplaceForSupply(order.sheetName))?.get(normalizeCatalogArticle(order.article));
+    if (!entries?.length) continue;
+    for (const field of ["machine", "productName", "photoUrl"]) {
+      if (order[field] && !String(order[field]).trim().startsWith("#")) continue;
+      const values = new Set(entries.map(entry => entry[field]));
+      if (values.size === 1) {
+        order[field] = [...values][0];
+        if (field === "machine" && order.machine) order.machineSource = "catalog";
+      } else if (field === "machine") order.machineIssue = "В каталоге указаны разные станки";
+    }
+  }
 }
 
 function normalizeCatalogArticle(value) {

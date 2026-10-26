@@ -3,6 +3,8 @@ export {
   Box as Cube,
   Clock3,
   Cylinder,
+  Factory,
+  SlidersHorizontal as Sliders,
   FileText,
   RefreshCw as ArrowsClockwise,
   CalendarDays as CalendarBlank,

@@ -83,15 +83,13 @@ export async function readProductionShopCatalog(googleReader, signal) {
     `https://sheets.googleapis.com/v4/spreadsheets/${CATALOG_ID}/values:batchGet`,
   );
   const requestedRanges = [
-    { sheet: "WB", startColumn: "A", endColumn: "B", query: "'WB'!A:B" },
-    { sheet: "WB", startColumn: "T", endColumn: "T", query: "'WB'!T:T" },
+    { sheet: "WB", startColumn: "A", endColumn: "T", query: "'WB'!A:T" },
     {
       sheet: "OZON",
       startColumn: "A",
-      endColumn: "B",
-      query: "'OZON'!A:B",
+      endColumn: "P",
+      query: "'OZON'!A:P",
     },
-    { sheet: "OZON", startColumn: "P", endColumn: "P", query: "'OZON'!P:P" },
   ];
   for (const range of requestedRanges)
     url.searchParams.append("ranges", range.query);
@@ -153,19 +151,17 @@ export async function readProductionShopCatalog(googleReader, signal) {
   };
   return {
     WB: rowsFromColumns(
-      [data.valueRanges[0].values || [], data.valueRanges[1].values || []],
+      [data.valueRanges[0].values || []],
       20,
       [
-        { start: 0, count: 2 },
-        { start: 19, count: 1 },
+        { start: 0, count: 20 },
       ],
     ),
     OZON: rowsFromColumns(
-      [data.valueRanges[2].values || [], data.valueRanges[3].values || []],
+      [data.valueRanges[1].values || []],
       16,
       [
-        { start: 0, count: 2 },
-        { start: 15, count: 1 },
+        { start: 0, count: 16 },
       ],
     ),
   };

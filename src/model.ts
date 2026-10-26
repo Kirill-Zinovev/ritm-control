@@ -4,6 +4,7 @@ export type Page =
   | "assembly"
   | "printing"
   | "production"
+  | "machines"
   | "stock"
   | "supplies"
   | "sources";

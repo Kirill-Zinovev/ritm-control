@@ -10,6 +10,7 @@ for (const file of [
   "src/liveSupplyProgress",
   "src/liveSupplyMarketplace",
   "src/productionData",
+  "src/machineWorkloadData",
   "src/assemblyCoefficient",
   "tests/domain.test",
   "tests/supply-workflow.test",
@@ -17,6 +18,7 @@ for (const file of [
   "tests/live-supply-marketplace.test",
   "tests/assembly-coefficient.test",
   "tests/production-data.test",
+  "tests/machine-workload-data.test",
 ]) {
   mkdirSync(".checks/" + file.slice(0, file.lastIndexOf("/")), {
     recursive: true,
@@ -46,6 +48,7 @@ const result = spawnSync(
     ".checks/tests/live-supply-marketplace.test.mjs",
     ".checks/tests/assembly-coefficient.test.mjs",
     ".checks/tests/production-data.test.mjs",
+    ".checks/tests/machine-workload-data.test.mjs",
   ],
   {
     stdio: "inherit",
