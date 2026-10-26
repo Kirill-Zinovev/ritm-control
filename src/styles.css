@@ -5054,6 +5054,8 @@ td small {
   display: grid;
   gap: 14px;
   min-width: 0;
+  font-size: 14px;
+  line-height: 1.45;
 }
 .production-overview-line {
   display: flex;
@@ -5061,7 +5063,7 @@ td small {
   align-items: center;
   gap: 12px;
   color: #536b88;
-  font-size: 11px;
+  font-size: 13px;
 }
 .production-overview-line > span:first-child {
   display: inline-flex;
@@ -5094,7 +5096,7 @@ td small {
   gap: 5px;
   min-width: 0;
   color: #536b88;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
 }
 .production-filters select {
@@ -5102,7 +5104,7 @@ td small {
   min-height: 39px;
   color: #294260;
   background-color: rgba(255, 255, 255, 0.95);
-  font-size: 12px;
+  font-size: 14px;
 }
 .production-alert {
   display: flex;
@@ -5113,7 +5115,7 @@ td small {
   border-radius: 10px;
   color: #795313;
   background: #fff9e9;
-  font-size: 11px;
+  font-size: 13px;
   line-height: 1.45;
 }
 .production-alert svg {
@@ -5161,7 +5163,7 @@ td small {
 }
 .production-kpi small {
   color: #6e829b;
-  font-size: 11px;
+  font-size: 13px;
 }
 .production-kpi strong {
   color: #132d4c;
@@ -5178,12 +5180,12 @@ td small {
 }
 .production-kpi > div > span {
   color: #73869d;
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.35;
 }
 .production-table-panel {
   min-width: 0;
-  overflow: hidden;
+  overflow: clip;
   border: 1px solid var(--border);
   border-radius: 15px;
   background: rgba(255, 255, 255, 0.97);
@@ -5203,7 +5205,7 @@ td small {
 .production-table-heading p {
   margin-top: 3px;
   color: #778aa0;
-  font-size: 10px;
+  font-size: 12px;
 }
 .production-search {
   display: flex;
@@ -5228,24 +5230,27 @@ td small {
   border: 0;
   outline: 0;
   box-shadow: none;
-  font-size: 11px;
+  font-size: 13px;
 }
 .production-table-wrap {
-  overflow-x: auto;
+  overflow-x: visible;
 }
 .production-table {
   width: 100%;
   min-width: 1120px;
   border-collapse: collapse;
   color: #294260;
-  font-size: 11px;
+  font-size: 13px;
 }
 .production-table th {
-  height: 39px;
-  padding: 8px 10px;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  height: 44px;
+  padding: 9px 11px;
   color: #627995;
   background: #f3f7fb;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
   text-align: left;
   white-space: nowrap;
@@ -5258,7 +5263,7 @@ td small {
 }
 .production-table td {
   min-height: 46px;
-  padding: 8px 10px;
+  padding: 10px 11px;
   border-top: 1px solid #e8eef5;
   vertical-align: middle;
 }
@@ -5300,7 +5305,7 @@ td small {
 .production-supply-title > small {
   flex: 0 0 auto;
   color: #7a8da4;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 500;
 }
 .production-supply-title > a {
@@ -5316,7 +5321,7 @@ td small {
   height: 28px;
   border-radius: 50%;
   color: white;
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 800;
 }
 .production-market-mark.ozon {
@@ -5356,13 +5361,13 @@ td small {
   border-radius: 99px;
   color: #3263a3;
   background: #eaf2ff;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
   white-space: nowrap;
 }
 .production-missing-store {
   color: #9c6a21;
-  font-size: 10px;
+  font-size: 12px;
 }
 .production-progress {
   display: grid;
@@ -5377,16 +5382,16 @@ td small {
 }
 .production-progress-values strong {
   color: #243d5b;
-  font-size: 11px;
+  font-size: 13px;
 }
 .production-progress-values > span {
   color: #8a9aab;
-  font-size: 9px;
+  font-size: 11px;
 }
 .production-progress-values b {
   margin-left: auto;
   color: #4384d2;
-  font-size: 9px;
+  font-size: 11px;
 }
 .production-progress.is-over .production-progress-values b,
 .production-over-value {
@@ -5415,8 +5420,8 @@ td small {
 }
 .production-progress small {
   color: #7b8ea4;
-  font-size: 8px;
-  line-height: 1.25;
+  font-size: 10px;
+  line-height: 1.35;
 }
 .production-progress small.production-over-note {
   color: #15936d;
@@ -5424,8 +5429,8 @@ td small {
 .production-partial-fact small {
   display: block;
   color: #9c6a21;
-  font-size: 8px;
-  line-height: 1.25;
+  font-size: 10px;
+  line-height: 1.35;
 }
 .production-no-fact {
   color: #9aa8b7 !important;
@@ -5433,6 +5438,7 @@ td small {
 .production-empty {
   height: 118px;
   color: #7a8da3;
+  font-size: 13px;
   text-align: center;
 }
 .production-table-foot {
@@ -5443,12 +5449,19 @@ td small {
   padding: 10px 15px;
   border-top: 1px solid #e8eef5;
   color: #74869b;
-  font-size: 9px;
+  font-size: 11px;
 }
 .production-table-foot span:last-child {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+}
+@media (max-width: 1410px) {
+  .production-table-wrap {
+    max-height: min(68vh, 760px);
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
 }
 @media (max-width: 950px) {
   .production-filters {
