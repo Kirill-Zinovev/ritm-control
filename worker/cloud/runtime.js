@@ -17,7 +17,8 @@ const signIn = "/?page=supplies";
 const methods = (request, allowed) => { if (!allowed.includes(request.method)) throw new CloudError("method_not_allowed", "Метод запроса не поддерживается.", 405); };
 
 function managerRouteAllowed(method, path) {
-  if (method === "GET") return path === "/api/printing" || [
+  if (method === "GET") return [
+    "/api/assembly", "/api/printing", "/api/cloud/registry",
     "/api/roll-supplies/status", "/api/roll-supplies/operations",
     "/api/assembly-transfers/sources", "/api/assembly-transfers/links",
     "/api/assembly-transfers/source", "/api/assembly-transfers/operation",
@@ -175,7 +176,7 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
       principal = await resolvePrincipal(request, bindings);
       if (principal?.role === "owner") requireOwner(request, bindings, { write: request.method !== "GET" });
       else if (principal?.role === "manager") {
-        if (!managerRouteAllowed(request.method, path)) throw new CloudError("manager_route_forbidden", "У этой учётной записи есть доступ только к поставкам.", 403);
+        if (!managerRouteAllowed(request.method, path)) throw new CloudError("manager_route_forbidden", "Этот раздел или служебная операция недоступны для учётной записи менеджера.", 403);
         if (principal.mustChangePin) throw new CloudError("pin_change_required", "Перед продолжением задайте личный PIN.", 403);
         if (request.method !== "GET") assertSameOrigin(request);
       } else requireOwner(request, bindings, { write: request.method !== "GET" });

@@ -68,7 +68,7 @@ export function ManagerAccessPanel({ open, onClose }: { open: boolean; onClose: 
 
   return <Modal open={open} onClose={onClose} title="Доступ менеджеров" description="Каждому менеджеру выдаётся личный логин и PIN для работы с поставками.">
     <div className="manager-access-panel">
-      <Notice>Менеджер увидит только разделы «Поставки» и «Производство». AI Center, сотрудники и системные настройки останутся закрыты.</Notice>
+      <Notice>Менеджеру доступны все рабочие разделы RITM, кроме AI Center. Управление учётными записями и технические операции остаются владельцу.</Notice>
       {error && <Notice tone="warning">{error}</Notice>}
       {temporaryPin && <div className="manager-temp-pin" role="status">
         <div><strong>{temporaryPin.action === "created" ? "Менеджер создан" : "PIN сброшен"}</strong><span>Логин: <b>{temporaryPin.username}</b> · передайте временный PIN лично. При первом входе его нужно заменить.</span></div>

@@ -43,7 +43,7 @@ test("real Workers runtime handles cloud owner access and D1 without any local f
   } finally { await mf.dispose(); }
 });
 
-test("RITM manager PIN login is isolated, first-login PIN is rotated, and supply access is role-limited", async () => {
+test("RITM manager PIN login grants business sections except AI and owner administration", async () => {
   const owner = "owner-site-id";
   const mf = new Miniflare({ modules: true, scriptPath: new URL("../dist/server/index.js", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"), compatibilityDate: "2026-08-06", d1Databases: ["DB"], bindings: { ...bindings, RITM_OWNER_USER_IDS: owner, RITM_GOOGLE_READER_JSON: "{}" }, outboundService: async () => { throw new Error("Network forbidden in isolated PIN-auth test"); } });
   try {
@@ -89,9 +89,14 @@ test("RITM manager PIN login is isolated, first-login PIN is rotated, and supply
     assert.equal(manager.authorized, true);
     assert.equal(manager.mustChangePin, false);
 
+    await db.prepare("INSERT INTO cloud_state(key,value,updated_at) VALUES('migrationReady','true',?)").bind(Date.now()).run();
     assert.equal((await mf.dispatchFetch("https://ritm.test/api/roll-supplies/status", { headers: { cookie } })).status, 200);
+    assert.equal((await mf.dispatchFetch("https://ritm.test/api/cloud/registry", { headers: { cookie } })).status, 200);
     assert.equal((await mf.dispatchFetch("https://ritm.test/api/assembly-transfers/links", { headers: { cookie } })).status, 200);
-    for (const path of ["/api/assembly", "/api/cloud/state", "/api/intelligence/status", "/api/auth/users"]) {
+    const assemblyAccess = await mf.dispatchFetch("https://ritm.test/api/assembly", { headers: { cookie } });
+    assert.notEqual(assemblyAccess.status, 403);
+    assert.notEqual((await assemblyAccess.json()).error, "manager_route_forbidden");
+    for (const path of ["/api/cloud/state", "/api/intelligence/status", "/api/auth/users"]) {
       const denied = await mf.dispatchFetch("https://ritm.test" + path, { headers: { cookie } });
       assert.equal(denied.status, 403, path);
     }

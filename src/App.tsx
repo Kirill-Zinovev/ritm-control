@@ -137,6 +137,9 @@ function initialPage(): Page {
   const value = new URLSearchParams(location.search).get("page");
   return NAV.some((n) => n.id === value) ? (value as Page) : "overview";
 }
+function pageForRole(page: Page, role: string | null): Page {
+  return role === "manager" && page === "intelligence" ? "overview" : page;
+}
 function download(name: string, text: string, type = "text/csv;charset=utf-8") {
   const url = URL.createObjectURL(new Blob(["\ufeff" + text], { type }));
   const a = document.createElement("a");
@@ -147,7 +150,7 @@ function download(name: string, text: string, type = "text/csv;charset=utf-8") {
 }
 function AppShell() {
   const cloudAuth = useCloudAuth();
-  const [page, setPage] = useState<Page>(() => cloudAuth.role === "manager" && !["supplies", "production"].includes(initialPage()) ? "supplies" : initialPage());
+  const [page, setPage] = useState<Page>(() => pageForRole(initialPage(), cloudAuth.role));
   const [date, setDate] = useState(() =>
     new Intl.DateTimeFormat("en-CA", {
       timeZone: "Europe/Moscow",
@@ -228,7 +231,7 @@ function AppShell() {
   }, [page]);
   useEffect(() => {
     const onPop = () => {
-      setPage(initialPage());
+      setPage(pageForRole(initialPage(), cloudAuth.role));
       setPrinterProfileId(null);
     };
     addEventListener("popstate", onPop);
@@ -256,7 +259,7 @@ function AppShell() {
     return () => removeEventListener("beforeunload", guard);
   }, [dirty]);
   const go = (id: Page) => {
-    const next = cloudAuth.role === "manager" && !["supplies", "production"].includes(id) ? "supplies" : id;
+    const next = pageForRole(id, cloudAuth.role);
     setPage(next);
     setPrinterProfileId(null);
     setQuery("");
@@ -880,7 +883,7 @@ function AppShell() {
           для WB / Ozon
         </p>
       <nav id="primary-navigation" aria-label="Основное меню">
-          {NAV.filter((n) => cloudAuth.role !== "manager" || ["supplies", "production"].includes(n.id)).map((n) => (
+          {NAV.filter((n) => cloudAuth.role !== "manager" || n.id !== "intelligence").map((n) => (
             <a
               key={n.id}
               href={`?page=${n.id}`}
