@@ -29,6 +29,16 @@ test("real Workers runtime handles cloud owner access and D1 without any local f
     assert.equal(status.status, 200);
     const state = await status.json();
     assert.equal(state.mode, "cloud"); assert.equal(state.available, false);
+    await db.prepare("INSERT INTO cloud_leases(name,owner,expires_at,fence) VALUES('production','test-owner',?,1)").bind(Date.now() + 30_000).run();
+    const active = await mf.dispatchFetch("https://ritm.test/api/roll-supplies/status", { headers });
+    const activeState = await active.json();
+    assert.equal(activeState.busy, true);
+    assert.equal(activeState.production.busy, true);
+    await db.prepare("UPDATE cloud_leases SET expires_at=0 WHERE name='production'").run();
+    const released = await mf.dispatchFetch("https://ritm.test/api/roll-supplies/status", { headers });
+    const releasedState = await released.json();
+    assert.equal(releasedState.busy, false);
+    assert.equal(releasedState.production.busy, false);
     const responses = await Promise.all(Array.from({ length: 30 }, () => mf.dispatchFetch("https://ritm.test/api/assembly-transfers/links", { headers })));
     for (const response of responses) { assert.equal(response.status, 200); assert.deepEqual((await response.json()).links, []); }
     const write = await mf.dispatchFetch("https://ritm.test/api/roll-supplies", { method: "POST", headers: { ...headers, origin: "https://ritm.test", "content-type": "application/json" }, body: "{}" });

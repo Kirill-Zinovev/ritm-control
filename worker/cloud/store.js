@@ -109,6 +109,10 @@ export class CloudStore {
   async release(lease) {
     await this.db.prepare("UPDATE cloud_leases SET expires_at=0 WHERE name=? AND owner=? AND fence=?").bind(lease.name, lease.owner, lease.fence).run();
   }
+  async leaseIsActive(name = "production") {
+    const row = await this.db.prepare("SELECT expires_at FROM cloud_leases WHERE name=?").bind(name).first();
+    return Number(row?.expires_at) > this.now();
+  }
   async renew(lease) {
     const result = await this.db.prepare("UPDATE cloud_leases SET expires_at=? WHERE name=? AND owner=? AND fence=? AND expires_at>?").bind(this.now() + (lease.leaseMs || this.leaseMs), lease.name, lease.owner, lease.fence, this.now()).run();
     if (result.meta?.changes !== 1) throw new CloudError("cloud_lease_lost", "Операция потеряла блокировку. Нужна проверка результата.", 409);

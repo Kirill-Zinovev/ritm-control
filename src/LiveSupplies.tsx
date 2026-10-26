@@ -760,11 +760,10 @@ export function LiveSuppliesWorkspace({
           "Подготовка ещё выполняется. Повторная отправка заблокирована.",
         );
       } else {
-        operationId.current = crypto.randomUUID();
         setOperation(null);
         setRoutingPreview(null);
         setNotice(
-          "Операция не была зарегистрирована. Состав можно проверить и подтвердить заново.",
+          "Операция пока не найдена в журнале. Проверьте состав заново; для защиты от дубля сохранён прежний ID операции.",
         );
       }
     } catch (cause) {
@@ -968,19 +967,12 @@ export function LiveSuppliesWorkspace({
     };
     setOperation(pendingOperation);
     setNotice(supplyOperationStatus(pendingOperation));
-    let polling = true;
-    const pollTask = (async () => {
-      while (polling) {
-        await new Promise((resolve) => window.setTimeout(resolve, 1200));
-        if (!polling) break;
-        await checkOperation(operationId.current);
-      }
-    })();
+    const requestOperationId = operationId.current;
     try {
       const payload = {
         action: dialog,
         explicitWriteApproval: true,
-        operationId: operationId.current,
+        operationId: requestOperationId,
         name: dialog === "append" ? appendTarget!.name : name.trim(),
         lines,
         previewId: routingPreview.id,
@@ -1020,10 +1012,8 @@ export function LiveSuppliesWorkspace({
           ? cause.message
           : "Результат операции неизвестен. Проверьте историю и лист перед повтором.",
       );
-      await checkOperation(operationId.current);
+      await checkOperation(requestOperationId);
     } finally {
-      polling = false;
-      await pollTask;
       setBusy(false);
     }
   };

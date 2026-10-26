@@ -220,7 +220,17 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
       methods(request, ["GET"]);
       const scope = await store.scope();
       const services = await createServices(bindings, scope, { fetcher });
-      if (path.startsWith("/api/roll-supplies")) return json(services.state());
+      if (path.startsWith("/api/roll-supplies")) {
+        const state = services.state();
+        const leaseBusy = await store.leaseIsActive("production");
+        return json({
+          ...state,
+          busy: state.busy || leaseBusy,
+          production: state.production
+            ? { ...state.production, busy: state.production.busy || leaseBusy }
+            : state.production,
+        });
+      }
       if (path.endsWith("/links")) return json({ ok: true, links: services.transfer.links() });
       if (path.endsWith("/sources")) return json({ ok: true, sources: await services.transfer.sources() });
       if (path.endsWith("/source")) return json({ ok: true, source: await services.transfer.source(url.searchParams.get("department"), Number(url.searchParams.get("sheetId"))) });
