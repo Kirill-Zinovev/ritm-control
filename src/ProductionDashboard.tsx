@@ -1,19 +1,22 @@
-import { Fragment, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ArrowSquareOut,
   CaretDown,
   CaretRight,
-  ChartBar,
-  CheckCircle,
+  Clock3,
+  Cube,
+  Cylinder,
+  FileText,
   MagnifyingGlass,
   Package,
   Printer,
+  Scan,
   Scissors,
   Truck,
   Warning,
 } from "./icons";
 import type { LivePrinting } from "./livePrinting";
-import { rollCut, rollPrinted } from "./liveSupplyProgress";
+import { plannedAreaTotal, rollCut, rollPrinted } from "./liveSupplyProgress";
 import { num } from "./model";
 import {
   buildProductionGroups as buildGroups,
@@ -21,6 +24,7 @@ import {
   productionStoreCoverage,
   productionStoreIssue,
   type Fact,
+  type ProductionDepartment,
   type SupplyGroup,
 } from "./productionData";
 
@@ -91,9 +95,170 @@ function FactCell({ metric, plan }: { metric: Fact; plan: number }) {
 }
 
 function MarketplaceMark({ market }: { market: SupplyGroup["market"] }) {
-  const label = market === "WB" ? "WB" : market === "Ozon" ? "Ozon" : "?";
+  const label = market === "WB" ? "WB" : market === "Ozon" ? "OZON" : "?";
   const cls = market === "WB" ? "wb" : market === "Ozon" ? "ozon" : "unknown";
   return <span className={`production-market-mark ${cls}`}>{label}</span>;
+}
+
+function DepartmentGlyph({
+  department,
+  size = 21,
+}: {
+  department: "roll" | "box";
+  size?: number;
+}) {
+  const Icon = department === "roll" ? Cylinder : Package;
+  return <Icon size={size} strokeWidth={1.9} aria-hidden="true" />;
+}
+
+function DepartmentMetric({
+  label,
+  metric,
+  plan,
+}: {
+  label: string;
+  metric: Fact;
+  plan: number;
+}) {
+  const percent =
+    metric.value !== null && plan > 0 ? (metric.value / plan) * 100 : null;
+  const complete = metric.complete && percent !== null;
+  const over = complete && percent > 100;
+  return (
+    <div className="production-department-metric">
+      <div className="production-department-metric-top">
+        <strong>{label}</strong>
+        <b className={over ? "is-over" : ""}>
+          {complete
+            ? `${num(Math.round(percent))}%`
+            : metric.value === null
+              ? "—"
+              : "Частично"}
+        </b>
+      </div>
+      <div className="production-department-metric-value">
+        {metric.value === null
+          ? "Нет подтверждённых данных"
+          : factText(metric, plan)}
+      </div>
+      <div className="production-department-track" aria-hidden="true">
+        <i
+          className={over ? "is-over" : ""}
+          style={{
+            width: `${percent === null ? 0 : Math.min(130, Math.max(0, percent))}%`,
+          }}
+        />
+      </div>
+      {metric.value !== null && !metric.complete && (
+        <small>
+          Подтверждено по {metric.known} из {metric.expected} позиций
+        </small>
+      )}
+      {over && (
+        <small className="production-over-note">
+          +{num(metric.value! - plan)} сверх плана
+        </small>
+      )}
+    </div>
+  );
+}
+
+function DepartmentPanel({ department }: { department: ProductionDepartment }) {
+  const printLabel = department.id === "box" ? "Печать · R" : "Печать · Т/Х";
+  const cutLabel = department.id === "box" ? "Резка · S" : "Резка · U";
+  return (
+    <section className={`production-department-card is-${department.id}`}>
+      <div className="production-department-heading">
+        <span className="production-department-icon">
+          <DepartmentGlyph department={department.id} size={23} />
+        </span>
+        <div>
+          <strong>{department.label}</strong>
+          <small>
+            {num(department.rows.length)} артикулов · {num(department.plan)} шт.
+          </small>
+        </div>
+        {department.sourceUrl && (
+          <a
+            href={department.sourceUrl}
+            target="_blank"
+            rel="noreferrer"
+            aria-label={`Открыть исходный лист: ${department.label}`}
+            title="Открыть исходный лист"
+          >
+            Лист <ArrowSquareOut size={13} />
+          </a>
+        )}
+      </div>
+      <div className="production-department-metrics">
+        <DepartmentMetric
+          label={printLabel}
+          metric={department.printed}
+          plan={department.plan}
+        />
+        <DepartmentMetric
+          label={cutLabel}
+          metric={department.cut}
+          plan={department.plan}
+        />
+      </div>
+    </section>
+  );
+}
+
+function PackingSummary({ group }: { group: SupplyGroup }) {
+  const percent =
+    group.packed.value !== null && group.plan > 0
+      ? (group.packed.value / group.plan) * 100
+      : null;
+  const complete = group.packed.complete && percent !== null;
+  const over = complete && percent > 100;
+  return (
+    <div className="production-packing-summary">
+      <span className="production-packing-icon">
+        <Cube size={21} strokeWidth={1.9} />
+      </span>
+      <div className="production-packing-title">
+        <strong>Упаковка · Assembly</strong>
+        <small>
+          {num(group.rows.length)} артикулов · {num(group.plan)} шт.
+        </small>
+      </div>
+      <strong className={`production-packing-percent${over ? " is-over" : ""}`}>
+        {complete
+          ? `${num(Math.round(percent))}%`
+          : group.packed.value === null
+            ? "—"
+            : "Частично"}
+      </strong>
+      <div className="production-packing-progress">
+        <div className="production-packing-values">
+          <strong>
+            {group.packed.value === null
+              ? "Нет подтверждённых данных"
+              : `${num(group.packed.value)} из ${num(group.plan)} шт.`}
+          </strong>
+          {group.packed.value !== null && !group.packed.complete && (
+            <small>
+              {group.packed.known}/{group.packed.expected} позиций подтверждено
+            </small>
+          )}
+        </div>
+        <div className="production-packing-track" aria-hidden="true">
+          <i
+            className={over ? "is-over" : ""}
+            style={{
+              width: `${percent === null ? 0 : Math.min(130, Math.max(0, percent))}%`,
+            }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function storeNumber(store: string) {
+  return store.startsWith("Магазин ") ? store.slice("Магазин ".length) : store;
 }
 
 export function ProductionDashboard({
@@ -129,14 +294,34 @@ export function ProductionDashboard({
       const rows = group.rows.filter(
         (row) =>
           (store === "all" || row.store === store) &&
-          `${group.name} ${row.article} ${row.store}`
+          `${group.name} ${row.article} ${row.store} ${row.department === "roll" ? "рулон рулонная печать" : "бокс"}`
             .toLocaleLowerCase("ru-RU")
             .includes(search.trim().toLocaleLowerCase("ru-RU")),
       );
       const filteredOrders = rows.flatMap((row) => row.orders);
+      const departments = group.departments
+        .map((department) => {
+          const departmentRows = rows.filter(
+            (row) => row.department === department.id,
+          );
+          const departmentOrders = departmentRows.flatMap((row) => row.orders);
+          return {
+            ...department,
+            rows: departmentRows,
+            orders: departmentOrders,
+            plan: departmentOrders.reduce(
+              (sum, order) => sum + order.quantity,
+              0,
+            ),
+            printed: fact(departmentOrders.map(rollPrinted)),
+            cut: fact(departmentOrders.map(rollCut)),
+          };
+        })
+        .filter((department) => department.rows.length > 0);
       return {
         ...group,
         rows,
+        departments,
         orders: filteredOrders,
         plan: filteredOrders.reduce((sum, order) => sum + order.quantity, 0),
         printed: fact(filteredOrders.map(rollPrinted)),
@@ -150,6 +335,7 @@ export function ProductionDashboard({
   const storeCoverage = productionStoreCoverage(selectedOrders);
   const plan = selectedOrders.reduce((sum, order) => sum + order.quantity, 0);
   const packed = fact(selectedOrders.map((order) => order.packed));
+  const area = plannedAreaTotal(selectedOrders);
   const remaining =
     packed.complete && packed.value !== null ? plan - packed.value : null;
   const updated = live?.updatedAt
@@ -277,7 +463,7 @@ export function ProductionDashboard({
       >
         <article className="production-kpi">
           <span className="production-kpi-icon plan">
-            <ChartBar size={21} />
+            <FileText size={25} strokeWidth={1.9} />
           </span>
           <div>
             <small>План</small>
@@ -292,7 +478,7 @@ export function ProductionDashboard({
         </article>
         <article className="production-kpi">
           <span className="production-kpi-icon packed">
-            <Package size={21} />
+            <Cube size={25} strokeWidth={1.9} />
           </span>
           <div>
             <small>Упаковано</small>
@@ -316,7 +502,7 @@ export function ProductionDashboard({
         </article>
         <article className="production-kpi">
           <span className="production-kpi-icon remaining">
-            <CheckCircle size={21} />
+            <Clock3 size={25} strokeWidth={1.9} />
           </span>
           <div>
             <small>
@@ -340,13 +526,37 @@ export function ProductionDashboard({
             </span>
           </div>
         </article>
+        <article className="production-kpi">
+          <span className="production-kpi-icon area">
+            <Scan size={25} strokeWidth={1.9} />
+          </span>
+          <div>
+            <small>Площадь</small>
+            <strong>
+              {area.total === null ? (
+                "Не определена"
+              ) : (
+                <>
+                  {num(area.total, 2)} <em>м²</em>
+                </>
+              )}
+            </strong>
+            <span>
+              {area.total === null
+                ? "Нет подтверждённых размеров"
+                : area.missing
+                  ? `Подтверждено по ${num(area.observed)} из ${num(selectedOrders.length)} позиций`
+                  : "По всем позициям выбранных поставок"}
+            </span>
+          </div>
+        </article>
       </section>
 
       <section className="production-table-panel">
         <div className="production-table-heading">
           <div>
             <h2>Работа по поставкам</h2>
-            <p>Текущее состояние по подтверждённым данным</p>
+            <p>Одна поставка · отдельные направления производства</p>
           </div>
           <label className="production-search">
             <MagnifyingGlass size={17} />
@@ -358,193 +568,221 @@ export function ProductionDashboard({
             />
           </label>
         </div>
-        <div className="production-table-wrap">
-          <table className="production-table">
-            <thead>
-              <tr>
-                <th>Поставка</th>
-                <th>Магазин</th>
-                <th>Артикул</th>
-                <th>План</th>
-                <th>
-                  <Printer size={14} /> Напечатано
-                </th>
-                <th>
-                  <Scissors size={14} /> Порезано
-                </th>
-                <th>
-                  <Package size={14} /> Упаковано
-                </th>
-                <th>Короба</th>
-                <th>Осталось</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleGroups.map((group) => {
-                const isCollapsed = collapsed.has(group.key);
-                const rest =
-                  group.packed.complete && group.packed.value !== null
-                    ? group.plan - group.packed.value
-                    : null;
-                return (
-                  <Fragment key={group.key}>
-                    <tr
-                      className="production-group-row"
-                      key={`${group.key}:group`}
+        <div className="production-supply-list">
+          {visibleGroups.map((group) => {
+            const isCollapsed = collapsed.has(group.key);
+            const remainingForGroup =
+              group.packed.complete && group.packed.value !== null
+                ? group.plan - group.packed.value
+                : null;
+            const storeLabel =
+              group.stores.length === 1
+                ? storeNumber(group.stores[0])
+                : group.stores.length
+                  ? "Разные"
+                  : "Не указан";
+            return (
+              <article className="production-supply-card" key={group.key}>
+                <div className="production-supply-card-header">
+                  <button
+                    className="production-supply-toggle"
+                    aria-label={`${isCollapsed ? "Развернуть" : "Свернуть"} ${group.name}`}
+                    aria-expanded={!isCollapsed}
+                    onClick={() =>
+                      setCollapsed((previous) => {
+                        const next = new Set(previous);
+                        if (next.has(group.key)) next.delete(group.key);
+                        else next.add(group.key);
+                        return next;
+                      })
+                    }
+                  >
+                    {isCollapsed ? (
+                      <CaretRight size={17} />
+                    ) : (
+                      <CaretDown size={17} />
+                    )}
+                  </button>
+                  <MarketplaceMark market={group.market} />
+                  <div className="production-supply-card-name">
+                    <strong>{group.name}</strong>
+                    <small>
+                      {num(group.departments.length)}{" "}
+                      {group.departments.length === 1
+                        ? "направление"
+                        : "направления"}{" "}
+                      · {num(group.rows.length)} артикулов
+                    </small>
+                  </div>
+                  <div className="production-supply-head-stat production-supply-head-store">
+                    <small>Магазин</small>
+                    <strong>{storeLabel}</strong>
+                  </div>
+                  <div className="production-supply-head-stat production-supply-head-total">
+                    <small>Всего по поставке</small>
+                    <strong>{num(group.plan)} шт.</strong>
+                  </div>
+                  <div className="production-supply-head-packed">
+                    <small>Упаковано · Assembly</small>
+                    <strong>
+                      {group.packed.value === null
+                        ? "Нет данных"
+                        : `${num(group.packed.value)} / ${num(group.plan)} шт.`}
+                    </strong>
+                  </div>
+                  {remainingForGroup !== null && (
+                    <span
+                      className={`production-supply-status${remainingForGroup < 0 ? " is-over" : ""}`}
                     >
-                      <td>
-                        <div className="production-supply-title">
-                          <button
-                            aria-label={`${isCollapsed ? "Развернуть" : "Свернуть"} ${group.name}`}
-                            aria-expanded={!isCollapsed}
-                            onClick={() =>
-                              setCollapsed((previous) => {
-                                const next = new Set(previous);
-                                if (next.has(group.key)) next.delete(group.key);
-                                else next.add(group.key);
-                                return next;
-                              })
-                            }
-                          >
-                            {isCollapsed ? (
-                              <CaretRight size={16} />
-                            ) : (
-                              <CaretDown size={16} />
-                            )}
-                          </button>
-                          <MarketplaceMark market={group.market} />
-                          <strong>{group.name}</strong>
-                          <small>{num(group.rows.length)} арт.</small>
-                          {group.sourceUrl && (
-                            <a
-                              href={group.sourceUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              aria-label={`Открыть лист ${group.name}`}
-                              title="Открыть исходный лист"
-                            >
-                              <ArrowSquareOut size={14} />
-                            </a>
-                          )}
-                        </div>
-                      </td>
-                      <td>
-                        {group.stores.length === 1
-                          ? group.stores[0]
-                          : group.stores.length
-                            ? "Разные"
-                            : "—"}
-                      </td>
-                      <td className="production-muted">Итого</td>
-                      <td>
-                        <strong>{num(group.plan)}</strong>
-                      </td>
-                      <td>
-                        <FactCell metric={group.printed} plan={group.plan} />
-                      </td>
-                      <td>
-                        <FactCell metric={group.cut} plan={group.plan} />
-                      </td>
-                      <td>
-                        <ProgressCell metric={group.packed} plan={group.plan} />
-                      </td>
-                      <td
-                        className="production-no-fact"
-                        title="Данные о физических коробах не входят в подключённую сводку"
-                      >
-                        —
-                      </td>
-                      <td
-                        className={
-                          rest !== null && rest < 0
-                            ? "production-over-value"
-                            : ""
-                        }
-                      >
-                        {rest === null ? "—" : num(rest)}
-                      </td>
-                    </tr>
-                    {!isCollapsed &&
-                      group.rows.map((row) => {
-                        const rowRest =
-                          row.packed.complete && row.packed.value !== null
-                            ? row.plan - row.packed.value
-                            : null;
-                        return (
-                          <tr className="production-article-row" key={row.key}>
-                            <td>
-                              <span className="production-article-indent">
-                                {group.name}
-                              </span>
-                            </td>
-                            <td>
-                              <span
-                                title={[
-                                  ...new Set(
-                                    row.orders
-                                      .map(productionStoreIssue)
-                                      .filter(Boolean),
-                                  ),
-                                ].join("; ")}
-                                className={
-                                  row.store === "Не указан"
-                                    ? "production-missing-store"
-                                    : "production-store-tag"
-                                }
-                              >
-                                {row.store}
-                              </span>
-                            </td>
-                            <td>
-                              <strong>{row.article}</strong>
-                            </td>
-                            <td>{num(row.plan)}</td>
-                            <td>
-                              <FactCell metric={row.printed} plan={row.plan} />
-                            </td>
-                            <td>
-                              <FactCell metric={row.cut} plan={row.plan} />
-                            </td>
-                            <td>
-                              <ProgressCell
-                                metric={row.packed}
-                                plan={row.plan}
-                              />
-                            </td>
-                            <td
-                              className="production-no-fact"
-                              title="Данные о физических коробах не входят в подключённую сводку"
-                            >
-                              —
-                            </td>
-                            <td
-                              className={
-                                rowRest !== null && rowRest < 0
-                                  ? "production-over-value"
-                                  : ""
-                              }
-                            >
-                              {rowRest === null ? "—" : num(rowRest)}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                  </Fragment>
-                );
-              })}
-              {!visibleGroups.length && (
-                <tr>
-                  <td colSpan={9} className="production-empty">
-                    {loading
-                      ? "Загружаю поставки…"
-                      : live
-                        ? "По выбранным фильтрам данных нет."
-                        : "Проверенные рабочие данные не загружены."}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+                      {remainingForGroup < 0
+                        ? `+${num(Math.abs(remainingForGroup))} сверх плана`
+                        : remainingForGroup === 0
+                          ? "План выполнен"
+                          : "В работе"}
+                    </span>
+                  )}
+                </div>
+                {!isCollapsed && (
+                  <div className="production-supply-card-body">
+                    <div className="production-department-grid">
+                      {group.departments.map((department) => (
+                        <DepartmentPanel
+                          key={department.id}
+                          department={department}
+                        />
+                      ))}
+                    </div>
+                    <PackingSummary group={group} />
+                    <div className="production-articles-section">
+                      <div className="production-articles-heading">
+                        <h3>Состав поставки</h3>
+                        <span>{num(group.rows.length)} артикулов</span>
+                      </div>
+                      <div className="production-table-wrap">
+                        <table className="production-table">
+                          <thead>
+                            <tr>
+                              <th>Направление</th>
+                              <th>Артикул</th>
+                              <th>Магазин</th>
+                              <th>План</th>
+                              <th>
+                                <Printer size={14} /> Напечатано
+                              </th>
+                              <th>
+                                <Scissors size={14} /> Порезано
+                              </th>
+                              <th>
+                                <Cube size={14} /> Упаковано
+                              </th>
+                              <th>Короба</th>
+                              <th>Осталось</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {group.rows.map((row) => {
+                              const rowRemaining =
+                                row.packed.complete && row.packed.value !== null
+                                  ? row.plan - row.packed.value
+                                  : null;
+                              return (
+                                <tr
+                                  className="production-article-row"
+                                  key={row.key}
+                                >
+                                  <td>
+                                    <span
+                                      className={`production-direction-label is-${row.department}`}
+                                    >
+                                      <DepartmentGlyph
+                                        department={row.department}
+                                        size={17}
+                                      />
+                                      {row.department === "roll"
+                                        ? "Рулонная печать"
+                                        : "Бокс"}
+                                    </span>
+                                  </td>
+                                  <td>
+                                    <strong>{row.article}</strong>
+                                  </td>
+                                  <td>
+                                    <span
+                                      title={[
+                                        ...new Set(
+                                          row.orders
+                                            .map(productionStoreIssue)
+                                            .filter(Boolean),
+                                        ),
+                                      ].join("; ")}
+                                      className={
+                                        row.store === "Не указан"
+                                          ? "production-missing-store"
+                                          : "production-store-tag"
+                                      }
+                                    >
+                                      {storeNumber(row.store)}
+                                    </span>
+                                  </td>
+                                  <td>
+                                    <strong>{num(row.plan)}</strong>
+                                  </td>
+                                  <td>
+                                    <FactCell
+                                      metric={row.printed}
+                                      plan={row.plan}
+                                    />
+                                  </td>
+                                  <td>
+                                    <FactCell
+                                      metric={row.cut}
+                                      plan={row.plan}
+                                    />
+                                  </td>
+                                  <td>
+                                    <ProgressCell
+                                      metric={row.packed}
+                                      plan={row.plan}
+                                    />
+                                  </td>
+                                  <td
+                                    className="production-no-fact"
+                                    title="Физические короба пока не подключены к этой сводке"
+                                  >
+                                    —
+                                  </td>
+                                  <td
+                                    className={
+                                      rowRemaining !== null && rowRemaining < 0
+                                        ? "production-over-value"
+                                        : ""
+                                    }
+                                  >
+                                    {rowRemaining === null
+                                      ? "—"
+                                      : num(rowRemaining)}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </article>
+            );
+          })}
+          {!visibleGroups.length && (
+            <div className="production-empty">
+              {loading
+                ? "Загружаю поставки…"
+                : live
+                  ? "По выбранным фильтрам данных нет."
+                  : "Проверенные рабочие данные не загружены."}
+            </div>
+          )}
         </div>
         <div className="production-table-foot">
           <span>
@@ -553,7 +791,7 @@ export function ProductionDashboard({
           </span>
           <span>
             <Truck size={14} /> Количество физических коробов не подключено к
-            сводке; здесь не подставляется число коробных позиций.
+            сводке.
           </span>
         </div>
       </section>

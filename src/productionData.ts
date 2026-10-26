@@ -10,6 +10,7 @@ export type Fact = {
 };
 type ArticleRow = {
   key: string;
+  department: "roll" | "box";
   article: string;
   store: string;
   plan: number;
@@ -17,6 +18,16 @@ type ArticleRow = {
   printed: Fact;
   cut: Fact;
   packed: Fact;
+};
+export type ProductionDepartment = {
+  id: "roll" | "box";
+  label: string;
+  rows: ArticleRow[];
+  orders: LiveOrder[];
+  plan: number;
+  printed: Fact;
+  cut: Fact;
+  sourceUrl?: string;
 };
 export type SupplyGroup = {
   key: string;
@@ -32,6 +43,7 @@ export type SupplyGroup = {
   cut: Fact;
   packed: Fact;
   stores: string[];
+  departments: ProductionDepartment[];
 };
 
 export function productionFact(values: (number | null | undefined)[]): Fact {
@@ -99,15 +111,36 @@ export function buildProductionGroups(
     );
     const grouped = new Map<string, LiveOrder[]>();
     for (const order of orders) {
+      const sheet = sheets.find(
+        (candidate) =>
+          candidate.sheetId === order.sheetId &&
+          (!order.sourceId ||
+            !candidate.sourceId ||
+            order.sourceId === candidate.sourceId),
+      );
+      const department: ArticleRow["department"] =
+        order.sourceId === "box-printing" || sheet?.sourceId === "box-printing"
+          ? "box"
+          : "roll";
       const store = productionStoreName(order),
-        articleKey = `${order.article}\u0000${store}`;
+        articleKey = `${department}\u0000${order.article.trim().toLocaleUpperCase("ru-RU")}\u0000${store}`;
       grouped.set(articleKey, [...(grouped.get(articleKey) || []), order]);
     }
     const rows: ArticleRow[] = [...grouped.entries()].map(
       ([articleKey, items]) => {
         const first = items[0];
+        const department: ArticleRow["department"] =
+          first.sourceId === "box-printing" ||
+          sheets.some(
+            (sheet) =>
+              sheet.sheetId === first.sheetId &&
+              sheet.sourceId === "box-printing",
+          )
+            ? "box"
+            : "roll";
         return {
-          key: `${primarySheet.sourceId}:${primarySheet.sheetId}:${articleKey}`,
+          key: `${key}:${articleKey}`,
+          department,
           article: first.article,
           store: productionStoreName(first),
           plan: items.reduce((sum, item) => sum + item.quantity, 0),
@@ -118,6 +151,38 @@ export function buildProductionGroups(
         };
       },
     );
+    const departments: ProductionDepartment[] = [];
+    for (const { id, label, sourceId } of [
+      { id: "roll", label: "Рулонная печать", sourceId: "roll-printing" },
+      { id: "box", label: "Бокс", sourceId: "box-printing" },
+    ] as const) {
+      const departmentOrders = orders.filter((order) => {
+        const sheet = sheets.find(
+          (candidate) =>
+            candidate.sheetId === order.sheetId &&
+            (!order.sourceId ||
+              !candidate.sourceId ||
+              order.sourceId === candidate.sourceId),
+        );
+        return order.sourceId === sourceId || sheet?.sourceId === sourceId;
+      });
+      const departmentRows = rows.filter((row) => row.department === id);
+      if (!departmentRows.length) continue;
+      const departmentSheets = sheets.filter(
+        (sheet) => sheet.sourceId === sourceId,
+      );
+      departments.push({
+        id,
+        label,
+        rows: departmentRows,
+        orders: departmentOrders,
+        plan: departmentOrders.reduce((sum, item) => sum + item.quantity, 0),
+        printed: productionFact(departmentOrders.map(rollPrinted)),
+        cut: productionFact(departmentOrders.map(rollCut)),
+        sourceUrl: departmentSheets.find((sheet) => sheet.spreadsheetUrl)
+          ?.spreadsheetUrl,
+      });
+    }
     const stores = [...new Set(rows.map((row) => row.store))].sort((a, b) =>
       a.localeCompare(b, "ru-RU", { numeric: true }),
     );
@@ -135,6 +200,7 @@ export function buildProductionGroups(
       cut: productionFact(orders.map(rollCut)),
       packed: productionFact(orders.map((item) => item.packed)),
       stores,
+      departments,
     };
   });
 }
