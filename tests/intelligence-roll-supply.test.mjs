@@ -50,7 +50,7 @@ function googleHarness({
   const descriptor = box ? DEPARTMENTS.box.template : ROLL_PRINTING_SHEET;
   const sheets = new Map(),
     requests = [],
-    counters = { writes: 0 };
+    counters = { writes: 0, driveChecks: 0 };
   let loseWriteResponseAfterAcceptance = loseWriteResponse;
   const template = {
     properties: {
@@ -159,11 +159,13 @@ function googleHarness({
 
   const fetcher = async (url, options = {}) => {
     const parsed = new URL(url);
-    if (parsed.hostname === "www.googleapis.com")
+    if (parsed.hostname === "www.googleapis.com") {
+      counters.driveChecks++;
       return response({
         id: documentId,
         capabilities: { canEdit: true },
       });
+    }
     assert.equal(parsed.hostname, "sheets.googleapis.com");
     if (parsed.pathname.endsWith(":batchUpdate")) {
       counters.writes++;
@@ -319,6 +321,8 @@ test("box destination copies its own template, initializes checkbox facts and ne
   const writer = new ProductionSupplyWriter({ department: "box", credentialWriter: { token: async () => "test-token", metrics: { readRequests: 0, writeRequests: 0 } }, fetcher: google.fetcher });
   const input = payload("11111111-1111-4111-8111-111111111111");
   const plan = await writer.prepareCreate(input);
+  assert.equal(google.counters.driveChecks, 0, "cloud preflight must stay on the allowlisted Sheets API");
+  assert.equal(google.counters.writes, 0, "permission is checked by the first journaled write, not during preflight");
   plan.manifest = { version: 1, id: "RITM-SUPPLY-" + input.operationId, revision: input.operationId, name: input.name,
     parts: [{ department: "box", documentId: DEPARTMENTS.box.documentId, sheetId: plan.sheetId }], ready: false };
   await writer.execute(plan);

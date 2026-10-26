@@ -143,6 +143,13 @@ export class ProductionSupplyWriter extends RollSupplySheetsWriter {
       box: department === "box",
     });
   }
+  async verifyEditAccess() {
+    // The Sites writer token is scoped to Google Sheets, and its cloud fetch
+    // guard intentionally rejects Drive API calls. Preparation reads the exact
+    // target through Sheets; the first journaled batchUpdate is the authoritative
+    // write-permission check, so a denial remains recoverable in the operation log.
+    return true;
+  }
   async manifest(sheetId) {
     const data = await this.request(
       `https://sheets.googleapis.com/v4/spreadsheets/${this.documentId}?fields=sheets(properties(sheetId),developerMetadata(metadataKey,metadataValue))`,
