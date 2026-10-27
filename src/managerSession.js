@@ -31,6 +31,7 @@ export function installManagerSessionFetch() {
       || path === "/api/auth/logout"
       || path === "/api/assembly"
       || path === "/api/printing"
+      || path === "/api/warehouse"
       || path === "/api/cloud/registry"
       || path === "/api/roll-supplies"
       || path === "/api/assembly-transfers"

@@ -28,6 +28,12 @@ export default defineConfig({
     {
       name: "ritm-printing-api",
       configureServer(server) {
+        server.middlewares.use("/api/warehouse", async (req, res) => {
+          const response = await worker.fetch(new Request("http://localhost/api/warehouse", { method: req.method || "GET" }), {});
+          res.statusCode = response.status;
+          response.headers.forEach((value, key) => res.setHeader(key, value));
+          res.end(await response.text());
+        });
         server.middlewares.use("/api/printing", async (req, res) => {
           try {
             const response = await worker.fetch(

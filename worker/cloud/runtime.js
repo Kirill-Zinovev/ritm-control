@@ -12,13 +12,14 @@ import { verifyBridge } from "./bridge.js";
 import { externalLease } from "./externalLease.js";
 import { recordCutover } from "./cutover.js";
 import { exportCloud } from "./export.js";
+import { readWarehouseSnapshot } from "./warehouse.js";
 
 const signIn = "/?page=supplies";
 const methods = (request, allowed) => { if (!allowed.includes(request.method)) throw new CloudError("method_not_allowed", "Метод запроса не поддерживается.", 405); };
 
 function managerRouteAllowed(method, path) {
   if (method === "GET") return [
-    "/api/assembly", "/api/printing", "/api/cloud/registry",
+    "/api/assembly", "/api/printing", "/api/warehouse", "/api/cloud/registry",
     "/api/roll-supplies/status", "/api/roll-supplies/operations",
     "/api/assembly-transfers/sources", "/api/assembly-transfers/links",
     "/api/assembly-transfers/source", "/api/assembly-transfers/operation",
@@ -214,6 +215,10 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
     if (path === "/api/printing" || path === "/api/assembly") {
       methods(request, ["GET"]);
       return json(await readSnapshot(path.endsWith("printing") ? "printing" : "assembly", url, bindings, store, { fetcher }));
+    }
+    if (path === "/api/warehouse") {
+      methods(request, ["GET"]);
+      return json(await readWarehouseSnapshot(url, bindings, store, { fetcher }));
     }
     const getPaths = ["/api/roll-supplies/status", "/api/roll-supplies/operations", "/api/assembly-transfers/sources", "/api/assembly-transfers/links", "/api/assembly-transfers/source", "/api/assembly-transfers/operation"];
     if (getPaths.includes(path)) {

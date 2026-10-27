@@ -63,6 +63,8 @@ import { DesignPreview } from "./DesignPreview";
 import { ProductionDashboard } from "./ProductionDashboard";
 import { OverviewDashboard } from "./OverviewDashboard";
 import { MachineWorkload } from "./MachineWorkload";
+import { WarehouseDashboard, type WarehouseView } from "./WarehouseDashboard";
+import { useLiveWarehouse } from "./liveWarehouse";
 import { RitmBackdrop } from "./RitmBackdrop";
 import { useCloudAuth } from "./CloudAuth";
 import { ManagerAccessPanel } from "./ManagerAccessPanel";
@@ -169,6 +171,8 @@ function AppShell() {
   const [query, setQuery] = useState("");
   const [site, setSite] = useState("Все участки");
   const [mode, setMode] = useState<"demo" | "imported">("imported");
+  const [stockView, setStockView] = useState<WarehouseView>("cartons");
+  const warehouse = useLiveWarehouse(page === "stock" && mode === "imported" && stockView !== "stock");
   const [demo, setDemo] = useState(demoDataset);
   const [real, setReal] = useState<Dataset>(() =>
     readStorage("ritm-real-v1", emptyDataset()),
@@ -284,6 +288,10 @@ function AppShell() {
     }
   };
   const refresh = () => {
+    if (page === "stock" && stockView !== "stock" && mode === "imported") {
+      void warehouse.reload(true);
+      return;
+    }
     if (page === "assembly") {
       void assemblyLive.reload(true);
       return;
@@ -309,7 +317,7 @@ function AppShell() {
     }, 450);
   };
   const printingKnown = mode === "demo" || !!live.value;
-  const activeSourceLoading = live.loading || (page === "overview" && mode === "imported" && assemblyLive.loading);
+  const activeSourceLoading = page === "stock" && stockView !== "stock" ? warehouse.loading : live.loading || (page === "overview" && mode === "imported" && assemblyLive.loading);
   const contains = (value: string) =>
     value.toLocaleLowerCase("ru").includes(query.toLocaleLowerCase("ru"));
   const workPeople = data.employees.filter(
@@ -983,11 +991,11 @@ function AppShell() {
                 </Badge>
               )}
             </div>
-            <p>{SUBTITLES[page]}</p>
+            <p>{page === "stock" && stockView !== "stock" ? "Короба Assembly и их состав по поставкам" : SUBTITLES[page]}</p>
           </div>
           {page !== "intelligence" &&
             page !== "assembly" &&
-            page !== "production" && page !== "machines" && (
+            page !== "production" && page !== "machines" && page !== "stock" && (
               <div className="header-controls">
                 <div
                   className="segments"
@@ -1023,7 +1031,9 @@ function AppShell() {
           <div className="context-bar">
             {page !== "sources" && (
               <span>
-                {page === "production" ? (
+                {page === "stock" && stockView !== "stock" ? (
+                  mode === "demo" ? "Для просмотра коробов выберите рабочие данные." : warehouse.loading ? "Обновляю данные коробов…" : warehouse.error ? "Не удалось обновить короба." : warehouse.value ? `Короба Assembly · обновлено ${new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" }).format(new Date(warehouse.value.checkedAt))} · автообновление 5 мин при открытой вкладке` : "Подключаю короба Assembly…"
+                ) : page === "production" ? (
                   live.loading ? (
                     "Обновляю данные поставок и выпуска…"
                   ) : live.error ? (
@@ -1555,6 +1565,8 @@ function AppShell() {
         )}
         {page === "stock" && (
           <>
+            <WarehouseDashboard value={warehouse.value} loading={warehouse.loading} error={mode === "demo" ? "Короба доступны в режиме «Рабочие данные»." : warehouse.error} view={stockView} onViewChange={setStockView} onRefresh={() => void warehouse.reload(true)} />
+            {stockView === "stock" && <>
             <div className="metrics three">
               {metric("Артикулов на складе", num(stockRows.length), Cube)}
               {metric(
@@ -1644,6 +1656,7 @@ function AppShell() {
               Остатки — готовый товар. Новый файл заменяет предыдущий снимок, а
               количество по разным ячейкам складывается.
             </Notice>
+            </>}
           </>
         )}
         {page === "supplies" && (

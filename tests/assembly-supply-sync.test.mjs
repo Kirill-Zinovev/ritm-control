@@ -1728,6 +1728,22 @@ test('closing a carton requires current data version and does not happen automat
   assert.equal(f.api.getBoxDetails(data.shipment.id, data.shipment.directionId, carton.cartonId).carton.closed, true);
 });
 
+test('a partially filled carton may be closed without changing its contents', () => {
+  const f = fixture();
+  const data = f.api.getInitialData();
+  const item = data.items[0];
+  appendPacking(f, item, 50);
+  const carton = seedCarton(f, data.shipment, '1мск212', { cartonId: 'partial-close-box' });
+  seedAllocation(f, data.shipment, item, carton.cartonId, 50, 'alloc-partial-box');
+  const before = f.api.getBoxDetails(data.shipment.id, data.shipment.directionId, carton.cartonId);
+  assert.equal(before.carton.fillRatio, 0.5);
+  const result = f.api.closeCarton({ shipmentId: data.shipment.id, directionId: data.shipment.directionId, cartonId: carton.cartonId, dataVersion: before.dataVersion, idempotencyKey: 'close-partial-key-001' });
+  assert.equal(result.ok, true);
+  const after = f.api.getBoxDetails(data.shipment.id, data.shipment.directionId, carton.cartonId);
+  assert.equal(after.carton.closed, true);
+  assert.equal(after.carton.fillRatio, 0.5);
+});
+
 test('closed cartons are fetched as 25-row pages only when requested', () => {
   const f = fixture();
   const data = f.api.getInitialData();

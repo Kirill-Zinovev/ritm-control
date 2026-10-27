@@ -3,6 +3,7 @@ import { loadAssembly } from "./assembly.js";
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === "/api/warehouse") return new Response(JSON.stringify({ ok: false, error: "warehouse_not_configured", message: "Локальное подключение к коробам не настроено." }), { status: 503, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
     if (url.pathname === "/api/assembly") {
       const headers = {
         "content-type": "application/json; charset=utf-8",
