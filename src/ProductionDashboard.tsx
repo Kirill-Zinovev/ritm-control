@@ -265,14 +265,16 @@ export function ProductionDashboard({
   live,
   loading,
   error,
+  initialSupply = "all",
 }: {
   live: LivePrinting | null;
   loading: boolean;
   error: string;
+  initialSupply?: string;
 }) {
   const [market, setMarket] = useState("all");
   const [store, setStore] = useState("all");
-  const [supply, setSupply] = useState("all");
+  const [supply, setSupply] = useState(initialSupply);
   const [search, setSearch] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const groups = useMemo(() => buildGroups(live), [live]);

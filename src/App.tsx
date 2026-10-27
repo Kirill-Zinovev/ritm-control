@@ -61,6 +61,7 @@ import { FBO_URL, useLiveAssembly } from "./liveAssembly";
 import { AssemblyAnalytics } from "./AssemblyAnalytics";
 import { DesignPreview } from "./DesignPreview";
 import { ProductionDashboard } from "./ProductionDashboard";
+import { OverviewDashboard } from "./OverviewDashboard";
 import { MachineWorkload } from "./MachineWorkload";
 import { RitmBackdrop } from "./RitmBackdrop";
 import { useCloudAuth } from "./CloudAuth";
@@ -187,6 +188,7 @@ function AppShell() {
   const [printer, setPrinter] = useState("all");
   const [printerProfileId, setPrinterProfileId] = useState<string | null>(null);
   const [supplyId, setSupplyId] = useState("П-0124");
+  const [productionSelection, setProductionSelection] = useState("all");
   const [market, setMarket] = useState("Все маркетплейсы");
   const [completed, setCompleted] = useState(false);
   const [sidebar, setSidebar] = useState(false);
@@ -263,8 +265,9 @@ function AppShell() {
     addEventListener("beforeunload", guard);
     return () => removeEventListener("beforeunload", guard);
   }, [dirty]);
-  const go = (id: Page) => {
+  const go = (id: Page, selectedSupply?: string) => {
     const next = pageForRole(id, cloudAuth.role);
+    if (next === "production") setProductionSelection(selectedSupply || "all");
     setPage(next);
     setPrinterProfileId(null);
     setQuery("");
@@ -291,6 +294,7 @@ function AppShell() {
     }
     if (mode === "imported") {
       void live.reload(true);
+      if (page === "overview") void assemblyLive.reload(true);
       return;
     }
     if (busy) return;
@@ -305,7 +309,7 @@ function AppShell() {
     }, 450);
   };
   const printingKnown = mode === "demo" || !!live.value;
-  const activeSourceLoading = live.loading;
+  const activeSourceLoading = live.loading || (page === "overview" && mode === "imported" && assemblyLive.loading);
   const contains = (value: string) =>
     value.toLocaleLowerCase("ru").includes(query.toLocaleLowerCase("ru"));
   const workPeople = data.employees.filter(
@@ -1070,20 +1074,15 @@ function AppShell() {
           </div>
         )}
         {page === "intelligence" && <AICenter />}
-        {page === "overview" && (
+        {page === "overview" && mode === "imported" && (
+          <OverviewDashboard live={live.value} liveError={live.error} assembly={assemblyLive.value} assemblyError={assemblyLive.error} date={date} period={period} go={go} />
+        )}
+        {page === "overview" && mode === "demo" && (
           <>
             <div className="metrics four">
               {metric(
-                mode === "imported" ? "Листов поставок" : "Поставки в работе",
-                mode === "imported"
-                  ? live.value
-                    ? num(live.value.sheets.length)
-                    : "—"
-                  : num(
-                      data.supplies.filter(
-                        (s) => lineTotals(s).shipped < lineTotals(s).plan,
-                      ).length,
-                    ),
+                "Поставки в работе",
+                num(data.supplies.filter((s) => lineTotals(s).shipped < lineTotals(s).plan).length),
                 Truck,
               )}
               {metric(
@@ -1108,9 +1107,6 @@ function AppShell() {
                 Printer,
               )}
             </div>
-            {mode === "imported" ? (
-              liveSupplyPanel
-            ) : (
               <section className="panel">
                 <div className="panel-heading">
                   <h2>Поставки и этапы</h2>
@@ -1121,7 +1117,6 @@ function AppShell() {
                 </div>
                 {supplyTable}
               </section>
-            )}
             <div className="split overview-bottom">
               <section className="panel">
                 <div className="panel-heading">
@@ -1555,6 +1550,7 @@ function AppShell() {
             live={live.value}
             loading={live.loading}
             error={live.error}
+            initialSupply={productionSelection}
           />
         )}
         {page === "stock" && (

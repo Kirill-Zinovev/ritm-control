@@ -1,0 +1,43 @@
+.ov-dashboard { display: grid; gap: 18px; color: #10213a; }
+.ov-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.ov-metric { display: flex; align-items: flex-start; gap: 15px; min-width: 0; padding: 22px; background: #fff; border: 1px solid #e1eaf5; border-radius: 15px; }
+.ov-icon, .ov-machine-icon { display: grid; flex: none; place-items: center; width: 48px; height: 48px; border-radius: 14px; color: #1764f5; background: #eaf2ff; }
+.ov-icon.is-teal { color: #008c72; background: #e4f8f2; }
+.ov-metric > div { min-width: 0; display: grid; gap: 4px; }
+.ov-metric > div > span { font-size: 14px; color: #4b5d78; }
+.ov-metric strong { font-size: clamp(23px, 2vw, 32px); line-height: 1.15; font-variant-numeric: tabular-nums; }
+.ov-metric small, .ov-panel-note, .ov-heading p, .ov-supply-link small, .ov-machine small { color: #526b8c; font-size: 12px; line-height: 1.45; }
+.ov-panel { min-width: 0; padding: 20px 22px; background: #fff; border: 1px solid #e0eaf5; border-radius: 16px; }
+.ov-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 17px; }
+.ov-heading h2 { margin: 0; color: #10213a; font-size: 20px; line-height: 1.25; }
+.ov-heading p { margin: 5px 0 0; }
+.ov-link { display: inline-flex; align-items: center; gap: 6px; flex: none; padding: 5px 0; border: 0; background: transparent; color: #155eef; font-weight: 650; font-size: 13px; cursor: pointer; }
+.ov-link:hover, .ov-supply-link:hover strong { color: #003eaf; text-decoration: underline; }
+.ov-link:focus-visible, .ov-supply-link:focus-visible, .ov-machine:focus-visible, .ov-attention button:focus-visible { outline: 3px solid #79a9ff; outline-offset: 3px; }
+.ov-table-wrap { overflow-x: auto; }
+.ov-table { width: 100%; min-width: 860px; border-collapse: collapse; table-layout: fixed; }
+.ov-table th { padding: 11px 12px; background: #f1f6fc; color: #526b8c; font-size: 12px; text-align: left; font-weight: 600; }
+.ov-table th:first-child { width: 29%; border-radius: 8px 0 0 8px; }
+.ov-table th:nth-child(2) { width: 12%; }
+.ov-table th:last-child { border-radius: 0 8px 8px 0; }
+.ov-table td { padding: 15px 12px; border-bottom: 1px solid #e9eff7; vertical-align: middle; font-size: 14px; }
+.ov-table tbody tr:last-child td { border-bottom: 0; }
+.ov-supply-link { display: flex; align-items: center; gap: 12px; padding: 0; border: 0; background: transparent; color: #10213a; text-align: left; cursor: pointer; }
+.ov-supply-link > span:last-child { display: grid; gap: 4px; min-width: 0; }
+.ov-market { display: grid; flex: none; place-items: center; min-width: 48px; height: 37px; padding: 0 6px; border-radius: 9px; color: #fff; font-size: 10px; font-weight: 800; letter-spacing: .02em; }
+.ov-market.is-ozon { background: #005bff; }.ov-market.is-wb { background: #a229bd; }.ov-market.is-unknown { background: #70829b; }
+.ov-progress { min-width: 120px; display: grid; gap: 5px; font-variant-numeric: tabular-nums; }
+.ov-progress-name { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.ov-progress-values { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+.ov-progress-values b { color: #155eef; font-size: 12px; }.ov-packed .ov-progress-values b { color: #008c72; }
+.ov-track { height: 7px; overflow: hidden; background: #e6edf5; border-radius: 10px; }.ov-track i { display: block; height: 100%; background: #2f83ed; border-radius: inherit; }.ov-packed .ov-track i { background: #18b89a; }
+.ov-progress small { color: #526b8c; font-size: 11px; }.ov-progress .ov-over { color: #008567; }
+.ov-footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-top: 10px; color: #526b8c; font-size: 12px; }
+.ov-panel-note { margin: 14px 0 0; }.ov-empty { margin: 0; padding: 24px 0; color: #526b8c; font-size: 14px; }
+.ov-bottom { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.ov-seasonal-list { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; }.ov-seasonal-item { display: grid; gap: 5px; min-width: 0; padding: 13px 15px; border: 1px solid #e1eaf5; border-radius: 10px; background: #f8fbff; color: #10213a; text-align: left; cursor: pointer; }.ov-seasonal-item:hover { background: #f0f6ff; }.ov-seasonal-item:focus-visible { outline: 3px solid #79a9ff; outline-offset: 3px; }.ov-seasonal-item strong { overflow-wrap: anywhere; font-size: 14px; }.ov-seasonal-item span, .ov-seasonal-item small { color: #526b8c; font-size: 12px; }
+.ov-machines { display: grid; }.ov-machine { display: grid; grid-template-columns: auto minmax(0,1fr) minmax(135px,.8fr); align-items: center; gap: 12px; width: 100%; padding: 12px 0; border: 0; border-bottom: 1px solid #e9eff7; background: transparent; color: #10213a; text-align: left; cursor: pointer; }.ov-machine:last-child { border-bottom: 0; }.ov-machine:hover { background: #f7faff; }.ov-machine-icon { width: 39px; height: 39px; border-radius: 11px; }.ov-machine > span:nth-child(2) { display: grid; gap: 3px; }.ov-machine strong { font-size: 14px; }.ov-machine .ov-progress-values strong { font-size: 12px; }
+.ov-team-stats { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; }.ov-team-stats .ov-metric { display: block; padding: 14px; background: #f4f8ff; border: 0; border-radius: 11px; }.ov-team-stats .ov-icon { width: 36px; height: 36px; margin-bottom: 9px; border-radius: 10px; }.ov-team-stats .ov-metric > div > span { font-size: 12px; }.ov-team-stats .ov-metric strong { font-size: 21px; }
+.ov-warning, .ov-attention { display: flex; gap: 12px; align-items: flex-start; padding: 14px 17px; color: #80510d; background: #fff8e9; border: 1px solid #f5d59c; border-radius: 12px; font-size: 13px; }.ov-warning svg, .ov-attention svg { flex: none; }.ov-attention > div { display: grid; gap: 6px; }.ov-attention button { display: flex; align-items: center; gap: 7px; padding: 0; border: 0; background: none; color: #80510d; text-align: left; cursor: pointer; }.ov-attention button:hover { text-decoration: underline; }
+@media (max-width: 1250px) { .ov-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }.ov-bottom { grid-template-columns: 1fr; } }
+@media (max-width: 650px) { .ov-dashboard { gap: 12px; }.ov-metrics { gap: 9px; }.ov-metric { padding: 14px; gap: 10px; }.ov-metric strong { font-size: 22px; }.ov-icon { width: 38px; height: 38px; border-radius: 11px; }.ov-panel { padding: 16px; }.ov-heading h2 { font-size: 18px; }.ov-seasonal-list, .ov-team-stats { grid-template-columns: 1fr; }.ov-team-stats .ov-metric { display: flex; align-items: center; }.ov-team-stats .ov-icon { margin: 0; }.ov-machine { grid-template-columns: auto minmax(0,1fr); }.ov-machine-progress { grid-column: 2; }.ov-metric > div > span { font-size: 12px; } }
