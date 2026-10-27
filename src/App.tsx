@@ -1565,7 +1565,7 @@ function AppShell() {
         )}
         {page === "stock" && (
           <>
-            <WarehouseDashboard value={warehouse.value} loading={warehouse.loading} error={mode === "demo" ? "Короба доступны в режиме «Рабочие данные»." : warehouse.error} view={stockView} onViewChange={setStockView} onRefresh={() => void warehouse.reload(true)} />
+            <WarehouseDashboard value={warehouse.value} loading={warehouse.loading} error={mode === "demo" ? "Короба доступны в режиме «Рабочие данные»." : warehouse.error} view={stockView} onViewChange={setStockView} onRefresh={() => warehouse.reload(true)} />
             {stockView === "stock" && <>
             <div className="metrics three">
               {metric("Артикулов на складе", num(stockRows.length), Cube)}

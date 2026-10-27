@@ -1,6 +1,7 @@
 import { CloudError } from "./access.js";
 import { cloudConfig, sourceId } from "./config.js";
 import { digest } from "./store.js";
+import { ensureWarehouseDispatchSchema } from "./warehouseDispatch.js";
 import { validateApi } from "../../agent/adapters.js";
 
 const fail = (message) => { throw new CloudError("migration_rejected", message, 409); };
@@ -20,6 +21,13 @@ export async function validateMigration(envelope, bindings) {
   if (!payload.metadata || Object.keys(payload.metadata).some((key) => !["productionSupplies", "productionSupplyOperations", "rollPrintingAdditionalSheets"].includes(key))) fail("Снимок содержит неподдерживаемые настройки.");
   for (const value of Object.values(payload.metadata)) if (!Array.isArray(value)) fail("Реестр поставок имеет неверный формат.");
   for (const key of ["rollOperations", "syncEvents", "transferPreviews", "pendingWrites", "snapshots"]) if (!Array.isArray(payload[key]) || payload[key].length > 100000) fail("Некорректный размер истории переноса.");
+  const cartonDispatch = payload.warehouseCartonDispatch ?? [];
+  if (!Array.isArray(cartonDispatch) || cartonDispatch.length > 100000) fail("Некорректный размер статусов коробов.");
+  const cartonIds = new Set();
+  for (const row of cartonDispatch) {
+    if (!row || typeof row.cartonId !== "string" || !row.cartonId.trim() || row.cartonId.length > 160 || cartonIds.has(row.cartonId) || typeof row.shipmentId !== "string" || !row.shipmentId.trim() || !["sent", "pending"].includes(row.status) || !Number.isFinite(Date.parse(row.changedAt)) || typeof row.changedBy !== "string" || !row.changedBy.trim() || (row.sentAt !== null && row.sentAt !== undefined && !Number.isFinite(Date.parse(row.sentAt)))) fail("Обнаружен повреждённый статус короба.");
+    cartonIds.add(row.cartonId); text(row);
+  }
   const operations = [...(payload.metadata.productionSupplyOperations || []).map((value) => ({ kind: "production", value })), ...payload.rollOperations.map((value) => ({ kind: "roll", value }))];
   const identities = new Set();
   for (const row of operations) {
@@ -63,6 +71,7 @@ export async function importMigration(envelope, bindings, store) {
     scope.meta("migrationReady", false);
     await scope.checkpoint();
     const payload = envelope.payload;
+    await ensureWarehouseDispatchSchema(store.db);
     const statements = [];
     const condition = "EXISTS(SELECT 1 FROM cloud_leases WHERE name=? AND owner=? AND fence=? AND expires_at>?)";
     const insert = (sql, values) => statements.push(store.db.prepare(sql.replace("{lease}", condition)).bind(...values, lease.name, lease.owner, lease.fence, store.now()));
@@ -75,6 +84,7 @@ export async function importMigration(envelope, bindings, store) {
     }
     for (const row of payload.transferPreviews) insert("INSERT INTO cloud_transfer_previews(id,expires_at,payload) SELECT ?,?,? WHERE {lease} ON CONFLICT(id) DO NOTHING", [row.id, row.expires_at, row.payload]);
     for (const row of payload.syncEvents) insert("INSERT INTO cloud_sync_events(id,action,created_at,attempts,next_attempt_at,delivered_at,last_error,payload,outcome,receipt) SELECT ?,?,?,?,?,?,?,?,?,? WHERE {lease} ON CONFLICT(id) DO NOTHING", [row.id, row.action, row.created_at, row.attempts, row.next_attempt_at, row.delivered_at ?? null, row.last_error ?? null, row.payload ?? null, row.outcome ?? null, row.receipt ?? null]);
+    for (const row of payload.warehouseCartonDispatch || []) insert("INSERT INTO ritm_warehouse_carton_dispatch(carton_id,shipment_id,is_sent,sent_at,changed_at,changed_by) SELECT ?,?,?,?,?,? WHERE {lease} ON CONFLICT(carton_id) DO NOTHING", [row.cartonId, row.shipmentId, row.status === "sent" ? 1 : 0, row.sentAt ? Date.parse(row.sentAt) : null, Date.parse(row.changedAt), row.changedBy]);
     for (let index = 0; index < statements.length; index += 80) {
       await store.renew(lease);
       await store.db.batch(statements.slice(index, index + 80));
@@ -84,6 +94,14 @@ export async function importMigration(envelope, bindings, store) {
     scope = await store.scope(lease);
     for (const [key, value] of Object.entries(state)) if (JSON.stringify(scope.meta(key)) !== JSON.stringify(value)) fail("Реестр не совпал после переноса.");
     if (scope.operations.size !== operations.length || scope.events.size !== payload.syncEvents.length || scope.previews.size !== payload.transferPreviews.length) fail("Количество записей после переноса не совпало.");
+    const dispatchExpected = payload.warehouseCartonDispatch || [];
+    const dispatchResult = await store.db.prepare("SELECT carton_id,shipment_id,is_sent,sent_at,changed_at,changed_by FROM ritm_warehouse_carton_dispatch").all();
+    const dispatchActual = new Map((dispatchResult.results || []).map((row) => [String(row.carton_id), row]));
+    if (dispatchActual.size !== dispatchExpected.length) fail("Количество статусов коробов после переноса не совпало.");
+    for (const row of dispatchExpected) {
+      const actual = dispatchActual.get(row.cartonId);
+      if (!actual || actual.shipment_id !== row.shipmentId || Number(actual.is_sent) !== (row.status === "sent" ? 1 : 0) || (actual.sent_at ?? null) !== (row.sentAt ? Date.parse(row.sentAt) : null) || actual.changed_at !== Date.parse(row.changedAt) || actual.changed_by !== row.changedBy) fail("Статус короба после переноса не совпал.");
+    }
     for (const { kind, value } of operations) if (JSON.stringify(scope.operations.get(kind + ":" + value.id)?.value) !== JSON.stringify(value)) fail("Содержимое операции не совпало после переноса.");
     for (const row of payload.syncEvents) {
       const actual = scope.syncEvent(row.id);
@@ -91,7 +109,7 @@ export async function importMigration(envelope, bindings, store) {
     }
     for (const row of payload.transferPreviews) if (scope.transferPreview(row.id)?.payload !== row.payload || scope.transferPreview(row.id)?.expires_at !== row.expires_at) fail("Проверенный состав не совпал после переноса.");
     for (const row of payload.snapshots) await store.saveSnapshot(row.kind, row.value, lease, Date.parse(row.at));
-    const receipt = { ok: true, id: envelope.id, digest: envelope.digest, importedAt: new Date(store.now()).toISOString(), counts: { productionOperations: operations.filter((row) => row.kind === "production").length, rollOperations: payload.rollOperations.length, syncEvents: payload.syncEvents.length, transferPreviews: payload.transferPreviews.length, snapshots: payload.snapshots.length }, writesEnabled: false };
+    const receipt = { ok: true, id: envelope.id, digest: envelope.digest, importedAt: new Date(store.now()).toISOString(), counts: { productionOperations: operations.filter((row) => row.kind === "production").length, rollOperations: payload.rollOperations.length, syncEvents: payload.syncEvents.length, transferPreviews: payload.transferPreviews.length, snapshots: payload.snapshots.length, warehouseCartonDispatch: dispatchExpected.length }, writesEnabled: false };
     await store.renew(lease);
     const guard = "EXISTS(SELECT 1 FROM cloud_leases WHERE name=? AND owner=? AND fence=? AND expires_at>?)";
     const fence = [lease.name, lease.owner, lease.fence, store.now()];

@@ -62,6 +62,10 @@ Every carton belongs to exactly one catalog store. Resolve the selected article'
 
 Show warehouse cartons only for shipment IDs present in the current roll/box production snapshot. Hide cartons and their contents for deleted supplies from warehouse lists and totals without deleting or rewriting Assembly carton history. If the active supply roster cannot be confirmed, show the last verified warehouse snapshot with an explicit stale warning; never present unverified totals as current.
 
+## Owner-confirmed warehouse dispatch status (2026-10-27)
+
+Managers can mark a physically departed, closed carton as «Отправлен». Keep this dispatch state outside Assembly sheets and history. The default warehouse list excludes sent cartons; the «Отправлены» filter keeps them discoverable, and managers can return a carton to the unsent list. Reconfirm the current supply and carton snapshot before changing status. Preserve the status in the Sites operational export/import.
+
 ## Owner-confirmed shift norms (2026-10-16)
 
 Assembly reads the owner's visible `нормы` sheet in its existing backing workbook. Norms are per person per shift. Reuse the inspected FBO formulas: machine cutting coefficient = pieces × catalog `Кол-во листов` / `Резка, л`; manual cutting/assembly/other coefficient = pieces / `Норма резки и прочего`; packaging coefficient = pieces / `Упаковка`. A person may perform all operations; their contributions add across the day's app supplies. The packaging guide to coefficient 1 is the selected type's packaging norm × max(0, 1 − today's sum). It is guidance, not a cap on production entry. Preserve separately labelled operation coefficients. Retain saved WorkLog coefficients and norms; missing historical coefficients remain unknown. Do not add FBO history again to the app's WorkLog totals. Read shift norms fresh before saving, and keep quantity inputs in pieces; expose the sheet conversion for cutting. The observed FBO blank sheet-count rule is multiplier 1, while missing/error catalog fields remain unknown.

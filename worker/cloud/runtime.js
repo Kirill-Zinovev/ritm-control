@@ -13,6 +13,7 @@ import { externalLease } from "./externalLease.js";
 import { recordCutover } from "./cutover.js";
 import { exportCloud } from "./export.js";
 import { activeWarehouseShipmentIds, readWarehouseSnapshot } from "./warehouse.js";
+import { listWarehouseCartonDispatch, setWarehouseCartonDispatch } from "./warehouseDispatch.js";
 
 const signIn = "/?page=supplies";
 const methods = (request, allowed) => { if (!allowed.includes(request.method)) throw new CloudError("method_not_allowed", "Метод запроса не поддерживается.", 405); };
@@ -27,6 +28,7 @@ function managerRouteAllowed(method, path) {
   return method === "POST" && [
     "/api/roll-supplies", "/api/roll-supplies/preview",
     "/api/assembly-transfers", "/api/assembly-transfers/preview",
+    "/api/warehouse/dispatch",
   ].includes(path);
 }
 
@@ -219,11 +221,54 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
     if (path === "/api/warehouse") {
       methods(request, ["GET"]);
       const printing = await readSnapshot("printing", url, bindings, store, { fetcher });
-      return json(await readWarehouseSnapshot(url, bindings, store, {
+      const snapshot = await readWarehouseSnapshot(url, bindings, store, {
         fetcher,
         activeShipmentIds: activeWarehouseShipmentIds(printing),
         rosterStale: printing.stale === true || printing.refreshFailed === true,
-      }));
+      });
+      const dispatch = await listWarehouseCartonDispatch(bindings.DB);
+      return json({ ...snapshot, cartons: snapshot.cartons.map((carton) => {
+        const state = dispatch.get(carton.id);
+        return {
+          ...carton,
+          dispatchStatus: state?.shipmentId === carton.shipmentId ? state.status : "pending",
+          sentAt: state?.shipmentId === carton.shipmentId ? state.sentAt : null,
+          dispatchChangedAt: state?.shipmentId === carton.shipmentId ? state.changedAt : null,
+          dispatchChangedBy: state?.shipmentId === carton.shipmentId ? state.changedBy : null,
+        };
+      }) });
+    }
+    if (path === "/api/warehouse/dispatch") {
+      methods(request, ["POST"]);
+      if (principal?.role !== "owner" && principal?.role !== "manager")
+        throw new CloudError("manager_required", "Войдите в RITM как владелец или менеджер, чтобы изменить статус короба.", 401);
+      const input = await readJson(request, 2048);
+      const cartonId = typeof input?.cartonId === "string" ? input.cartonId.trim() : "";
+      const shipmentId = typeof input?.shipmentId === "string" ? input.shipmentId.trim() : "";
+      const status = input?.status;
+      if (!cartonId || !shipmentId || !["sent", "pending"].includes(status))
+        throw new CloudError("warehouse_dispatch_invalid", "Укажите короб, поставку и нужный статус.", 400);
+
+      const freshUrl = new URL(url);
+      freshUrl.searchParams.set("refresh", "1");
+      const printing = await readSnapshot("printing", freshUrl, bindings, store, { fetcher });
+      const activeShipmentIds = activeWarehouseShipmentIds(printing);
+      if (!activeShipmentIds || printing.stale === true || printing.refreshFailed === true)
+        throw new CloudError("warehouse_supply_roster_unavailable", "Не удалось подтвердить актуальный список поставок. Статус короба не изменён.", 503);
+      const snapshot = await readWarehouseSnapshot(freshUrl, bindings, store, { fetcher, activeShipmentIds });
+      if (snapshot.stale)
+        throw new CloudError("warehouse_snapshot_unavailable", "Не удалось подтвердить актуальный состав короба. Статус не изменён.", 503);
+      const carton = snapshot.cartons.find((row) => row.id === cartonId && row.shipmentId === shipmentId);
+      if (!carton) throw new CloudError("warehouse_carton_not_found", "Короб или поставка уже изменились. Обновите склад.", 404);
+      if (status === "sent" && carton.status !== "closed")
+        throw new CloudError("warehouse_carton_not_closed", "Отправить можно только закрытый короб.", 409);
+      const updated = await setWarehouseCartonDispatch(bindings.DB, {
+        cartonId,
+        shipmentId,
+        status,
+        changedBy: principal.displayName || principal.username || principal.id || "Менеджер",
+      });
+      return json({ ok: true, dispatch: updated });
     }
     const getPaths = ["/api/roll-supplies/status", "/api/roll-supplies/operations", "/api/assembly-transfers/sources", "/api/assembly-transfers/links", "/api/assembly-transfers/source", "/api/assembly-transfers/operation"];
     if (getPaths.includes(path)) {
