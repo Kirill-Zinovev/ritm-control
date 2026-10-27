@@ -12,7 +12,7 @@ import { verifyBridge } from "./bridge.js";
 import { externalLease } from "./externalLease.js";
 import { recordCutover } from "./cutover.js";
 import { exportCloud } from "./export.js";
-import { readWarehouseSnapshot } from "./warehouse.js";
+import { activeWarehouseShipmentIds, readWarehouseSnapshot } from "./warehouse.js";
 
 const signIn = "/?page=supplies";
 const methods = (request, allowed) => { if (!allowed.includes(request.method)) throw new CloudError("method_not_allowed", "Метод запроса не поддерживается.", 405); };
@@ -218,7 +218,12 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
     }
     if (path === "/api/warehouse") {
       methods(request, ["GET"]);
-      return json(await readWarehouseSnapshot(url, bindings, store, { fetcher }));
+      const printing = await readSnapshot("printing", url, bindings, store, { fetcher });
+      return json(await readWarehouseSnapshot(url, bindings, store, {
+        fetcher,
+        activeShipmentIds: activeWarehouseShipmentIds(printing),
+        rosterStale: printing.stale === true || printing.refreshFailed === true,
+      }));
     }
     const getPaths = ["/api/roll-supplies/status", "/api/roll-supplies/operations", "/api/assembly-transfers/sources", "/api/assembly-transfers/links", "/api/assembly-transfers/source", "/api/assembly-transfers/operation"];
     if (getPaths.includes(path)) {

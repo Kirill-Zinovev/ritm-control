@@ -44,9 +44,20 @@ function catalogNorms(catalog) {
   };
 }
 
-export function buildWarehouseSnapshot(boxRows, contentRows, { catalog = null, photos = null, checkedAt = new Date().toISOString() } = {}) {
+export function buildWarehouseSnapshot(boxRows, contentRows, { catalog = null, photos = null, checkedAt = new Date().toISOString(), activeShipmentIds = null } = {}) {
+  const activeIds = activeShipmentIds instanceof Set ? activeShipmentIds : null;
+  const currentBoxRows = activeIds ? boxRows.filter((row) => {
+    const shipmentId = text(row.shipmentId);
+    return !shipmentId || activeIds.has(shipmentId);
+  }) : boxRows;
+  const currentCartonIds = new Set(currentBoxRows.map((row) => text(row.cartonId)).filter(Boolean));
+  const currentContentRows = activeIds ? contentRows.filter((row) => {
+    const cartonId = text(row.cartonId), shipmentId = text(row.shipmentId);
+    if (cartonId && currentCartonIds.has(cartonId)) return true;
+    return !shipmentId || activeIds.has(shipmentId);
+  }) : contentRows;
   const boxes = new Map(), issues = [], activeNumbers = new Map();
-  for (const row of boxRows) {
+  for (const row of currentBoxRows) {
     const id = text(row.cartonId), rawStatus = normalized(row["Статус"]);
     if (!id || boxes.has(id)) { issues.push("Повторный или пустой идентификатор короба"); if (id && boxes.has(id)) boxes.get(id).issues.push("Идентификатор короба повторяется"); continue; }
     const cancelled = ["отменён", "отменен", "cancelled"].includes(rawStatus);
@@ -62,7 +73,7 @@ export function buildWarehouseSnapshot(boxRows, contentRows, { catalog = null, p
   }
   for (const ids of activeNumbers.values()) if (ids.length > 1) for (const id of ids) boxes.get(id).issues.push("Номер короба повторяется");
   const allocations = new Map(), removals = [], seenAllocations = new Set();
-  for (const row of contentRows) {
+  for (const row of currentContentRows) {
     const id = text(row.allocationId), cartonId = text(row.cartonId), box = boxes.get(cartonId), action = text(row.action).toUpperCase();
     if (!box) { issues.push("Запись состава без короба"); continue; }
     const quantity = whole(row["Количество, шт"]), sku = text(row["Артикул"]), createdAt = text(row.createdAt);

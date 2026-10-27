@@ -9,6 +9,25 @@ const definitions = [
   { name: "CartonContents", endColumn: "M", minColumns: 13, required: ["allocationId", "cartonId", "shipmentId", "directionId", "positionId", "Артикул", "Количество, шт", "createdAt", "action", "sourceAllocationId"] },
 ];
 const maxRows = 20000;
+const ritmShipmentId = /^RITM-(?:ROLL-\d+|BOX-\d+|SUPPLY-[a-f0-9-]{36})$/i;
+const text = (value) => String(value ?? "").trim();
+
+export function activeWarehouseShipmentIds(printing) {
+  if (printing?.ok !== true || !Array.isArray(printing.sheets)) return null;
+  const ids = new Set();
+  for (const sheet of printing.sheets) {
+    const source = text(sheet?.sourceId);
+    if (source !== "roll-printing" && source !== "box-printing") continue;
+    const sheetId = Number(sheet?.sheetId);
+    if (!Number.isSafeInteger(sheetId) || sheetId <= 0) return null;
+    const shipmentId = text(sheet?.assemblyShipmentId) ||
+      (source === "roll-printing" ? `RITM-ROLL-${sheetId}` : `RITM-BOX-${sheetId}`);
+    if (!ritmShipmentId.test(shipmentId)) return null;
+    ids.add(shipmentId);
+  }
+  return ids;
+}
+
 function cellValue(cell) {
   if (cell?.effectiveValue?.errorValue) throw new CloudError("warehouse_cell_error", "В таблице коробов обнаружена ошибка ячейки. Проверьте источник.");
   const value = cell?.effectiveValue || cell?.userEnteredValue || {};
@@ -40,7 +59,7 @@ function extract(grid, documentId, sheets) {
   });
 }
 
-export async function loadWarehouse(reader, bindings, { signal, now = Date.now } = {}) {
+export async function loadWarehouse(reader, bindings, { signal, now = Date.now, activeShipmentIds = null } = {}) {
   const documentId = sourceId(bindings, "assemblyDatabaseId");
   if (!documentId) throw new CloudError("warehouse_source_unconfigured", "Источник коробов Assembly не настроен.");
   const catalogPromise = readProductionShopCatalog(reader, signal).catch(() => null);
@@ -60,21 +79,38 @@ export async function loadWarehouse(reader, bindings, { signal, now = Date.now }
   if (sheets.some((sheet, index) => sheet.sheetId !== finalSheets[index].sheetId || sheet.rows !== finalSheets[index].rows || sheet.columns !== finalSheets[index].columns))
     throw new CloudError("warehouse_changing", "Структура коробов изменилась во время чтения. Повторите обновление.", 409);
   const [catalog, photos] = await Promise.all([catalogPromise, photoPromise]);
-  return buildWarehouseSnapshot(second[0], second[1], { catalog, photos, checkedAt: new Date(now()).toISOString() });
+  return buildWarehouseSnapshot(second[0], second[1], { catalog, photos, checkedAt: new Date(now()).toISOString(), activeShipmentIds });
 }
 
-export async function readWarehouseSnapshot(url, bindings, store, { fetcher = fetch } = {}) {
+export async function readWarehouseSnapshot(url, bindings, store, { fetcher = fetch, activeShipmentIds = null, rosterStale = false } = {}) {
   const snapshot = await store.snapshot("warehouse");
-  if (snapshot && url.searchParams.get("refresh") !== "1" && store.now() - snapshot.at < cloudConfig(bindings).snapshotMaxAgeMs)
-    return { ...snapshot.value, stale: false, snapshotAt: new Date(snapshot.at).toISOString() };
+  const publicSnapshot = (value, options = {}) => {
+    const { activeShipmentIds: _ids, activeShipmentFingerprint: _fingerprint, ...visible } = value;
+    return { ...visible, ...options };
+  };
+  if (!activeShipmentIds) {
+    if (snapshot) return publicSnapshot(snapshot.value, { stale: true, snapshotAt: new Date(snapshot.at).toISOString(), staleReason: "Не удалось подтвердить список действующих поставок. Показан последний проверенный снимок склада." });
+    throw new CloudError("warehouse_supply_roster_unavailable", "Не удалось подтвердить список действующих поставок. Обновите данные позже.", 503);
+  }
+  const activeIds = [...activeShipmentIds].sort();
+  const activeShipmentFingerprint = activeIds.join("\n");
+  const current = snapshot?.value?.activeShipmentFingerprint === activeShipmentFingerprint;
+  if (snapshot && current && url.searchParams.get("refresh") !== "1" && store.now() - snapshot.at < cloudConfig(bindings).snapshotMaxAgeMs)
+    return publicSnapshot(snapshot.value, rosterStale
+      ? { stale: true, snapshotAt: new Date(snapshot.at).toISOString(), staleReason: "Не удалось подтвердить свежесть списка поставок. Показан последний проверенный снимок." }
+      : { stale: false, snapshotAt: new Date(snapshot.at).toISOString() });
   let lease;
   try {
     lease = await store.acquire("refresh:warehouse", 60000);
-    const value = await loadWarehouse(new CloudSheetsReader(bindings, { fetcher }), bindings, { now: () => store.now() });
+    const value = await loadWarehouse(new CloudSheetsReader(bindings, { fetcher }), bindings, { now: () => store.now(), activeShipmentIds });
+    value.activeShipmentFingerprint = activeShipmentFingerprint;
+    value.activeShipmentIds = activeIds;
     await store.saveSnapshot("warehouse", value, lease);
-    return { ...value, snapshotAt: value.checkedAt };
+    return publicSnapshot(value, rosterStale
+      ? { stale: true, snapshotAt: value.checkedAt, staleReason: "Список поставок не удалось обновить. Показаны последние подтверждённые данные." }
+      : { snapshotAt: value.checkedAt });
   } catch (error) {
     if (!snapshot) throw error;
-    return { ...snapshot.value, stale: true, snapshotAt: new Date(snapshot.at).toISOString(), staleReason: "Не удалось подтвердить свежие данные коробов. Показан предыдущий снимок; готовность к отправке требует проверки." };
+    return publicSnapshot(snapshot.value, { stale: true, snapshotAt: new Date(snapshot.at).toISOString(), staleReason: "Не удалось подтвердить свежие данные коробов. Показан предыдущий снимок; готовность к отправке требует проверки." });
   } finally { if (lease) await store.release(lease); }
 }

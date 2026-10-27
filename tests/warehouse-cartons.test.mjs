@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildWarehouseSnapshot } from '../worker/warehouseCartons.js';
+import { activeWarehouseShipmentIds } from '../worker/cloud/warehouse.js';
 
 const carton = { cartonId:'c1', directionId:'d1', 'Направление':'OZON Москва', 'Номер':'1мск1', 'Занято, шт':70, 'Статус':'Закрыт', createdAt:'2026-10-20T10:00:00Z', closedAt:'2026-10-20T11:00:00Z', shipmentId:'s1', 'Тип короба':'M' };
 const add = { allocationId:'a1', cartonId:'c1', shipmentId:'s1', directionId:'d1', positionId:'p1', 'Артикул':'ITEM1', 'Количество, шт':100, createdAt:'2026-10-20T10:10:00Z', action:'ADD' };
@@ -30,4 +31,24 @@ test('дубликаты и неразрешённые корректировк�
   assert.equal(missing.cartons[0].ready, false);
   const orphan = buildWarehouseSnapshot([carton], [add,remove,{...add,allocationId:'orphan',cartonId:'other'}], {catalog});
   assert.equal(orphan.cartons[0].ready, false);
+});
+
+test('короба удалённой поставки скрываются без удаления записей из журнала', () => {
+  const removedBox = { ...carton, cartonId:'c2', shipmentId:'deleted', 'Направление':'OZON индивидуалка', 'Номер':'1инд1' };
+  const removedAdd = { ...add, allocationId:'a3', cartonId:'c2', shipmentId:'deleted', 'Артикул':'OLD' };
+  const snapshot = buildWarehouseSnapshot([carton, removedBox], [add, remove, removedAdd], { catalog, activeShipmentIds:new Set(['s1']) });
+  assert.deepEqual(snapshot.cartons.map((row) => row.id), ['c1']);
+  assert.equal(snapshot.cartons[0].quantity, 70);
+  assert.deepEqual(snapshot.issues, []);
+});
+
+test('список действующих складских поставок строится по текущим производственным листам', () => {
+  const ids = activeWarehouseShipmentIds({ ok:true, sheets:[
+    { sourceId:'roll-printing', sheetId:119710351 },
+    { sourceId:'box-printing', sheetId:202, assemblyShipmentId:'RITM-SUPPLY-11111111-1111-4111-8111-111111111111' },
+    { sourceId:'seasonal-printing', sheetId:17 },
+  ] });
+  assert.deepEqual([...ids].sort(), ['RITM-ROLL-119710351', 'RITM-SUPPLY-11111111-1111-4111-8111-111111111111'].sort());
+  assert.equal(activeWarehouseShipmentIds({ ok:false, sheets:[] }), null);
+  assert.equal(activeWarehouseShipmentIds({ ok:true, sheets:[{ sourceId:'box-printing', sheetId:0 }] }), null);
 });
