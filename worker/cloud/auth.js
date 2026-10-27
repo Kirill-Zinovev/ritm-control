@@ -206,12 +206,14 @@ export async function loginWithPin(request, db, now = Date.now()) {
   const username = normalizeUsername(input.username);
   const pin = requirePin(input.pin);
   const limit = await db.prepare("SELECT window_started_at,failure_count,locked_until FROM ritm_manager_login_limits WHERE username=?").bind(username).first();
-  if (limit?.locked_until > now) throw new CloudError("login_rate_limited", "Слишком много попыток. Попробуйте ещё раз через 15 минут.", 429);
+  const isLocked = limit?.locked_until > now;
   const user = await db.prepare("SELECT id,username,display_name,pin_salt,pin_hash,must_change_pin,status FROM ritm_manager_users WHERE username=?").bind(username).first();
   const salt = user?.pin_salt || "cml0bS1waW4tc2FsdC0xMjM0NTY3OA";
   const hash = user?.pin_hash || "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
   const valid = await verifyPin(pin, salt, hash);
   if (!user || user.status !== "active" || !valid) {
+    // A lock should slow guessing, not keep a legitimate employee out after they enter the correct PIN.
+    if (isLocked) throw new CloudError("login_rate_limited", "Слишком много попыток. Попробуйте ещё раз через 15 минут.", 429);
     const failure = await db.prepare(`INSERT INTO ritm_manager_login_limits(username,window_started_at,failure_count,locked_until)
       VALUES(?,?,1,0)
       ON CONFLICT(username) DO UPDATE SET
