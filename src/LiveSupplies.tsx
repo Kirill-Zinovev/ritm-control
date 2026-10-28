@@ -22,6 +22,7 @@ import {
 import { supplyMarketplace } from "./liveSupplyMarketplace";
 import { ShipmentHero } from "./ShipmentHero";
 import { AssemblyTransfer } from "./AssemblyTransfer";
+import { ProductionControls } from "./ProductionControls";
 import {
   assemblyAreaTotal,
   assemblyPackingTotal,
@@ -648,6 +649,42 @@ export function LiveSuppliesWorkspace({
     : null;
   const selectedAssemblyOrders = selected
     ? [...selected.orders, ...(selectedBox?.orders || [])]
+    : [];
+  const selectedLinkedBoxSheetIds = selected
+    ? assemblyBoxLinks
+        .filter(
+          (link) =>
+            link.name === selected.sheet.name &&
+            (link.targetRollSheetId == null ||
+              link.targetRollSheetId === selected.sheet.sheetId),
+        )
+        .map((link) => link.boxSheetId)
+    : [];
+  const selectedBoxSheets = (live?.sheets || []).filter(
+    (sheet) =>
+      sheet.sourceId === "box-printing" &&
+      selectedLinkedBoxSheetIds.includes(sheet.sheetId),
+  );
+  const selectedControlShipmentIds = selected
+    ? Array.from(
+        new Set(
+          [
+            selected.sheet.assemblyShipmentId ||
+              (selected.sheet.sourceId === "roll-printing"
+                ? "RITM-ROLL-" + selected.sheet.sheetId
+                : selected.sheet.sourceId === "box-printing"
+                  ? "RITM-BOX-" + selected.sheet.sheetId
+                  : ""),
+            ...selectedAssemblyOrders.map(
+              (order) => order.assemblyShipmentId || "",
+            ),
+            ...selectedBoxSheets.map(
+              (sheet) =>
+                sheet.assemblyShipmentId || "RITM-BOX-" + sheet.sheetId,
+            ),
+          ].filter(Boolean),
+        ),
+      )
     : [];
   const selectedAssemblyArea = selectedBox
     ? assemblyAreaTotal(selectedAssemblyOrders, selectedBox.missingPositions)
@@ -1749,6 +1786,12 @@ export function LiveSuppliesWorkspace({
                   </div>
                 </div>
               </ShipmentHero>
+
+              <ProductionControls
+                shipmentIds={selectedControlShipmentIds}
+                shipmentName={selected.sheet.name}
+                articles={Array.from(new Set(selectedAssemblyOrders.map((order) => order.article).filter(Boolean)))}
+              />
 
               <section className="panel">
                 <div className="panel-heading">

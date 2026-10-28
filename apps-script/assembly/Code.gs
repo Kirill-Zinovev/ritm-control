@@ -61,6 +61,7 @@ function doGet() {
 const RITM_EVENT_SECRET = 'ritm.assembly.eventSecret';
 const RITM_EVENT_RECEIPTS = 'ritm.assembly.eventReceipts';
 const RITM_EVENT_MODE = 'ritm.assembly.eventMode';
+const RITM_CONTROL_API_BASE = 'ritm.assembly.controlApiBase';
 
 function doPost(e) {
   let result;
@@ -209,6 +210,108 @@ function getAssemblyPreview(shipmentId) {
 function getShipmentProgress(shipmentId) {
   if (!String(shipmentId || '').trim()) throw new Error('Выберите поставку перед обновлением.');
   return getAssemblySnapshot_(shipmentId, false, true);
+}
+
+// Configure once from the Apps Script editor as the project owner. The value is
+// an origin only; all requests are signed with the already configured event key.
+function configureRitmControlApi(baseUrl) {
+  requireAssemblyOwner_();
+  const value = String(baseUrl || '').trim().replace(/\/+$/, '');
+  if (!/^https:\/\/(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+chatgpt\.site$/i.test(value))
+    throw new Error('Разрешён только HTTPS-адрес RITM Sites без пути и параметров.');
+  PropertiesService.getScriptProperties().setProperty(RITM_CONTROL_API_BASE, value);
+  return { configured: true, origin: value };
+}
+
+function getAssemblyControlTasks(shipmentId, directionId) {
+  try {
+    const db = openAssemblyDatabase_();
+    const shipment = requireRitmShipment_(db, shipmentId, directionId);
+    const result = ritmControlApiRequest_('GET', '/api/assembly-controls?shipmentId=' + encodeURIComponent(String(shipment.shipmentId)));
+    if (!result || result.ok !== true || !Array.isArray(result.controls) || result.controls.length > 250)
+      throw new Error('Список задач не прошёл проверку.');
+    const allowedKinds = ['quality_check', 'notification', 'instruction'];
+    const allowedTriggers = ['shipment_received', 'before_packing', 'before_box_close'];
+    const controls = result.controls.filter(control => control &&
+      (Array.isArray(control.shipmentIds) ? control.shipmentIds : [control.shipmentId]).map(String).includes(String(shipment.shipmentId)) &&
+      /^[a-f0-9-]{36}$/i.test(String(control.id || '')) &&
+      ['shipment', 'article'].includes(control.scope) &&
+      allowedKinds.includes(control.kind) && ['attention', 'urgent'].includes(control.priority) &&
+      allowedTriggers.includes(control.trigger) && ['active', 'completed', 'acknowledged'].includes(control.status) &&
+      (control.scope !== 'article' || String(control.article || '').trim())
+    ).map(control => ({
+      id: String(control.id), shipmentId: String(shipment.shipmentId), scope: control.scope,
+      article: control.scope === 'article' ? String(control.article) : '',
+      kind: control.kind, priority: control.priority, trigger: control.trigger,
+      title: String(control.title || '').slice(0, 90), note: String(control.note || '').slice(0, 320),
+      status: control.status, completedAt: String(control.completedAt || ''),
+      completedBy: control.completedBy && typeof control.completedBy === 'object'
+        ? { employeeName: String(control.completedBy.employeeName || '').slice(0, 100) }
+        : null,
+    }));
+    return { ok: true, available: true, shipmentId: String(shipment.shipmentId), controls };
+  } catch (error) {
+    return { ok: false, available: false, controls: [], message: String(error && error.message || 'Контроль поставки временно недоступен.').slice(0, 240) };
+  }
+}
+
+function completeAssemblyControlTask(payload) {
+  if (!payload || !/^[a-f0-9-]{36}$/i.test(String(payload.controlId || '')) || !String(payload.positionId || '').trim() || !String(payload.employeeId || '').trim())
+    throw new Error('Выберите задачу, артикул и сотрудника.');
+  const db = openAssemblyDatabase_();
+  const shipment = requireRitmShipment_(db, payload.shipmentId, payload.directionId);
+  const item = readShipmentItems_(db, shipment).find(row =>
+    String(row.shipmentId) === String(shipment.shipmentId) &&
+    String(row.directionId) === String(shipment.directionId) &&
+    String(row.positionId) === String(payload.positionId)
+  );
+  if (!item) throw new Error('Артикул не найден в выбранной поставке. Обновите данные.');
+  const employee = readTable_(db, TABLES.employees).find(row =>
+    String(row.employeeId) === String(payload.employeeId) &&
+    (row.Активен === true || String(row.Активен).toLowerCase() === 'true') &&
+    isBlueBuildingEmployee_(row['Имя'])
+  );
+  if (!employee) throw new Error('Сотрудник отсутствует в активном списке сборщиков.');
+  const result = ritmControlApiRequest_('POST', '/api/assembly-controls/complete', {
+    controlId: String(payload.controlId), shipmentId: String(shipment.shipmentId),
+    positionId: String(item.positionId), article: String(item['Артикул'] || ''),
+    employeeId: String(employee.employeeId), employeeName: String(employee['Имя'] || ''),
+  });
+  if (!result || result.ok !== true || !result.control || String(result.control.id) !== String(payload.controlId) || !['completed', 'acknowledged'].includes(result.control.status))
+    throw new Error('Сервер не подтвердил выполнение задачи. Обновите список перед повтором.');
+  return { ok: true, control: result.control, duplicate: result.duplicate === true };
+}
+
+function ritmControlApiRequest_(method, path, body) {
+  const props = PropertiesService.getScriptProperties();
+  const base = String(props.getProperty(RITM_CONTROL_API_BASE) || '').replace(/\/+$/, '');
+  const secret = props.getProperty(RITM_EVENT_SECRET) || '';
+  if (!/^https:\/\/[a-z0-9.-]+\.chatgpt\.site$/i.test(base) || !/^[a-f0-9]{64}$/i.test(secret))
+    throw new Error('Связь с задачами RITM не настроена.');
+  if (!['GET', 'POST'].includes(method) || !['/api/assembly-controls?shipmentId=', '/api/assembly-controls/complete'].some(prefix => path.indexOf(prefix) === 0))
+    throw new Error('Запрошено неподдерживаемое действие контроля.');
+  const rawBody = method === 'POST' ? JSON.stringify(body || {}) : '';
+  const bodyHash = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, rawBody, Utilities.Charset.UTF_8)
+    .map(value => ('0' + ((value + 256) % 256).toString(16)).slice(-2)).join('');
+  const timestamp = String(Date.now()), nonce = Utilities.getUuid().toLowerCase();
+  const message = JSON.stringify([1, method, path, timestamp, nonce, bodyHash]);
+  const signature = Utilities.computeHmacSha256Signature(message, secret, Utilities.Charset.UTF_8)
+    .map(value => ('0' + ((value + 256) % 256).toString(16)).slice(-2)).join('');
+  const options = {
+    method: method.toLowerCase(), contentType: 'application/json', muteHttpExceptions: true,
+    followRedirects: false,
+    headers: { 'x-ritm-assembly-at': timestamp, 'x-ritm-assembly-nonce': nonce, 'x-ritm-assembly-signature': signature },
+  };
+  if (method === 'POST') options.payload = rawBody;
+  let response;
+  try { response = UrlFetchApp.fetch(base + path, options); }
+  catch (_) { throw new Error('RITM не ответил. Состояние задачи не изменено; обновите список.'); }
+  const status = response.getResponseCode();
+  let value;
+  try { value = JSON.parse(response.getContentText()); } catch (_) { throw new Error('RITM вернул неподтверждённый ответ.'); }
+  if (status < 200 || status >= 300 || value.ok !== true)
+    throw new Error(String(value.message || 'RITM не подтвердил действие.').slice(0, 240));
+  return value;
 }
 
 function getAssemblySnapshot_(shipmentId, forceSync, progressOnly) {

@@ -8,7 +8,8 @@ import { assertSameOrigin, changeManagerPin, createManagerUser, listManagerUsers
 import { createServices } from "./services.js";
 import { AssemblyTransferService } from "../../agent/assemblyTransfer.js";
 import { importMigration } from "./migration.js";
-import { verifyBridge } from "./bridge.js";
+import { verifyAssemblyControlApp, verifyBridge } from "./bridge.js";
+import { cancelProductionControl, completeAssemblyControl, createProductionControl, listAssemblyControls, listProductionControls } from "./productionControls.js";
 import { externalLease } from "./externalLease.js";
 import { recordCutover } from "./cutover.js";
 import { exportCloud } from "./export.js";
@@ -24,11 +25,13 @@ function managerRouteAllowed(method, path) {
     "/api/roll-supplies/status", "/api/roll-supplies/operations",
     "/api/assembly-transfers/sources", "/api/assembly-transfers/links",
     "/api/assembly-transfers/source", "/api/assembly-transfers/operation",
+    "/api/production-controls",
   ].includes(path);
   return method === "POST" && [
     "/api/roll-supplies", "/api/roll-supplies/preview",
     "/api/assembly-transfers", "/api/assembly-transfers/preview",
     "/api/warehouse/dispatch",
+    "/api/production-controls",
   ].includes(path);
 }
 
@@ -168,8 +171,9 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
       if (!id) throw new CloudError("authentication_required", "Войдите через ChatGPT.", 401);
       return json({ ok: true, userId: id, authorized: cloudConfig(bindings).owners.includes(id) });
     }
-    let bridgeId = null, principal = null;
-    if (request.headers.has("x-ritm-bridge-id")) bridgeId = await verifyBridge(request, bindings);
+    let bridgeId = null, assemblyControlApp = false, principal = null;
+    if (request.headers.has("x-ritm-assembly-at")) { await verifyAssemblyControlApp(request, bindings); assemblyControlApp = true; }
+    else if (request.headers.has("x-ritm-bridge-id")) bridgeId = await verifyBridge(request, bindings);
     else if (["/api/cloud/import", "/api/cloud/cutover", "/api/cloud/state"].includes(path) && request.headers.has("authorization")) {
       if (bindings.RITM_CLOUD_IMPORT_ENABLED !== "true") throw new CloudError("migration_service_disabled", "Служебный канал переноса закрыт.", 403);
       requireMaintenance(request, bindings, "RITM_MIGRATION_TOKEN");
@@ -204,6 +208,40 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
       if (scope.meta("migrationReady") !== true) throw new CloudError("migration_not_imported", "Реестр ещё не перенесён. Локальное состояние сохранено.", 503);
       const transfer = new AssemblyTransferService(scope, { backfill: false });
       return json({ ok: true, registeredSheets: scope.meta("rollPrintingAdditionalSheets") || [], productionSupplies: scope.meta("productionSupplies") || [], assemblyBoxLinks: transfer.links() });
+    }
+    if (path === "/api/production-controls") {
+      methods(request, ["GET", "POST"]);
+      if (assemblyControlApp || bridgeId) throw new CloudError("control_manager_scope_required", "Это действие доступно только из RITM.", 403);
+      if (request.method === "GET") {
+        const scope = await store.scope();
+        const shipmentIds = url.searchParams.getAll("shipmentId").concat((url.searchParams.get("shipmentIds") || "").split(",").filter(Boolean));
+        return json({ ok: true, controls: listProductionControls(scope, shipmentIds) });
+      }
+      const input = await readJson(request);
+      const result = await store.withScope(async (scope) => {
+        if (scope.meta("migrationReady") !== true) throw new CloudError("migration_not_imported", "Реестр поставок ещё не готов. Задача не сохранена.", 503);
+        let value;
+        if (input?.action === "cancel") value = cancelProductionControl(scope, input);
+        else if (input?.action === "create") value = createProductionControl(scope, input, { owner: principal?.displayName || principal?.id || "RITM" });
+        else throw new CloudError("control_action_invalid", "Неизвестное действие с задачей.", 400);
+        appendAudit(scope, principal, path, value.control);
+        return value;
+      });
+      return json({ ok: true, ...result });
+    }
+    if (path === "/api/assembly-controls") {
+      methods(request, ["GET"]);
+      if (!assemblyControlApp) throw new CloudError("assembly_control_auth_required", "Запрос должен прийти из RITM Assembly.", 403);
+      const shipmentId = url.searchParams.get("shipmentId") || "";
+      const scope = await store.scope();
+      return json({ ok: true, controls: listAssemblyControls(scope, shipmentId) });
+    }
+    if (path === "/api/assembly-controls/complete") {
+      methods(request, ["POST"]);
+      if (!assemblyControlApp) throw new CloudError("assembly_control_auth_required", "Запрос должен прийти из RITM Assembly.", 403);
+      const input = await readJson(request);
+      const result = await store.withScope(async (scope) => completeAssemblyControl(scope, input));
+      return json({ ok: true, ...result });
     }
     if (path.startsWith("/api/intelligence/")) {
       throw new CloudError("intelligence_local_only", "AI Center пока работает в локальном RITM на рабочем компьютере.", 503);

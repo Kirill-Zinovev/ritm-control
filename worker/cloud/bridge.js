@@ -8,6 +8,27 @@ export function bridgeSignature(secret, { method, path, timestamp, nonce, body =
   const bodyHash = createHash("sha256").update(body).digest("hex");
   return createHmac("sha256", secret).update(JSON.stringify([1, method, path, timestamp, nonce, bodyHash])).digest("hex");
 }
+// The Assembly Apps Script uses its existing event key for this narrowly
+// scoped reverse channel. It cannot call supply writers or any other API.
+export async function verifyAssemblyControlApp(request, bindings, now = Date.now()) {
+  const url = new URL(request.url), at = request.headers.get("x-ritm-assembly-at"), nonce = request.headers.get("x-ritm-assembly-nonce"), signature = request.headers.get("x-ritm-assembly-signature");
+  const allowed = request.method === "GET" && url.pathname === "/api/assembly-controls" || request.method === "POST" && url.pathname === "/api/assembly-controls/complete";
+  const secret = bindings.RITM_ASSEMBLY_SYNC_SECRET;
+  const fail = () => { throw new CloudError("assembly_control_forbidden", "Связь с RITM Assembly не подтверждена.", 403); };
+  if (!allowed || !/^[a-f0-9]{64}$/i.test(secret || "") || !/^\d{13}$/.test(at || "") || Math.abs(now - Number(at)) > 120000 || !/^[a-f0-9-]{36}$/i.test(nonce || "") || !/^[a-f0-9]{64}$/i.test(signature || "") || !bindings.DB) fail();
+  const body = request.method === "GET" ? "" : new TextDecoder().decode(await readBytes(request.clone()));
+  const expected = bridgeSignature(secret, { method: request.method, path: url.pathname + url.search, timestamp: at, nonce, body });
+  let mismatch = 0;
+  for (let index = 0; index < expected.length; index++) mismatch |= expected.charCodeAt(index) ^ signature.toLowerCase().charCodeAt(index);
+  if (mismatch) fail();
+  const result = await bindings.DB.batch([
+    bindings.DB.prepare("DELETE FROM cloud_bridge_nonces WHERE seen_at<?").bind(now - 300000),
+    bindings.DB.prepare("INSERT INTO cloud_bridge_nonces(id,bridge_id,seen_at) VALUES(?,?,?) ON CONFLICT(id) DO NOTHING").bind(nonce, "assembly-control-app", now),
+  ]);
+  if (result[1].meta?.changes !== 1) throw new CloudError("assembly_control_replay", "Этот запрос уже обработан. Обновите состояние задачи.", 409);
+  return "assembly-control-app";
+}
+
 export async function verifyBridge(request, bindings, now = Date.now()) {
   const url = new URL(request.url), id = request.headers.get("x-ritm-bridge-id"), timestamp = request.headers.get("x-ritm-bridge-at"), nonce = request.headers.get("x-ritm-bridge-nonce"), signature = request.headers.get("x-ritm-bridge-signature");
   const secret = bindings.RITM_LOCAL_BRIDGE_SECRET;

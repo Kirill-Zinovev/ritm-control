@@ -1433,6 +1433,19 @@
       .box-facts .box-fact-available { background: #f0fbf7; border-color: #cfefe3; }
       .box-fact-available strong { color: #008d69; }
       .box-note { margin: -4px 2px 2px; min-height: 16px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+      .box-attention { display: grid; gap: 7px; padding: 11px 12px; border: 1px solid #d8e5f6; border-radius: 11px; background: #f7faff; }
+      .box-attention-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--ink); font-size: 11px; font-weight: 750; }
+      .box-attention-heading small { color: var(--muted); font-size: 9px; font-weight: 500; }
+      .box-attention-list { display: grid; gap: 6px; }
+      .box-attention-task { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 5px 9px; padding: 9px; border: 1px solid #e3eaf2; border-radius: 9px; background: #fff; }
+      .box-attention-task.is-urgent { border-color: #efd1c5; background: #fffaf8; }
+      .box-attention-main { min-width: 0; display: grid; gap: 4px; }
+      .box-attention-title { color: var(--ink); font-size: 11px; font-weight: 750; overflow-wrap: anywhere; }
+      .box-attention-meta { color: var(--muted); font-size: 9px; line-height: 1.4; }
+      .box-attention-note { grid-column: 1 / -1; color: #50647a; font-size: 10px; line-height: 1.45; white-space: pre-wrap; }
+      .box-attention-task .button { min-height: 32px; padding: 5px 9px; font-size: 10px; white-space: nowrap; }
+      .box-attention-done { color: #087653; font-size: 10px; font-weight: 700; }
+      .box-attention-unavailable { color: #865f24; font-size: 10px; line-height: 1.45; }
       .box-list-section { padding-top: 4px; }
       .box-section-heading, .box-list-tools, .box-closed-heading, .box-details-heading, .box-selected-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
       .box-section-heading h3 { margin: 0 0 2px; font-size: 14px; }
@@ -2339,6 +2352,11 @@
           <div class="box-fact-available"><span>Доступно</span><strong id="boxAvailableValue">—</strong></div>
         </div>
         <p id="boxSnapshot" class="box-note" role="status">Загружаем данные…</p>
+        <section id="boxAttention" class="box-attention" aria-live="polite" hidden>
+          <div class="box-attention-heading"><span>Внимание сборщикам</span><small id="boxAttentionContext">Сборка · Упаковка</small></div>
+          <div id="boxAttentionMessage" class="box-attention-unavailable" hidden></div>
+          <div id="boxAttentionList" class="box-attention-list"></div>
+        </section>
 
         <section class="box-list-section">
           <div class="box-section-heading">
@@ -2434,6 +2452,13 @@
         labelBatch: [],
         boxData: null,
         boxRequest: 0,
+        boxControls: [],
+        boxControlItem: null,
+        boxControlEmployeeListener: false,
+        boxControlRequest: 0,
+        boxControlBusy: new Set(),
+        boxControlMessage: '',
+        boxControlAvailable: false,
         boxBusy: false,
         boxUncertain: false,
         boxPending: null,
@@ -4841,6 +4866,7 @@
         if (!state.data || !state.data.shipment || !positionId) return;
         const item = state.data.items.find((entry) => entry.positionId === positionId);
         if (!item) return;
+        loadBoxControlTasks(item);
         const request = ++state.boxRequest;
         $('boxSnapshot').textContent = 'Загружаем фактическую упаковку и открытые короба…';
         $('boxCards').replaceChildren(node('div', 'box-empty', 'Загружаем короба…'));
@@ -4872,6 +4898,99 @@
             $('preflightBoxButton').disabled = true;
           })
           .getBoxesForItem(item.shipmentId, item.directionId, item.positionId);
+      }
+
+      function loadBoxControlTasks(item) {
+        const request = ++state.boxControlRequest;
+        state.boxControlItem = item;
+        if (!state.boxControlEmployeeListener) {
+          $('employeeSelect').addEventListener('change', () => {
+            if (state.boxControlItem) renderBoxControlTasks(state.boxControlItem);
+          });
+          state.boxControlEmployeeListener = true;
+        }
+        state.boxControls = [];
+        state.boxControlMessage = '';
+        state.boxControlAvailable = false;
+        renderBoxControlTasks(item);
+        google.script.run
+          .withSuccessHandler((result) => {
+            if (request !== state.boxControlRequest || !state.data || !state.data.shipment || state.data.shipment.id !== item.shipmentId) return;
+            state.boxControlAvailable = Boolean(result && result.available === true && result.ok === true);
+            state.boxControls = state.boxControlAvailable && Array.isArray(result.controls) ? result.controls : [];
+            state.boxControlMessage = state.boxControlAvailable ? '' : String(result && result.message || 'Контроль задач временно недоступен.').slice(0, 240);
+            renderBoxControlTasks(item);
+          })
+          .withFailureHandler((error) => {
+            if (request !== state.boxControlRequest) return;
+            state.boxControlMessage = String(error && error.message || 'Контроль задач временно недоступен.').slice(0, 240);
+            renderBoxControlTasks(item);
+          })
+          .getAssemblyControlTasks(item.shipmentId, item.directionId);
+      }
+
+      function renderBoxControlTasks(item) {
+        const section = $('boxAttention');
+        const list = $('boxAttentionList');
+        const message = $('boxAttentionMessage');
+        if (!section || !list || !message) return;
+        const article = String(item && item.sku || '').trim().toLocaleUpperCase('ru-RU').replace(/ё/g, 'е');
+        const controls = state.boxControls.filter(control =>
+          control && (control.scope !== 'article' || String(control.article || '').trim().toLocaleUpperCase('ru-RU').replace(/ё/g, 'е') === article)
+        );
+        message.textContent = state.boxControlAvailable || !state.boxControlMessage ? '' : state.boxControlMessage;
+        message.hidden = !message.textContent;
+        list.replaceChildren();
+        controls.forEach(control => {
+          const task = node('article', 'box-attention-task' + (control.priority === 'urgent' ? ' is-urgent' : ''), '');
+          const main = node('div', 'box-attention-main', '');
+          main.appendChild(node('strong', 'box-attention-title', String(control.title || 'Задача сборщика')));
+          const triggerLabels = { shipment_received: 'При поступлении в Assembly', before_packing: 'Перед упаковкой', before_box_close: 'Перед закрытием короба' };
+          const kindLabels = { quality_check: 'Проверка качества', notification: 'Уведомление', instruction: 'Инструкция' };
+          const scopeLabel = control.scope === 'article' ? String(control.article || '') : 'Вся поставка';
+          main.appendChild(node('span', 'box-attention-meta', (control.priority === 'urgent' ? 'СРОЧНО · ' : 'ВНИМАНИЕ · ') + (kindLabels[control.kind] || 'Задача') + ' · ' + scopeLabel + ' · ' + (triggerLabels[control.trigger] || 'При поступлении')));
+          task.appendChild(main);
+          if (control.status === 'active') {
+            const employeeId = String($('employeeSelect').value || '');
+            const action = node('button', 'button button-primary', control.kind === 'notification' ? 'Принял' : 'Выполнено');
+            action.type = 'button';
+            action.disabled = !employeeId || state.boxControlBusy.has(control.id);
+            if (!employeeId) action.title = 'Сначала выберите своё имя';
+            action.addEventListener('click', () => completeBoxControl(control, item));
+            task.appendChild(action);
+          } else {
+            task.appendChild(node('span', 'box-attention-done', (control.status === 'acknowledged' ? 'Принято' : 'Выполнено') + (control.completedBy && control.completedBy.employeeName ? ' · ' + control.completedBy.employeeName : '')));
+          }
+          if (control.note) task.appendChild(node('span', 'box-attention-note', String(control.note)));
+          list.appendChild(task);
+        });
+        section.hidden = controls.length === 0 && !message.textContent;
+      }
+
+      function completeBoxControl(control, item) {
+        const employeeId = String($('employeeSelect').value || '');
+        if (!employeeId) return showToast('Сначала выберите своё имя.', true);
+        if (state.boxControlBusy.has(control.id)) return;
+        state.boxControlBusy.add(control.id);
+        renderBoxControlTasks(item);
+        google.script.run
+          .withSuccessHandler((result) => {
+            state.boxControlBusy.delete(control.id);
+            if (!result || result.ok !== true || !result.control) {
+              state.boxControlMessage = 'Сервер не подтвердил отметку. Обновите задачи перед повтором.';
+              return renderBoxControlTasks(item);
+            }
+            const index = state.boxControls.findIndex(row => row.id === control.id);
+            if (index >= 0) state.boxControls[index] = { ...state.boxControls[index], ...result.control };
+            renderBoxControlTasks(item);
+            showToast(result.duplicate ? 'Задача уже была отмечена ранее.' : 'Задача отмечена.');
+          })
+          .withFailureHandler((error) => {
+            state.boxControlBusy.delete(control.id);
+            state.boxControlMessage = String(error && error.message || 'Не удалось подтвердить задачу. Обновите список.').slice(0, 240);
+            renderBoxControlTasks(item);
+          })
+          .completeAssemblyControlTask({ controlId: control.id, shipmentId: item.shipmentId, directionId: item.directionId, positionId: item.positionId, employeeId });
       }
 
       function renderBoxSnapshot() {

@@ -6042,3 +6042,110 @@ td small {
     grid-column: 1 / -1;
   }
 }
+
+
+.production-controls {
+  margin: 0 0 18px;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--panel-radius);
+  background: #fff;
+  box-shadow: var(--shadow-soft);
+}
+.production-controls[hidden] { display: none; }
+.production-controls-heading,
+.production-controls-title,
+.production-controls-actions,
+.production-control-title-line,
+.production-control-meta,
+.production-control-form-footer,
+.production-control-form-footer > div {
+  display: flex;
+  align-items: center;
+}
+.production-controls-heading {
+  justify-content: space-between;
+  gap: 14px;
+}
+.production-controls-title { min-width: 0; gap: 11px; }
+.production-controls-icon,
+.production-control-kind-icon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  color: var(--primary);
+  background: #edf4ff;
+}
+.production-controls-title h3 { margin: 0; color: var(--text); font-size: 17px; line-height: 1.25; }
+.production-controls-title p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+.production-controls-count {
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: #8a4c08;
+  background: #fff2d9;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.production-controls-actions { gap: 8px; flex: 0 0 auto; }
+.production-controls-actions .button { min-height: 36px; padding: 7px 11px; font-size: 12px; }
+.production-controls-message { margin: 13px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.production-controls-error { margin-top: 12px; padding: 9px 11px; border: 1px solid #efcfb3; border-radius: 9px; color: #8e4a14; background: #fff8ef; font-size: 12px; line-height: 1.45; }
+.production-control-list { display: grid; margin-top: 12px; border-top: 1px solid var(--border); }
+.production-control-row {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.production-control-row:last-child { border-bottom: 0; padding-bottom: 2px; }
+.production-control-row.is-finished { opacity: .78; }
+.production-control-row.is-urgent .production-control-kind-icon { color: #a84825; background: #fff0e8; }
+.production-control-copy { min-width: 0; }
+.production-control-title-line { flex-wrap: wrap; gap: 8px; }
+.production-control-title-line strong { color: var(--text); font-size: 13px; }
+.production-control-priority { padding: 3px 7px; border-radius: 999px; color: #81500d; background: #fff2d9; font-size: 10px; font-weight: 750; white-space: nowrap; }
+.production-control-priority.urgent { color: #a33b2e; background: #fff0ed; }
+.production-control-meta { flex-wrap: wrap; gap: 5px 13px; margin-top: 5px; color: var(--muted); font-size: 11px; }
+.production-control-meta span + span::before { content: "·"; margin-right: 8px; color: #a0aec0; }
+.production-control-copy p { margin: 5px 0 0; color: #405772; font-size: 12px; line-height: 1.45; white-space: pre-wrap; }
+.production-control-proof { display: block; margin-top: 5px; color: #087653; font-size: 11px; }
+.production-control-status { display: inline-flex; align-items: center; gap: 5px; color: #63748a; font-size: 11px; font-weight: 650; white-space: nowrap; }
+.production-control-status.active { color: #8a4c08; }
+.production-control-status.completed, .production-control-status.acknowledged { color: #087653; }
+.production-control-cancel { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); background: #fff; cursor: pointer; }
+.production-control-cancel:hover { color: #a33b2e; border-color: #efc6c2; background: #fff7f6; }
+.production-control-form { display: grid; gap: 17px; }
+.production-control-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.production-control-form label { display: grid; gap: 6px; min-width: 0; color: var(--text); font-size: 12px; font-weight: 650; }
+.production-control-form label.wide { grid-column: 1 / -1; }
+.production-control-form label > span { display: flex; align-items: baseline; gap: 6px; }
+.production-control-form label small { color: var(--muted); font-size: 11px; font-weight: 400; }
+.production-control-form input, .production-control-form select, .production-control-form textarea { width: 100%; min-height: 40px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 9px; color: var(--text); background: #fff; font: inherit; font-weight: 450; }
+.production-control-form textarea { min-height: 76px; resize: vertical; }
+.production-control-form input:focus-visible, .production-control-form select:focus-visible, .production-control-form textarea:focus-visible { outline: 3px solid #2563eb2b; border-color: var(--primary); }
+.production-control-form-footer { justify-content: space-between; gap: 12px; padding-top: 13px; border-top: 1px solid var(--border); }
+.production-control-form-footer > span { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
+.production-control-form-footer > span svg { color: var(--primary); }
+.production-control-form-footer > div { gap: 8px; }
+@media (max-width: 720px) {
+  .production-controls { padding: 14px; }
+  .production-controls-heading { align-items: flex-start; flex-direction: column; }
+  .production-controls-actions { width: 100%; }
+  .production-controls-actions .button:last-child { margin-left: auto; }
+  .production-control-row { grid-template-columns: 34px minmax(0, 1fr) auto; gap: 9px; }
+  .production-control-kind-icon { width: 34px; height: 34px; }
+  .production-control-status { grid-column: 2; justify-self: start; }
+  .production-control-cancel { grid-column: 3; grid-row: 1 / span 2; }
+  .production-control-form-grid { grid-template-columns: minmax(0, 1fr); }
+  .production-control-form label.wide { grid-column: auto; }
+  .production-control-form-footer { align-items: flex-start; flex-direction: column; }
+  .production-control-form-footer > div { width: 100%; }
+  .production-control-form-footer > div .button:last-child { margin-left: auto; }
+}
