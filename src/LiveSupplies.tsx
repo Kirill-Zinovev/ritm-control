@@ -563,6 +563,24 @@ export function LiveSuppliesWorkspace({
   const [recoveryError, setRecoveryError] = useState("");
   const operationId = useRef("");
   const summaries = useMemo(() => buildSummaries(live), [live]);
+  const effectiveBoxLinks = useMemo(() => {
+    const links = [...assemblyBoxLinks];
+    for (const supply of writer?.production?.supplies || []) {
+      const rolls = supply.parts.filter((part) => part.department === "roll");
+      const boxes = supply.parts.filter((part) => part.department === "box");
+      if (rolls.length !== 1 || boxes.length !== 1) continue;
+      const roll = summaries.find((item) => item.sheet.sourceId === "roll-printing" && item.sheet.sheetId === rolls[0].sheetId);
+      const box = summaries.find((item) => item.sheet.sourceId === "box-printing" && item.sheet.sheetId === boxes[0].sheetId);
+      if (!roll || !box) continue;
+      const existing = links.findIndex((link) => link.boxSheetId === box.sheet.sheetId && link.name === roll.sheet.name && (link.targetRollSheetId === null || link.targetRollSheetId === roll.sheet.sheetId));
+      if (existing >= 0) {
+        if (links[existing].targetRollSheetId === null) links[existing] = { ...links[existing], targetRollSheetId: roll.sheet.sheetId };
+        continue;
+      }
+      links.push({ name: roll.sheet.name, boxSheetId: box.sheet.sheetId, targetRollSheetId: roll.sheet.sheetId, boxRows: box.orders.length, boxQuantity: box.orders.reduce((sum, order) => sum + order.quantity, 0) });
+    }
+    return links;
+  }, [assemblyBoxLinks, summaries, writer?.production?.supplies]);
   const refreshAssemblyBoxLinks = useCallback(async () => {
     try {
       const response = await fetch("/api/assembly-transfers/links", {
@@ -594,7 +612,7 @@ export function LiveSuppliesWorkspace({
         )),
   );
   const linkedBoxSheetIds = new Set(
-    assemblyBoxLinks
+    effectiveBoxLinks
       .filter((link) => link.targetRollSheetId !== null)
       .map((link) => link.boxSheetId),
   );
@@ -604,7 +622,7 @@ export function LiveSuppliesWorkspace({
       linkedBoxSheetIds.has(summary.sheet.sheetId)
     )
       return false;
-    const box = linkedAssemblyBoxSummary(summary, summaries, assemblyBoxLinks);
+    const box = linkedAssemblyBoxSummary(summary, summaries, effectiveBoxLinks);
     return (
       summary.sheet.name +
       " " +
@@ -623,7 +641,7 @@ export function LiveSuppliesWorkspace({
     visible[0] ||
     null;
   const selectedBox = selected
-    ? linkedAssemblyBoxSummary(selected, summaries, assemblyBoxLinks)
+    ? linkedAssemblyBoxSummary(selected, summaries, effectiveBoxLinks)
     : null;
   const selectedBoxPrintedProgress = selectedBox
     ? observedTotal([
@@ -651,7 +669,7 @@ export function LiveSuppliesWorkspace({
     ? [...selected.orders, ...(selectedBox?.orders || [])]
     : [];
   const selectedLinkedBoxSheetIds = selected
-    ? assemblyBoxLinks
+    ? effectiveBoxLinks
         .filter(
           (link) =>
             link.name === selected.sheet.name &&
@@ -1510,7 +1528,7 @@ export function LiveSuppliesWorkspace({
                 const box = linkedAssemblyBoxSummary(
                   summary,
                   summaries,
-                  assemblyBoxLinks,
+                  effectiveBoxLinks,
                 );
                 const area = box
                   ? assemblyAreaTotal(

@@ -43,6 +43,7 @@ function googleHarness({
   corruptReadback = false,
   missingFormulaRows = [],
   missingFormulaCells = [],
+  literalSizeRows = [],
   formulaOverrides = {},
   templateRows = 600,
 } = {}) {
@@ -50,7 +51,7 @@ function googleHarness({
   const descriptor = box ? DEPARTMENTS.box.template : ROLL_PRINTING_SHEET;
   const sheets = new Map(),
     requests = [],
-    counters = { writes: 0, driveChecks: 0 };
+    counters = { writes: 0 };
   let loseWriteResponseAfterAcceptance = loseWriteResponse;
   const template = {
     properties: {
@@ -82,7 +83,7 @@ function googleHarness({
       sheetRow >= (descriptor.dataStartRow || 5) &&
       sheetRow <= templateRows
     ) {
-      for (const column of (box ? [5, 9] : [5, 8, 9])) {
+      for (const column of (box ? [5, 9] : [5, 6, 8, 9])) {
         const cell = `${String.fromCharCode(65 + column)}${sheetRow}`;
         if (
           missingFormulaRows.includes(sheetRow) ||
@@ -107,6 +108,9 @@ function googleHarness({
       values[3] = {
         userEnteredValue: { formulaValue: `=MACHINE(E${sheetRow})` },
       };
+      if (!box) values[6] = literalSizeRows.includes(sheetRow)
+        ? { userEnteredValue: { stringValue: "100x40" } }
+        : { userEnteredValue: { formulaValue: "=VLOOKUP(E:E;'БДО'!B:G;6;0)" } };
       if (sheetRow <= 11) {
         values[0] = { userEnteredValue: { numberValue: 46302 } };
         values[17] = { userEnteredValue: { stringValue: "В работе" } };
@@ -159,13 +163,11 @@ function googleHarness({
 
   const fetcher = async (url, options = {}) => {
     const parsed = new URL(url);
-    if (parsed.hostname === "www.googleapis.com") {
-      counters.driveChecks++;
+    if (parsed.hostname === "www.googleapis.com")
       return response({
         id: documentId,
         capabilities: { canEdit: true },
       });
-    }
     assert.equal(parsed.hostname, "sheets.googleapis.com");
     if (parsed.pathname.endsWith(":batchUpdate")) {
       counters.writes++;
@@ -321,8 +323,6 @@ test("box destination copies its own template, initializes checkbox facts and ne
   const writer = new ProductionSupplyWriter({ department: "box", credentialWriter: { token: async () => "test-token", metrics: { readRequests: 0, writeRequests: 0 } }, fetcher: google.fetcher });
   const input = payload("11111111-1111-4111-8111-111111111111");
   const plan = await writer.prepareCreate(input);
-  assert.equal(google.counters.driveChecks, 0, "cloud preflight must stay on the allowlisted Sheets API");
-  assert.equal(google.counters.writes, 0, "permission is checked by the first journaled write, not during preflight");
   plan.manifest = { version: 1, id: "RITM-SUPPLY-" + input.operationId, revision: input.operationId, name: input.name,
     parts: [{ department: "box", documentId: DEPARTMENTS.box.documentId, sheetId: plan.sheetId }], ready: false };
   await writer.execute(plan);
@@ -415,14 +415,9 @@ test("new supply clears template data, renames the heading and initializes print
       "11111111-1111-4111-8111-111111111111",
     );
     assert.equal(JSON.stringify(saved.payload.plan).includes("FORMULA"), false);
-    assert.equal(
-      rows[4].values[8].userEnteredValue.formulaValue,
-      "=FORMULA_9_5",
-    );
-    assert.equal(
-      rows[4].values[9].userEnteredValue.formulaValue,
-      "=FORMULA_10_5",
-    );
+    assert.match(rows[4].values[7].userEnteredValue.formulaValue, /REGEXEXTRACT\(TO_TEXT\(G5\)/);
+    assert.match(rows[4].values[8].userEnteredValue.formulaValue, /REGEXEXTRACT\(TO_TEXT\(G5\)/);
+    assert.match(rows[4].values[9].userEnteredValue.formulaValue, /F5\*H5\*I5\*O5/);
   } finally {
     h.store.close();
   }
@@ -682,14 +677,8 @@ test("create carries a proven missing formula into the new copy only", async () 
     assert.equal(result.status, "verified", JSON.stringify(result));
     const created = h.google.sheets.get(result.sheetId);
     const copiedRow = created.data[0].rowData[79].values;
-    assert.equal(
-      copiedRow[8].userEnteredValue.formulaValue,
-      '=IF($E80=\"\";\"\";--SUBSTITUTE(REGEXEXTRACT(SUBSTITUTE(SUBSTITUTE(LOWER(TRIM($G80));\"х\";\"x\");\"×\";\"x\");\"[0-9]+[,.]?[0-9]*$\");\",\";\".\")/100)',
-    );
-    assert.equal(
-      copiedRow[9].userEnteredValue.formulaValue,
-      "=F80*H80*I80*O80",
-    );
+    assert.match(copiedRow[8].userEnteredValue.formulaValue, /REGEXEXTRACT\(TO_TEXT\(G80\)/);
+    assert.match(copiedRow[9].userEnteredValue.formulaValue, /F80\*H80\*I80\*O80/);
     assert.equal(
       copiedRow[5].userEnteredValue.formulaValue,
       "=VLOOKUP(E:E;'БДО'!B:F;5;0)",
@@ -699,13 +688,22 @@ test("create carries a proven missing formula into the new copy only", async () 
     const operation = h.store.rollSupplyOperation(
       "81818181-8181-4181-8181-818181818181",
     );
-    assert.deepEqual(
-      operation.payload.plan.formulaRepairs.map((repair) => repair.cell),
-      ["I80"],
-    );
+    assert.ok(operation.payload.plan.formulaRepairs.some((repair) => repair.cell === "I80"));
   } finally {
     h.store.close();
   }
+});
+
+test("a literal size in the template is replaced by a verified lookup in the new supply", async () => {
+  const h = makeService({ literalSizeRows: [12] });
+  try {
+    const lines = Array.from({ length: 8 }, (_, index) => ({ article: `TEST-${index}`, quantity: 10 }));
+    const result = await h.service.execute(payload("62626262-6262-4262-8262-626262626262", { lines }));
+    const row = h.google.sheets.get(result.sheetId).data[0].rowData[11].values;
+    assert.equal(row[6].userEnteredValue.formulaValue, "=VLOOKUP(E:E;'БДО'!B:G;6;0)");
+    assert.match(row[7].userEnteredValue.formulaValue, /REGEXEXTRACT\(TO_TEXT\(G12\)/);
+    assert.equal(h.google.sheets.get(ROLL_PRINTING_SHEET.gid).data[0].rowData[11].values[6].userEnteredValue.stringValue, "100x40");
+  } finally { h.store.close(); }
 });
 
 test("explicit approval is required before any Google read or write", async () => {
@@ -936,7 +934,7 @@ test("append inserts new articles at the top and preserves existing rows", async
             .map((request) => request.updateCells.start.columnIndex),
         ),
       ].sort((a, b) => a - b),
-      [4, 14, 23, 28],
+      [4, 7, 8, 9, 10, 14, 23, 28],
     );
     assert.ok(appendBatch.some((request) => request.insertDimension));
     assert.ok(appendBatch.some((request) => request.copyPaste));

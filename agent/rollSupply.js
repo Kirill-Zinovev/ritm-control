@@ -11,7 +11,7 @@ const HEADER_ROW = ROLL_PRINTING_SHEET.headerRow;
 const UID_HEADER_ROW = ROLL_PRINTING_SHEET.uidHeaderRow;
 const MAX_ORDERS = 500;
 const MAX_TEMPLATE_SCAN_ROWS = 4096;
-const FORMULA_COLUMNS = [6, 9, 10]; // F, I, J in the registered roll-printing template.
+const FORMULA_COLUMNS = [6, 7, 9, 10]; // F, G, I, J in the roll-printing template.
 const REGISTRY_KEY = "rollPrintingAdditionalSheets";
 const fail = (code, message, status = 409) => {
   throw new RepairError(code, message, status);
@@ -480,6 +480,10 @@ function boxDimensionFormulaRepairs(startRow, count) {
   return repairs;
 }
 
+function rollDimensionFormulaRepairs(startRow, count) {
+  return boxDimensionFormulaRepairs(startRow, count).filter((item) => [8, 9, 10, 11].includes(item.column));
+}
+
 function formulaColumnRequests(sheetId, repairs) {
   const columns = new Map();
   for (const repair of repairs || []) {
@@ -704,6 +708,7 @@ export class RollSupplySheetsWriter {
           clearThrough - DATA_START_ROW + 1,
         ),
       );
+    else formulaRepairs.push(...rollDimensionFormulaRepairs(DATA_START_ROW, lines.length));
     const formulas = formulaSignature(
       sourceGrid,
       DATA_START_ROW,
@@ -868,7 +873,7 @@ export class RollSupplySheetsWriter {
       formulaSourceRow: DATA_START_ROW + lines.length,
       formulaRepairs: this.box
         ? boxDimensionFormulaRepairs(startRow, lines.length)
-        : [],
+        : rollDimensionFormulaRepairs(startRow, lines.length),
       verifyThrough: Math.max(scanRows, DATA_START_ROW + MAX_ORDERS - 1) + lines.length,
     };
   }
@@ -1046,7 +1051,7 @@ export class RollSupplySheetsWriter {
           },
         });
       }
-      if (this.box && plan.formulaRepairs?.length)
+      if (plan.formulaRepairs?.length)
         requests.push(...formulaColumnRequests(sheetId, plan.formulaRepairs));
     }
     if (plan.action === "create")
