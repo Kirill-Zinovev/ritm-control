@@ -40,6 +40,8 @@ function normalizedInput(input) {
   if (!SCOPES.has(scope)) fail("control_scope_invalid", "Выберите поставку или артикул.");
   const article = scope === "article" ? articleKey(input?.article) : "";
   if (scope === "article" && !article) fail("control_article_required", "Выберите артикул.");
+  const batchId = text(input?.batchId, 36);
+  if (batchId && !UUID.test(batchId)) fail("control_batch_invalid", "Не удалось связать выбранные артикулы с задачей.");
   const kind = input?.kind;
   if (!CONTROL_KINDS.has(kind)) fail("control_kind_invalid", "Выберите тип задачи.");
   const priority = input?.priority;
@@ -51,7 +53,21 @@ function normalizedInput(input) {
   const note = text(input?.note, 320);
   const shipmentName = text(input?.shipmentName, 100);
   if (!shipmentName) fail("control_shipment_name_invalid", "У поставки не найдено название.");
-  return { requestId, shipmentId, shipmentIds, shipmentName, scope, article, kind, priority, trigger, title, note };
+  return { requestId, shipmentId, shipmentIds, shipmentName, scope, article, batchId: batchId || null, kind, priority, trigger, title, note };
+}
+
+function sameControl(existing, clean) {
+  const same = ["shipmentId", "scope", "article", "kind", "priority", "trigger", "title", "note"]
+    .every((key) => existing[key] === clean[key]);
+  const sameBatch = (existing.batchId || null) === clean.batchId;
+  const sameTargets = JSON.stringify(existing.shipmentIds || [existing.shipmentId]) === JSON.stringify(clean.shipmentIds);
+  return same && sameBatch && sameTargets;
+}
+
+function batchChildRequestId(batchId, index) {
+  const root = batchId.replace(/-/g, "").slice(0, 24);
+  const value = root + (index + 1).toString(16).padStart(8, "0");
+  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
 }
 
 export function listProductionControls(scope, shipmentIds = "") {
@@ -71,10 +87,7 @@ export function createProductionControl(scope, input, { now = Date.now, owner = 
   const list = records(scope);
   const existing = list.find((row) => row.requestId === clean.requestId);
   if (existing) {
-    const same = ["shipmentId", "scope", "article", "kind", "priority", "trigger", "title", "note"]
-      .every((key) => existing[key] === clean[key]);
-    const sameTargets = JSON.stringify(existing.shipmentIds || [existing.shipmentId]) === JSON.stringify(clean.shipmentIds);
-    if (!same || !sameTargets) fail("control_request_conflict", "Номер запроса уже использован. Обновите страницу и повторите.", 409);
+    if (!sameControl(existing, clean)) fail("control_request_conflict", "Номер запроса уже использован. Обновите страницу и повторите.", 409);
     return { control: structuredClone(existing), duplicate: true };
   }
   if (list.length >= 5000) fail("control_limit_reached", "Достигнут лимит истории задач RITM. Обратитесь к владельцу.", 409);
@@ -88,6 +101,7 @@ export function createProductionControl(scope, input, { now = Date.now, owner = 
     section: "assembly_packing",
     scope: clean.scope,
     article: clean.article || null,
+    batchId: clean.batchId,
     kind: clean.kind,
     priority: clean.priority,
     trigger: clean.trigger,
@@ -104,6 +118,44 @@ export function createProductionControl(scope, input, { now = Date.now, owner = 
   return { control: structuredClone(control), duplicate: false };
 }
 
+export function createProductionControlBatch(scope, input, { now = Date.now, owner = "" } = {}) {
+  if (!scope?.lease) fail("control_lock_required", "Не удалось подтвердить сохранение. Повторите попытку.", 409);
+  const batchId = String(input?.requestId || "").trim();
+  if (!UUID.test(batchId)) fail("control_request_invalid", "Не удалось подтвердить запрос. Обновите форму и повторите.");
+  if (!Array.isArray(input?.articles) || !input.articles.length || input.articles.length > 40)
+    fail("control_articles_invalid", "Выберите от 1 до 40 артикулов.");
+
+  const articleValues = [...new Set(input.articles.map(articleKey).filter(Boolean))];
+  if (articleValues.length !== input.articles.length) fail("control_articles_invalid", "В списке есть пустые или повторяющиеся артикулы.");
+  const prepared = articleValues.map((article, index) => normalizedInput({
+    ...input,
+    requestId: batchChildRequestId(batchId, index),
+    batchId,
+    scope: "article",
+    article,
+  }));
+  const list = records(scope);
+
+  // Preflight every child before the first write so a retry or conflict cannot
+  // leave only part of a multi-article task saved.
+  const existing = prepared.map((clean) => list.find((row) => row.requestId === clean.requestId) || null);
+  if (existing.some(Boolean)) {
+    if (!existing.every(Boolean) || existing.some((row, index) => !sameControl(row, prepared[index])))
+      fail("control_batch_conflict", "Состав этой групповой задачи уже менялся. Обновите окно и проверьте список.", 409);
+    return { controls: existing.map((row) => structuredClone(row)), duplicate: true };
+  }
+  if (list.length + prepared.length > 5000) fail("control_limit_reached", "Достигнут лимит истории задач RITM. Обратитесь к владельцу.", 409);
+
+  const controls = prepared.map((clean) => createProductionControl(scope, {
+    ...input,
+    requestId: clean.requestId,
+    batchId,
+    scope: "article",
+    article: clean.article,
+  }, { now, owner }).control);
+  return { controls, duplicate: false };
+}
+
 export function cancelProductionControl(scope, input, { now = Date.now } = {}) {
   if (!scope?.lease) fail("control_lock_required", "Не удалось подтвердить сохранение. Повторите попытку.", 409);
   const controlId = String(input?.controlId || "").trim();
@@ -118,6 +170,20 @@ export function cancelProductionControl(scope, input, { now = Date.now } = {}) {
   list[index] = next;
   scope.putOperation("production-control", next);
   return { control: structuredClone(next), duplicate: false };
+}
+
+export function cancelProductionControlBatch(scope, input, { now = Date.now } = {}) {
+  if (!scope?.lease) fail("control_lock_required", "Не удалось подтвердить отмену. Повторите попытку.", 409);
+  const batchId = String(input?.batchId || "").trim();
+  if (!UUID.test(batchId)) fail("control_batch_invalid", "Групповая задача не найдена. Обновите список.");
+  const controls = records(scope).filter((row) => row.batchId === batchId);
+  if (!controls.length) fail("control_not_found", "Групповая задача уже удалена или недоступна.", 404);
+  const active = controls.filter((row) => row.status === "active");
+  if (!active.length) return { controls: controls.map((row) => structuredClone(row)), duplicate: true };
+  const timestamp = new Date(now()).toISOString();
+  const cancelled = active.map((current) => ({ ...current, status: "cancelled", updatedAt: timestamp }));
+  cancelled.forEach((control) => scope.putOperation("production-control", control));
+  return { controls: cancelled.map((row) => structuredClone(row)), duplicate: false };
 }
 
 export function listAssemblyControls(scope, shipmentId) {

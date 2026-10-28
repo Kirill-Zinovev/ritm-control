@@ -6130,6 +6130,31 @@ td small {
 .production-control-form input, .production-control-form select, .production-control-form textarea { width: 100%; min-height: 40px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 9px; color: var(--text); background: #fff; font: inherit; font-weight: 450; }
 .production-control-form textarea { min-height: 76px; resize: vertical; }
 .production-control-form input:focus-visible, .production-control-form select:focus-visible, .production-control-form textarea:focus-visible { outline: 3px solid #2563eb2b; border-color: var(--primary); }
+.production-control-article-picker { display: grid; gap: 8px; min-width: 0; }
+.production-control-article-search { display: flex; align-items: center; gap: 9px; min-height: 42px; padding: 0 11px; border: 1px solid var(--border); border-radius: 10px; color: var(--muted); background: #fff; }
+.production-control-article-search:focus-within { outline: 3px solid #2563eb2b; border-color: var(--primary); }
+.production-control-article-search input { min-width: 0; min-height: 40px; padding: 0; border: 0; outline: 0; box-shadow: none; }
+.production-control-article-search input:focus-visible { outline: 0; }
+.production-control-article-search > button { display: grid; place-items: center; width: 27px; height: 27px; flex: 0 0 auto; border: 0; border-radius: 7px; color: var(--muted); background: transparent; cursor: pointer; }
+.production-control-selected-articles { display: flex; flex-wrap: wrap; gap: 6px; max-height: 96px; overflow: auto; }
+.production-control-selected-articles > span { display: inline-flex; align-items: center; gap: 5px; padding: 4px 6px 4px 9px; border: 1px solid #cbdcff; border-radius: 999px; color: #174ea6; background: #f0f6ff; font-size: 11px; font-weight: 700; }
+.production-control-selected-articles button { display: grid; place-items: center; width: 19px; height: 19px; padding: 0; border: 0; border-radius: 50%; color: #55739c; background: transparent; cursor: pointer; }
+.production-control-selected-articles button:hover { color: #a33b2e; background: #ffe9e5; }
+.production-control-article-results { max-height: 205px; overflow: auto; padding: 4px; border: 1px solid var(--border); border-radius: 10px; background: #fff; }
+.production-control-article-results-head { position: sticky; top: -4px; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 7px; border-bottom: 1px solid var(--border); background: #fff; }
+.production-control-article-results-head > small, .production-control-article-limit { color: var(--muted); font-size: 10px; font-weight: 500; }
+.production-control-article-results-head > button { padding: 3px 0; border: 0; color: var(--primary); background: transparent; font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; }
+.production-control-article-results-head > button:disabled { color: #9aa9bb; cursor: not-allowed; }
+.production-control-article-option { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 34px; padding: 5px 8px; border: 0; border-radius: 7px; color: var(--text); background: transparent; text-align: left; font: inherit; font-size: 12px; cursor: pointer; }
+.production-control-article-option:hover, .production-control-article-option.selected { background: #eff5ff; }
+.production-control-article-option > span:first-child { display: grid; place-items: center; width: 17px; height: 17px; color: var(--primary); }
+.production-control-article-option:disabled { color: #98a6b8; cursor: not-allowed; }
+.production-control-article-checkbox { width: 15px; height: 15px; border: 1px solid #b8c6d8; border-radius: 4px; background: #fff; }
+.production-control-article-limit { display: block; padding: 7px 8px 4px; }
+.production-control-paste-warning { color: #986013 !important; font-size: 11px !important; font-weight: 600 !important; }
+.production-control-article-hint { color: var(--muted) !important; font-size: 11px !important; line-height: 1.45; font-weight: 450 !important; }
+.production-control-article-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.production-control-article-list > span { padding: 3px 7px; border: 1px solid #e0e8f2; border-radius: 6px; color: #385779; background: #f7f9fc; font-size: 10px; font-weight: 650; }
 .production-control-form-footer { justify-content: space-between; gap: 12px; padding-top: 13px; border-top: 1px solid var(--border); }
 .production-control-form-footer > span { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
 .production-control-form-footer > span svg { color: var(--primary); }
