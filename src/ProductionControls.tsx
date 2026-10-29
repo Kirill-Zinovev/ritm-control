@@ -116,6 +116,8 @@ export function ProductionControls({
   const [note, setNote] = useState("");
   const batchRequest = useRef<{ fingerprint: string; id: string } | null>(null);
   const refreshSequence = useRef(0);
+  const retryLockRef = useRef<() => Promise<void>>(async () => {});
+  const automaticRetries = useRef<Record<string, number>>({});
   const activeKeyRef = useRef(shipmentIdsKey);
   activeKeyRef.current = shipmentIdsKey;
   const uniqueArticles = useMemo(() => [...new Map(articles.map((value) => value.trim()).filter(Boolean).map((value) => [articleKey(value), value])).values()], [articles]);
@@ -186,6 +188,7 @@ export function ProductionControls({
       setLockSaving(false);
     }
   };
+  retryLockRef.current = toggleShipmentLock;
 
   useEffect(() => {
     setLockActionError("");
@@ -195,6 +198,19 @@ export function ProductionControls({
     window.addEventListener("focus", onFocus);
     return () => { window.clearInterval(timer); window.removeEventListener("focus", onFocus); };
   }, [refresh]);
+
+  useEffect(() => {
+    const eventId = pendingLock?.eventId;
+    if (!lockKnown || !eventId || lockSaving || loading) return;
+    const previous = automaticRetries.current[eventId] || 0;
+    const delay = previous ? Math.max(1500, 30000 - (Date.now() - previous)) : 1500;
+    const timer = window.setTimeout(() => {
+      if (document.visibilityState !== "visible") return;
+      automaticRetries.current[eventId] = Date.now();
+      void retryLockRef.current();
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [lockKnown, pendingLock?.eventId, pendingLock?.status, lockSaving, loading]);
 
   useEffect(() => {
     setSelectedArticles((current) => current.filter((value) => articleLookup.has(articleKey(value))));
@@ -329,7 +345,7 @@ export function ProductionControls({
         </div>
         <div className={`shipment-lock-state ${!lockKnown || pendingLock || partiallyLocked ? "pending" : shipmentLocked ? "locked" : "open"}`} role="status">
           <span className="shipment-lock-state-icon">{!lockKnown ? <TriangleAlert size={17} /> : pendingLock ? <RefreshCw size={17} /> : shipmentLocked || partiallyLocked ? <LockKeyhole size={17} /> : <UnlockKeyhole size={17} />}</span>
-          <span><strong>{!lockKnown ? (loading ? "Проверяем состояние сборки" : "Состояние замка не подтверждено") : pendingLock ? (pendingLock.status === "unlocking" ? "Подтверждаем открытие в Assembly" : "Подтверждаем закрытие в Assembly") : partiallyLocked ? "Закрыта только часть поставки" : shipmentLocked ? "Поставка закрыта для сборки" : "Поставка открыта для сборки"}</strong><small>{!lockKnown ? "Проверьте связь и обновите состояние перед изменением замка." : pendingLock ? "Дождитесь подтверждения Assembly. Если ожидание затянулось, повторите подтверждение." : partiallyLocked ? "Для полного закрытия нажмите «Закрыть всю поставку»." : shipmentLocked ? "Сборщики не смогут записывать работу и менять короба." : "Сборщики могут записывать работу и управлять коробами."}{lockKnown && !pendingLock && shipmentLocks.some((lock) => lock.changedAt) ? ` · Изменено ${dateLabel(shipmentLocks.map((lock) => lock.changedAt).filter(Boolean).sort().at(-1) || null)}` : ""}</small></span>
+          <span><strong>{!lockKnown ? (loading ? "Проверяем состояние сборки" : "Состояние замка не подтверждено") : pendingLock ? (pendingLock.status === "unlocking" ? "Подтверждаем открытие в Assembly" : "Подтверждаем закрытие в Assembly") : partiallyLocked ? "Закрыта только часть поставки" : shipmentLocked ? "Поставка закрыта для сборки" : "Поставка открыта для сборки"}</strong><small>{!lockKnown ? "Проверьте связь и обновите состояние перед изменением замка." : pendingLock ? "Проверяем подтверждение Assembly автоматически; при необходимости можно повторить проверку кнопкой." : partiallyLocked ? "Для полного закрытия нажмите «Закрыть всю поставку»." : shipmentLocked ? "Сборщики не смогут записывать работу и менять короба." : "Сборщики могут записывать работу и управлять коробами."}{lockKnown && !pendingLock && shipmentLocks.some((lock) => lock.changedAt) ? ` · Изменено ${dateLabel(shipmentLocks.map((lock) => lock.changedAt).filter(Boolean).sort().at(-1) || null)}` : ""}</small></span>
         </div>
         {!activeShipmentIds.length && <p className="production-controls-message">Поставка пока не связана со сборкой. Задачу можно будет добавить после синхронизации.</p>}
         {error && <div className="production-controls-error" role="alert">{error}</div>}

@@ -1,6 +1,7 @@
 import { CloudError } from "./access.js";
 import { createHmac } from "node:crypto";
 import { assemblyUrl } from "./config.js";
+import { cloudFetch } from "./fetch.js";
 
 const KIND = "production-shipment-lock";
 const SHIPMENT_ID = /^RITM-(?:ROLL-\d+|BOX-\d+|SUPPLY-[a-f0-9-]{36})$/i;
@@ -41,9 +42,10 @@ function isLocked(record) {
 }
 
 export async function deliverShipmentLockEvent(bindings, event, fetcher = fetch) {
+  const failed = (reason) => { console.warn("shipment_lock_delivery_failed", reason); return false; };
   const endpoint = assemblyUrl(bindings);
   const secret = bindings.RITM_ASSEMBLY_SYNC_SECRET;
-  if (!endpoint || !/^[a-f0-9]{64}$/i.test(secret || "")) return false;
+  if (!endpoint || !/^[a-f0-9]{64}$/i.test(secret || "")) return failed("configuration");
   const body = JSON.stringify({
     event,
     signature: createHmac("sha256", secret).update(JSON.stringify(event)).digest("hex"),
@@ -51,7 +53,7 @@ export async function deliverShipmentLockEvent(bindings, event, fetcher = fetch)
   const signal = AbortSignal.timeout(30000);
   let response;
   try {
-    response = await fetcher(endpoint, {
+    response = await cloudFetch(fetcher, endpoint, {
       method: "POST",
       redirect: "manual",
       signal,
@@ -61,16 +63,17 @@ export async function deliverShipmentLockEvent(bindings, event, fetcher = fetch)
     if ([302, 303].includes(response.status)) {
       const location = new URL(response.headers.get("location") || "", endpoint);
       if (location.protocol !== "https:" || location.hostname !== "script.googleusercontent.com" || location.username || location.password)
-        return false;
-      response = await fetcher(location.href, { method: "GET", redirect: "error", signal });
+        return failed("redirect_host");
+      response = await cloudFetch(fetcher, location.href, { method: "GET", redirect: "error", signal });
     }
-    if (!response.ok) return false;
+    if (!response.ok) return failed(`http_${response.status}`);
     const raw = await response.text();
-    if (raw.length > 8192) return false;
+    if (raw.length > 8192) return failed("receipt_too_large");
     const receipt = JSON.parse(raw);
-    return receipt?.ok === true && receipt.status === "synced" && receipt.eventId === event.eventId;
-  } catch {
-    return false;
+    if (receipt?.ok === true && receipt.status === "synced" && receipt.eventId === event.eventId) return true;
+    return failed(receipt?.status === "rejected" ? "rejected" : receipt?.status === "pending" ? "pending" : "unconfirmed_receipt");
+  } catch (error) {
+    return failed(error?.code === "unexpected_redirect" ? "unexpected_redirect" : error?.name === "TimeoutError" ? "timeout" : error?.name === "SyntaxError" ? "invalid_receipt" : "transport");
   }
 }
 
