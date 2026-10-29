@@ -421,6 +421,27 @@ test("box progress uses confirmed R/S flags and preserves unknown manual print a
   assert.equal(order.areaKnown, false);
 });
 
+test("inserted supply columns preserve quantities, area and roll/box progress", () => {
+  const headers = ["Дата скидывания", "Фото", "Наличие макета", "Станок", "Артикул", "расширения", "Кол-во листов", "Размер", "Ширина", "Высота", "Объем на все кол-во скинули", "Объем на все кол-во осталось", "Папка печати", "Кратность", "Время печати 1 кол-ва на листе (мин)", "Кол-во", "округление", "Кол-во осталось", "Готовность печати", "Готовность порезки", "Прогресс печати", "Прогресс порезки", "Дата готовности печати", "Дата готовности порезки", "остаток по печати:"];
+  const rows = Array.from({length: 4}, () => Array(30).fill(""));
+  rows[0][29] = "UID"; rows[3] = headers;
+  const row = Array(30).fill("");
+  row[4] = "SKU"; row[6] = "2"; row[8] = "0,21"; row[9] = "0,30";
+  row[10] = "12,600"; row[15] = "100"; row[18] = "TRUE"; row[19] = "FALSE";
+  row[20] = "70%"; row[21] = "40%"; row[24] = "30"; row[29] = "u1";
+  const roll = indexOrders([{gid: 901, name: "roll", sourceId: "roll-printing", headerRow: 4, dataStartRow: 5, rows: [...rows, row]}]).orders[0];
+  assert.equal(roll.quantity, 100); assert.ok(Math.abs(roll.plannedArea - 12.6) < 1e-9);
+  assert.equal(roll.printProgress, 70); assert.equal(roll.cutProgress, 40); assert.equal(roll.remainingPrint, 30);
+  const box = indexOrders([{gid: 902, name: "box", sourceId: "box-printing", headerRow: 4, dataStartRow: 5, rows: [...rows, row]}]).orders[0];
+  assert.equal(box.quantity, 100); assert.equal(box.printProgress, 100); assert.equal(box.cutProgress, 0);
+});
+
+test("ambiguous quantity headers are rejected instead of choosing a wrong column", () => {
+  const rows = Array.from({length: 4}, () => Array(30).fill(""));
+  rows[0][29] = "UID"; rows[3][4] = "Артикул"; rows[3][14] = "Кол-во"; rows[3][15] = "Кол-во";
+  assert.throws(() => indexOrders([{gid: 1, name: "ambiguous", headerRow: 4, dataStartRow: 5, rows}]), /Duplicate order column/);
+});
+
 test("supply area trusts valid J, preserves missing areas, and never invents manual dimensions", () => {
   const headers = Array.from({ length: 4 }, () => Array(29).fill(""));
   headers[0][28] = "UID";

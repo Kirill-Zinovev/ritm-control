@@ -334,10 +334,17 @@ export function indexOrders(sheets) {
     const machineColumn = headers.findIndex((header) => normal(header) === "станок");
     const photoColumn = headers.findIndex((header) => normal(header) === "фото");
     const nameColumn = headers.findIndex((header) => ["наименование", "название", "название товара"].includes(normal(header)));
-    if (
-      normal(headers[4]) !== "артикул" ||
-      normal(headers[14]) !== "кол-во"
-    )
+    const findColumn = (...names) => {
+      const wanted = names.map((name) => normal(name).replace(/ё/g, "е"));
+      const matches = headers.flatMap((header, i) => wanted.includes(normal(header).replace(/ё/g, "е")) ? [i] : []);
+      if (matches.length > 1) throw Object.assign(new Error("Duplicate order column"), {
+        issue: { source: name, row: headerRow, code: "schema_changed", message: `Повторяется заголовок: ${names[0]}` },
+      });
+      return matches[0] ?? -1;
+    };
+    const articleColumn = findColumn("Артикул");
+    const quantityColumn = findColumn("Кол-во");
+    if (articleColumn < 0 || quantityColumn < 0)
       throw Object.assign(new Error("Order schema changed"), {
         issue: {
           source: name,
@@ -346,13 +353,27 @@ export function indexOrders(sheets) {
           code: "schema_changed",
           message: "Изменились заголовки листа поставки",
           found: JSON.stringify(headers).slice(0, 500),
-          expected: "Артикул в E3 и Кол-во в O3",
+          expected: "Однозначные заголовки «Артикул» и «Кол-во»",
         },
       });
+    const legacyLayout = articleColumn === 4 && quantityColumn === 14;
+    const fieldColumn = (fallback, ...names) => {
+      const found = findColumn(...names);
+      return found >= 0 ? found : legacyLayout ? fallback : -1;
+    };
+    const sheetsColumn = fieldColumn(5, "Кол-во листов");
+    const widthColumn = fieldColumn(7, "Ширина");
+    const heightColumn = fieldColumn(8, "Высота");
+    const areaColumn = fieldColumn(9, "Объем на все кол-во скинули");
+    const rollPrintColumn = fieldColumn(19, "Прогресс печати");
+    const rollCutColumn = fieldColumn(20, "Прогресс порезки");
+    const rollRemainingColumn = fieldColumn(23, "Остаток по печати:", "Остаток по печати");
+    const boxPrintColumn = fieldColumn(17, "Готовность печати");
+    const boxCutColumn = fieldColumn(18, "Готовность порезки");
     const uidHeaderCol = (rows[uidHeaderRow - 1] || []).indexOf("UID");
     const uidCol = uidHeaderCol >= 0
       ? uidHeaderCol
-      : sourceId === "box-printing"
+      : sourceId === "box-printing" && legacyLayout
         ? 28
         : -1;
     // Existing box worksheets predate the UID column. Assembly transfer keys
@@ -370,7 +391,7 @@ export function indexOrders(sheets) {
         },
       });
     rows.slice(dataStartRow - 1).forEach((r, i) => {
-      const article = String(r[4] || "").trim();
+      const article = String(r[articleColumn] || "").trim();
       if (!article) return;
       const row = i + dataStartRow;
       const raw = uidCol < 0 ? "" : String(r[uidCol] || "").trim();
@@ -398,17 +419,17 @@ export function indexOrders(sheets) {
           issue: {
             source: name,
             row,
-            cell: (uidCol < 0 ? "E" : columnName(uidCol + 1)) + row,
+            cell: (uidCol < 0 ? columnName(articleColumn + 1) : columnName(uidCol + 1)) + row,
             code: "duplicate_uid",
             message: "Повторяется UID заказа",
             found: raw,
             expected: "Уникальный UID заказа",
           },
         });
-      const quantity = ritmBridgeNumber_(r[14]),
-        sourceArea = optionalNonnegative(r[9]),
+      const quantity = ritmBridgeNumber_(r[quantityColumn]),
+        sourceArea = optionalNonnegative(r[areaColumn]),
         shownArea = sourceArea ?? 0;
-      const dimensionsKnown = [r[5], r[7], r[8]].every(
+      const dimensionsKnown = [r[sheetsColumn], r[widthColumn], r[heightColumn]].every(
         (value) => optionalNonnegative(value) > 0,
       );
       // A positive value in J is a confirmed area even when dimensions are
@@ -417,16 +438,16 @@ export function indexOrders(sheets) {
         sourceArea > 0 || quantity === 0 || dimensionsKnown ||
         !["roll-printing", "box-printing"].includes(sourceId)
       );
-      const areaCell = `J${i + dataStartRow}`;
+      const areaCell = areaColumn < 0 ? "Площадь" : `${columnName(areaColumn + 1)}${i + dataStartRow}`;
       const areaIssue = areaKnown ? null : sourceArea === null
-        ? String(r[9] ?? "").trim()
-          ? `${areaCell}: ${String(r[9]).trim()}`
+        ? String(r[areaColumn] ?? "").trim()
+          ? `${areaCell}: ${String(r[areaColumn]).trim()}`
           : `${areaCell}: площадь не заполнена`
         : `${areaCell}: нет подтверждённых размеров для расчёта площади`;
       const calculated =
-        ritmBridgeNumber_(r[5]) *
-        ritmBridgeNumber_(r[7]) *
-        ritmBridgeNumber_(r[8]) *
+        ritmBridgeNumber_(r[sheetsColumn]) *
+        ritmBridgeNumber_(r[widthColumn]) *
+        ritmBridgeNumber_(r[heightColumn]) *
         quantity;
       // J is F*H*I*O on all inspected supply tabs. Restore its display rounding only when consistent.
       const plannedArea =
@@ -435,11 +456,11 @@ export function indexOrders(sheets) {
           : shownArea;
       const boxProgress = value => /^(?:TRUE|Готов)$/iu.test(String(value).trim()) ? quantity : /^(?:FALSE)$/iu.test(String(value).trim()) ? 0 : null;
       const remainingPrint = sourceId === "box-printing"
-        ? boxProgress(r[17]) === null ? null : quantity - boxProgress(r[17])
-        : sourceId === "roll-printing" ? optionalNonnegative(r[23]) : null;
+        ? boxProgress(r[boxPrintColumn]) === null ? null : quantity - boxProgress(r[boxPrintColumn])
+        : sourceId === "roll-printing" ? optionalNonnegative(r[rollRemainingColumn]) : null;
       const printProgressValue =
         sourceId === "roll-printing"
-          ? optionalProgress(r[19], quantity)
+          ? optionalProgress(r[rollPrintColumn], quantity)
           : null;
       const o = {
         uid,
@@ -466,8 +487,8 @@ export function indexOrders(sheets) {
             ? Math.max(0, quantity - remainingPrint)
             : printProgressValue,
         cutProgress:
-          sourceId === "box-printing" ? boxProgress(r[18]) : sourceId === "roll-printing"
-            ? optionalProgress(r[20], quantity)
+          sourceId === "box-printing" ? boxProgress(r[boxCutColumn]) : sourceId === "roll-printing"
+            ? optionalProgress(r[rollCutColumn], quantity)
             : null,
         remainingPrint,
         shop: shopColumn >= 0 ? String(r[shopColumn] || "") : "",

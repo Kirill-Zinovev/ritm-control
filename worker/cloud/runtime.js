@@ -88,8 +88,12 @@ export async function refreshSnapshot(kind, bindings, store, { scope = null, fet
     return { ...value, stale: false, snapshotAt: new Date(store.now()).toISOString(), refreshFailed: false, refreshInProgress: false };
   } catch (error) {
     if (!previous) throw error;
-    const failure = { code: error.code || error.name || "refresh_failed", message: String(error.message || "Refresh failed").slice(0,160) };
-    return { ...previous.value, stale: true, snapshotAt: new Date(previous.at).toISOString(), refreshFailed: true, refreshInProgress: false, refreshRetryAfterMs: 60000, refreshFailure: failure, staleReason: "Не удалось обновить источник. Показан предыдущий проверенный снимок." };
+    const issue = error?.issue;
+    const detail = issue?.code === "schema_changed" && issue?.source
+      ? ` Лист «${String(issue.source).slice(0, 100)}»: ${String(issue.message || "изменена структура").slice(0, 120)}.`
+      : "";
+    const failure = { code: issue?.code || error.code || error.name || "refresh_failed", message: (detail.trim() || String(error.message || "Refresh failed")).slice(0, 240) };
+    return { ...previous.value, stale: true, snapshotAt: new Date(previous.at).toISOString(), refreshFailed: true, refreshInProgress: false, refreshRetryAfterMs: 60000, refreshFailure: failure, staleReason: `Не удалось обновить источник.${detail} Показан предыдущий проверенный снимок.` };
   } finally { await store.release(lease); }
 }
 
