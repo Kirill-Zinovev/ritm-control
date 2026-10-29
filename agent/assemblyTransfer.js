@@ -12,6 +12,35 @@ export const ASSEMBLY_TRANSFER_SOURCES = {
   },
   box: { id: BOX_PRINTING_SHEET_ID, name: "Бокс" },
 };
+const TRANSFER_MIN_COLUMNS = { roll: 15, box: 15 };
+const TRANSFER_MAX_HEADER_COLUMNS = { roll: 16, box: 15 };
+const columnName = (column) => {
+  let value = "";
+  for (; column > 0; column = Math.floor((column - 1) / 26))
+    value = String.fromCharCode(65 + ((column - 1) % 26)) + value;
+  return value;
+};
+const headerKey = (value) => String(value || "").trim().toLocaleLowerCase("ru-RU");
+function resolveTransferLayout(department, at, columnCount) {
+  if (headerKey(at(5, 4)) !== "артикул") return null;
+  const qtyO = headerKey(at(15, 4)) === "кол-во";
+  const qtyP = headerKey(at(16, 4)) === "кол-во";
+  if (qtyO && qtyP) return null;
+  if (department === "box") {
+    return qtyO
+      ? { quantity: 15, extension: null, uid: 29, quantityHeader: "Кол-во" }
+      : null;
+  }
+  if (department !== "roll") return null;
+  if (qtyP) {
+    const ext = headerKey(at(6, 4));
+    if (!["расширения", "расширение печати"].includes(ext)) return null;
+    return { quantity: 16, extension: 6, uid: 30, quantityHeader: "Кол-во" };
+  }
+  return qtyO
+    ? { quantity: 15, extension: null, uid: 29, quantityHeader: "Кол-во" }
+    : null;
+}
 const digest = (value) =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const fail = (message, status = 409) => {
@@ -137,27 +166,30 @@ export class AssemblyTransferService {
       const tabs = book.sheets.filter(
         (s) =>
           !s.properties.hidden &&
-          s.properties.gridProperties?.columnCount >= 15,
+          s.properties.gridProperties?.columnCount >= TRANSFER_MIN_COLUMNS[department],
       );
       const sheets = [];
       for (let i = 0; i < tabs.length; i += 30) {
         const data = await this.reader.get(source.id, {
           ranges: tabs
             .slice(i, i + 30)
-            .map(
-              (s) => "'" + s.properties.title.replaceAll("'", "''") + "'!E4:O4",
-            ),
+            .map((s) => {
+              const maxColumn = Math.min(
+                TRANSFER_MAX_HEADER_COLUMNS[department],
+                s.properties.gridProperties?.columnCount || TRANSFER_MIN_COLUMNS[department],
+              );
+              return "'" + s.properties.title.replaceAll("'", "''") + "'!E4:" + columnName(maxColumn) + "4";
+            }),
           includeGridData: "true",
           fields:
             "spreadsheetId,sheets(properties(sheetId,title,hidden),data(startRow,startColumn,rowData(values(effectiveValue))))",
         });
         for (const sheet of data.sheets) {
           const cells = sheet.data?.[0]?.rowData?.[0]?.values || [];
-          if (
-            !sheet.properties.hidden &&
-            String(cellValue(cells[0])).trim() === "Артикул" &&
-            String(cellValue(cells[10])).trim() === "Кол-во"
-          )
+          const sourceTab = tabs.find((tab) => tab.properties.sheetId === sheet.properties.sheetId);
+          const columnCount = sourceTab?.properties.gridProperties?.columnCount || 0;
+          const at = (column) => cellValue(cells[column - 5]);
+          if (!sheet.properties.hidden && resolveTransferLayout(department, (column, row) => row === 4 ? at(column) : "", columnCount))
             sheets.push({
               sheetId: sheet.properties.sheetId,
               name: sheet.properties.title,
@@ -185,16 +217,56 @@ export class AssemblyTransferService {
       );
     const title = "'" + target.title.replaceAll("'", "''") + "'";
     const lastRow = Math.min(5000, target.gridProperties?.rowCount || 5000);
-    if (lastRow < 4 || (target.gridProperties?.columnCount || 0) < 15)
-      fail("У листа другая структура: нужны Артикул в E4 и Кол-во в O4.");
+    const columnCount = target.gridProperties?.columnCount || 0;
+    if (lastRow < 4 || columnCount < TRANSFER_MIN_COLUMNS[department])
+      fail("У листа другая структура: нужны Артикул в E4 и Кол-во в O4 или P4.");
+    const headerEnd = Math.min(TRANSFER_MAX_HEADER_COLUMNS[department], columnCount);
+    const headerRanges = [title + "!E4:" + columnName(headerEnd) + "4"];
+    if (columnCount >= 29) headerRanges.push(title + "!AC1:" + columnName(Math.min(30, columnCount)) + "1");
+    const headerData = await this.reader.get(source.id, {
+      ranges: headerRanges,
+      includeGridData: "true",
+      fields:
+        "spreadsheetId,sheets(properties(sheetId,title,hidden),data(startRow,startColumn,rowData(values(effectiveValue))))",
+    });
+    const headerSheet = headerData.sheets.find((s) => s.properties.sheetId === sheetId);
+    if (!headerSheet || headerSheet.properties.hidden || headerSheet.properties.title !== target.title)
+      fail("Лист изменился во время чтения. Повторите загрузку.");
+    const headerAt = (column, row) => {
+      const columnIndex = column - 1;
+      const rowIndex = row - 1;
+      const grid = (headerSheet.data || []).find((item) => {
+        const startColumn = item.startColumn || 0;
+        const startRow = item.startRow || 0;
+        const rowCount = item.rowData?.length || 0;
+        const columnCount = item.rowData?.reduce(
+          (max, dataRow) => Math.max(max, dataRow.values?.length || 0),
+          0,
+        ) || 0;
+        return columnIndex >= startColumn && columnIndex < startColumn + columnCount &&
+          rowIndex >= startRow && rowIndex < startRow + rowCount;
+      });
+      if (!grid) return "";
+      const startColumn = grid.startColumn || 0;
+      const startRow = grid.startRow || 0;
+      return cellValue(
+        grid.rowData?.[rowIndex - startRow]?.values?.[columnIndex - startColumn],
+      );
+    };
+    const layout = resolveTransferLayout(department, headerAt, columnCount);
+    if (!layout)
+      fail("У листа другая структура: проверьте заголовки Артикул, Расширения и Кол-во.");
+    const uidColumn = [29, 30].find((column) => column <= columnCount && headerKey(headerAt(column, 1)) === "uid") || null;
+    const articleRange = title + "!E5:E" + lastRow;
+    const quantityLetter = columnName(layout.quantity);
+    const dataRanges = [articleRange, title + "!" + quantityLetter + "5:" + quantityLetter + lastRow];
+    if (uidColumn) {
+      const uidLetter = columnName(uidColumn);
+      dataRanges.push(title + "!" + uidLetter + "5:" + uidLetter + lastRow);
+    }
+    if (layout.extension) dataRanges.push(title + "!F5:F" + lastRow);
     const data = await this.reader.get(source.id, {
-      ranges: [
-        title + "!E4:E" + lastRow,
-        title + "!O4:O" + lastRow,
-        ...(target.gridProperties.columnCount >= 29
-          ? [title + "!AC4:AC" + lastRow]
-          : []),
-      ],
+      ranges: dataRanges,
       includeGridData: "true",
       fields:
         "spreadsheetId,sheets(properties(sheetId,title,hidden),developerMetadata(metadataKey,metadataValue),data(startRow,startColumn,rowData(values(effectiveValue))))",
@@ -216,10 +288,11 @@ export class AssemblyTransferService {
       );
     };
     if (
-      String(at(5, 4)).trim() !== "Артикул" ||
-      String(at(15, 4)).trim() !== "Кол-во"
+      headerKey(headerAt(5, 4)) !== "артикул" ||
+      headerKey(headerAt(layout.quantity, 4)) !== headerKey(layout.quantityHeader) ||
+      (layout.extension && !["расширения", "расширение печати"].includes(headerKey(headerAt(layout.extension, 4))))
     )
-      fail("У листа другая структура: нужны Артикул в E4 и Кол-во в O4.");
+      fail("Заголовки листа изменились во время чтения. Повторите загрузку.");
     const rows = [],
       seen = new Set();
     for (let row = 5; row <= 5001; row++) {
@@ -227,7 +300,7 @@ export class AssemblyTransferService {
       if (!sku) continue;
       if (row === 5001)
         fail("В листе больше 5000 строк. Проверьте диапазон поставки.");
-      const uid = String(at(29, row) || "").trim();
+      const uid = uidColumn ? String(at(uidColumn, row) || "").trim() : "";
       if (
         sku.length > 120 ||
         uid.length > 240 ||
@@ -238,7 +311,7 @@ export class AssemblyTransferService {
           "В листе есть ошибка артикула или повтор UID. Исправьте источник и обновите список.",
         );
       if (uid) seen.add(uid);
-      rows.push({ sku, uid, row, quantity: number(at(15, row)) });
+      rows.push({ sku, uid, row, quantity: number(at(layout.quantity, row)) });
     }
     const entries = (sheet.developerMetadata || []).filter(
       (m) => m.metadataKey === "RITM_SUPPLY",

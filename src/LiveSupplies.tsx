@@ -130,6 +130,7 @@ type RoutingPreview = {
   skippedRows: number;
   lines: {
     article: string;
+    extension?: string | null;
     quantity: number;
     machine: string;
     department: string | null;
@@ -2311,6 +2312,7 @@ export function LiveSuppliesWorkspace({
                   <thead>
                     <tr>
                       <th>Артикул</th>
+                      <th>Расширение</th>
                       <th>Станок</th>
                       <th>Отдел</th>
                       <th>Количество</th>
@@ -2320,6 +2322,7 @@ export function LiveSuppliesWorkspace({
                     {routingPreview.lines.map((line) => (
                       <tr key={line.article}>
                         <td>{line.article}</td>
+                        <td>{line.department === "roll" ? line.extension || "Не найдено" : "—"}</td>
                         <td>{line.machine || "Не указан"}</td>
                         <td>
                           {line.department === "roll"

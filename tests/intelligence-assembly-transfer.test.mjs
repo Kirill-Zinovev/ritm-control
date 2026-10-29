@@ -11,7 +11,7 @@ import {
 } from "../agent/assemblyTransfer.js";
 import { createAgentServer } from "../agent/server.js";
 
-function fixture(columnCount = 29) {
+function fixture(columnCount = 29, { rollLayout = "legacy", boxLayout = "legacy" } = {}) {
   const store = new IncidentStore(":memory:");
   const queue = new AssemblySyncQueue(store, {
     secret: "ab".repeat(32),
@@ -57,59 +57,45 @@ function fixture(columnCount = 29) {
         typeof value === "number"
           ? { numberValue: value }
           : { stringValue: value ?? "" };
+      const department = id === ASSEMBLY_TRANSFER_SOURCES.roll.id ? "roll" : "box";
+      const layout = department === "roll" ? rollLayout : boxLayout;
+      const quantityColumn = department === "roll" && layout === "extended" ? 16 : 15;
+      const uidColumn = department === "roll" && layout === "extended" ? 30 : 29;
+      const columnNumber = (letters) => [...letters].reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0);
       const data = params.ranges.map((range) => {
-        if (!range.endsWith("E4:O4")) {
-          assert.ok(
-            !range.includes("5001"),
-            "source ranges must remain within the physical grid",
-          );
-          if (columnCount < 29) assert.ok(!range.includes("!AC"));
-        }
-        const column = range.includes("!AC")
-          ? 28
-          : range.includes("!O")
-            ? 14
-            : 4;
-        const rowData = [
-          {
-            values: [
-              {
-                effectiveValue: effectiveValue(
-                  column === 4 ? "Артикул" : column === 14 ? "Кол-во" : "UID",
-                ),
-              },
-            ],
-          },
-        ];
-        if (range.endsWith("E4:O4"))
-          return {
-            startRow: 3,
-            startColumn: 4,
-            rowData: [
-              {
-                values: Array.from({ length: 11 }, (_, c) => ({
-                  effectiveValue: effectiveValue(
-                    c === 0 ? "Артикул" : c === 10 ? "Кол-во" : "",
-                  ),
-                })),
-              },
-            ],
-          };
-        for (const row of sourceRows)
-          rowData.push({
-            values: [
-              {
-                effectiveValue: effectiveValue(
-                  column === 4
-                    ? row.sku
-                    : column === 14
-                      ? row.quantity
-                      : row.uid,
-                ),
-              },
-            ],
-          });
-        return { startRow: 3, startColumn: column, rowData };
+        assert.ok(!range.includes("5001"), "source ranges must remain within the physical grid");
+        const match = range.match(/!([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
+        assert.ok(match, `unexpected source range ${range}`);
+        const startColumn = columnNumber(match[1]);
+        const startRow = Number(match[2]);
+        const endColumn = columnNumber(match[3]);
+        const endRow = Number(match[4]);
+        if (columnCount < 29) assert.ok(startColumn !== 29 && endColumn !== 29);
+        const valueAt = (row, column) => {
+          if (row === 4) {
+            if (column === 5) return "Артикул";
+            if (column === quantityColumn) return "Кол-во";
+            if (department === "roll" && layout === "extended" && column === 6) return "Расширения";
+            return "";
+          }
+          if (row === 1 && column === uidColumn) return "UID";
+          const source = sourceRows.find((entry) => entry.row === row);
+          if (!source) return "";
+          if (column === 5) return source.sku;
+          if (column === quantityColumn) return source.quantity;
+          if (column === uidColumn) return source.uid;
+          if (department === "roll" && layout === "extended" && column === 6) return "A3";
+          return "";
+        };
+        return {
+          startRow: startRow - 1,
+          startColumn: startColumn - 1,
+          rowData: Array.from({ length: endRow - startRow + 1 }, (_, rowOffset) => ({
+            values: Array.from({ length: endColumn - startColumn + 1 }, (_, columnOffset) => ({
+              effectiveValue: effectiveValue(valueAt(startRow + rowOffset, startColumn + columnOffset)),
+            })),
+          })),
+        };
       });
       const manifest = this.manifests.get(id);
       return {
@@ -291,6 +277,20 @@ test("legacy source without AC uses row identity and bounded ranges", async () =
     assert.equal(source.items[0].uid, "");
     assert.equal(source.items[0].key, "row:5|SKU1");
     assert.equal(source.items[0].quantity, 12);
+  } finally {
+    await f.close();
+  }
+});
+
+test("roll source reads new extension layout with quantity in P and UID in AD", async () => {
+  const f = fixture(30, { rollLayout: "extended" });
+  try {
+    const source = await f.service.source("roll", 50);
+    assert.equal(source.items[0].uid, "uid-1");
+    assert.equal(source.items[0].quantity, 12);
+    assert.equal(source.items[1].quantity, null);
+    assert.ok(f.reader.calls.some(call => call.params.ranges?.includes("'OZON existing'!P5:P1000")));
+    assert.ok(f.reader.calls.some(call => call.params.ranges?.includes("'OZON existing'!AD5:AD1000")));
   } finally {
     await f.close();
   }

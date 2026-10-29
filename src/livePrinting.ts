@@ -37,6 +37,7 @@ export type LiveOrder = {
   sheetName: string;
   row: number;
   article: string;
+  extension?: string | null;
   quantity: number;
   plannedArea: number;
   machine?: string | null;

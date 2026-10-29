@@ -349,6 +349,9 @@ export function indexOrders(sheets) {
     };
     const articleColumn = findColumn("Артикул");
     const quantityColumn = findColumn("Кол-во");
+    const extensionColumn = sourceId === "roll-printing"
+      ? findColumn("Расширения", "Расширение печати")
+      : -1;
     if (articleColumn < 0 || quantityColumn < 0)
       throw Object.assign(new Error("Order schema changed"), {
         issue: {
@@ -475,6 +478,7 @@ export function indexOrders(sheets) {
         journalAliases,
         row,
         article,
+        ...(extensionColumn >= 0 ? { extension: String(r[extensionColumn] || "").trim() } : {}),
         machine: machineColumn >= 0 ? String(r[machineColumn] || "").trim() : "",
         machineSource: machineColumn >= 0 && String(r[machineColumn] || "").trim() ? "supply" : null,
         productName: nameColumn >= 0 ? String(r[nameColumn] || "").trim() : "",

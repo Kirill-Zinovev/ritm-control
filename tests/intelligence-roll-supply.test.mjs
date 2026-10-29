@@ -62,8 +62,11 @@ function googleHarness({
     data: [{ startRow: 0, startColumn: 0, rowData: [] }],
   };
   const rowData = template.data[0].rowData;
+  const rollQuantityColumn = 16;
+  const rollUidColumn = 30;
+  const rollExtensionColumn = 6;
   for (let row = 0; row < templateRows; row++) {
-    const values = Array.from({ length: 29 }, () => ({}));
+    const values = Array.from({ length: box ? 29 : 30 }, () => ({}));
     const sheetRow = row + 1;
     if (sheetRow === 1)
       values[0] = { userEnteredValue: { stringValue: "OZON 10.10" } };
@@ -75,15 +78,16 @@ function googleHarness({
       };
     if (sheetRow === (descriptor.headerRow || 4)) {
       values[4] = { userEnteredValue: { stringValue: "Артикул" } };
-      values[14] = { userEnteredValue: { stringValue: "Кол-во" } };
+      values[(box ? 15 : rollQuantityColumn) - 1] = { userEnteredValue: { stringValue: "Кол-во" } };
+      if (!box) values[rollExtensionColumn - 1] = { userEnteredValue: { stringValue: "Расширения" } };
     }
     if (!box && sheetRow === (descriptor.uidHeaderRow || 1))
-      values[28] = { userEnteredValue: { stringValue: "UID" } };
+      values[rollUidColumn - 1] = { userEnteredValue: { stringValue: "UID" } };
     if (
       sheetRow >= (descriptor.dataStartRow || 5) &&
       sheetRow <= templateRows
     ) {
-      for (const column of (box ? [5, 9] : [5, 6, 8, 9])) {
+      for (const column of (box ? [5, 9] : [6, 7, 9, 10])) {
         const cell = `${String.fromCharCode(65 + column)}${sheetRow}`;
         if (
           missingFormulaRows.includes(sheetRow) ||
@@ -108,24 +112,24 @@ function googleHarness({
       values[3] = {
         userEnteredValue: { formulaValue: `=MACHINE(E${sheetRow})` },
       };
-      if (!box) values[6] = literalSizeRows.includes(sheetRow)
+      if (!box) values[7] = literalSizeRows.includes(sheetRow)
         ? { userEnteredValue: { stringValue: "100x40" } }
         : { userEnteredValue: { formulaValue: "=VLOOKUP(E:E;'БДО'!B:G;6;0)" } };
       if (sheetRow <= 11) {
         values[0] = { userEnteredValue: { numberValue: 46302 } };
-        values[17] = { userEnteredValue: { stringValue: "В работе" } };
-        values[18] = { userEnteredValue: { stringValue: "В работе" } };
-        values[19] = { userEnteredValue: { stringValue: "█████░░░░░ 50%" } };
-        values[20] = { userEnteredValue: { stringValue: "░░░░░░░░░░ 0%" } };
-        values[21] = { userEnteredValue: { numberValue: 46302.5 } };
-        values[23] = { userEnteredValue: { numberValue: 150 } };
+        values[box ? 17 : 18] = { userEnteredValue: { stringValue: "В работе" } };
+        values[box ? 18 : 19] = { userEnteredValue: { stringValue: "В работе" } };
+        values[box ? 19 : 20] = { userEnteredValue: { stringValue: "█████░░░░░ 50%" } };
+        values[box ? 20 : 21] = { userEnteredValue: { stringValue: "░░░░░░░░░░ 0%" } };
+        values[box ? 21 : 22] = { userEnteredValue: { numberValue: 46302.5 } };
+        values[box ? 23 : 24] = { userEnteredValue: { numberValue: 150 } };
       }
       if (sheetRow <= 151) {
         values[4] = { userEnteredValue: { stringValue: `OLD-${sheetRow}` } };
-        values[14] = { userEnteredValue: { numberValue: 1 } };
+        values[(box ? 15 : rollQuantityColumn) - 1] = { userEnteredValue: { numberValue: 1 } };
       }
       if (sheetRow <= 194) {
-        values[28] = {
+        values[(box ? 29 : rollUidColumn) - 1] = {
           userEnteredValue: { stringValue: `old-uid-${sheetRow}` },
         };
       }
@@ -263,7 +267,7 @@ function googleHarness({
       );
       assert.ok(sheet, `Expected read of sheet ${title}`);
       const grid = materialize(sheet);
-      const endRow = Number(range.match(/:AC(\d+)$/)?.[1] || templateRows);
+      const endRow = Number(range.match(/:(?:AC|AD)(\d+)$/)?.[1] || templateRows);
       grid.data[0].rowData = grid.data[0].rowData.slice(0, endRow);
       if (
         corruptReadback &&
@@ -360,6 +364,28 @@ test("box create verification reads formulas through the full copied template ra
   assert.equal(verified.rows, 1);
 });
 
+test("new roll supply writes and verifies the catalog extension in column F", async () => {
+  const google = googleHarness();
+  const writer = new ProductionSupplyWriter({
+    department: "roll",
+    credentialWriter: {
+      token: async () => "test-token",
+      metrics: { readRequests: 0, writeRequests: 0 },
+    },
+    fetcher: google.fetcher,
+  });
+  const input = payload("10101010-1010-4010-8010-101010101010", {
+    lines: [{ article: "TEST-001", quantity: 12, extension: "A3" }],
+  });
+  const plan = await writer.prepareCreate(input);
+  await writer.execute(plan);
+  await writer.verify(plan);
+  const created = google.sheets.get(plan.sheetId);
+  assert.equal(created.data[0].rowData[4].values[5].userEnteredValue.stringValue, "A3");
+  assert.equal(created.data[0].rowData[4].values[15].userEnteredValue.numberValue, 12);
+  assert.equal(created.data[0].rowData[4].values[29].userEnteredValue.stringValue, plan.uids[0].uid);
+});
+
 test("new supply clears template data, renames the heading and initializes print remainder", async () => {
   const h = makeService();
   try {
@@ -380,32 +406,33 @@ test("new supply clears template data, renames the heading and initializes print
       .map((request) => request.updateCells.start.columnIndex);
     assert.deepEqual(
       [...new Set(updatedColumns)].sort((a, b) => a - b),
-      [0, 4, 14, 23, 28],
+      [0, 4, 5, 15, 24, 29],
     );
     const created = h.google.sheets.get(result.sheetId);
     const rows = created.data[0].rowData;
     assert.equal(rows[0].values[0].userEnteredValue.stringValue, result.name);
     assert.equal(rows[2].values[0].userEnteredValue, undefined);
     assert.equal(rows[4].values[4].userEnteredValue.stringValue, "TEST-001");
-    assert.equal(rows[4].values[14].userEnteredValue.numberValue, 12);
-    assert.equal(rows[4].values[23].userEnteredValue.numberValue, 12);
+    assert.equal(rows[4].values[5].userEnteredValue, undefined);
+    assert.equal(rows[4].values[15].userEnteredValue.numberValue, 12);
+    assert.equal(rows[4].values[24].userEnteredValue.numberValue, 12);
     assert.match(
-      rows[4].values[28].userEnteredValue.stringValue,
+      rows[4].values[29].userEnteredValue.stringValue,
       /^ritm-11111111-1111-4111-8111-111111111111-1$/,
     );
     assert.equal(rows[5].values[4].userEnteredValue, undefined);
-    assert.equal(rows[5].values[14].userEnteredValue, undefined);
-    assert.equal(rows[5].values[28].userEnteredValue, undefined);
+    assert.equal(rows[5].values[15].userEnteredValue, undefined);
+    assert.equal(rows[5].values[29].userEnteredValue, undefined);
     assert.equal(rows[4].values[0].userEnteredValue, undefined);
-    assert.equal(rows[4].values[17].userEnteredValue, undefined);
     assert.equal(rows[4].values[18].userEnteredValue, undefined);
     assert.equal(rows[4].values[19].userEnteredValue, undefined);
     assert.equal(rows[4].values[20].userEnteredValue, undefined);
     assert.equal(rows[4].values[21].userEnteredValue, undefined);
-    assert.equal(rows[4].values[23].userEnteredValue.numberValue, 12);
-    assert.equal(rows[8].values[23].userEnteredValue, undefined);
-    assert.equal(rows[193].values[28].userEnteredValue, undefined);
-    const leavesFormula = rows[4].values[5].userEnteredValue.formulaValue;
+    assert.equal(rows[4].values[22].userEnteredValue, undefined);
+    assert.equal(rows[4].values[24].userEnteredValue.numberValue, 12);
+    assert.equal(rows[8].values[24].userEnteredValue, undefined);
+    assert.equal(rows[193].values[29].userEnteredValue, undefined);
+    const leavesFormula = rows[4].values[6].userEnteredValue.formulaValue;
     assert.ok(leavesFormula.indexOf("'БДО'!B:O;5;0") < leavesFormula.indexOf("'_RITM_WB_SOURCE'!A:E;2;0"));
     assert.equal(rows[4].values[1].userEnteredValue.formulaValue, "=IMAGE(E5)");
     assert.equal(rows[4].values[2].userEnteredValue.formulaValue, "=LOOKUP(E5)");
@@ -414,9 +441,9 @@ test("new supply clears template data, renames the heading and initializes print
       "11111111-1111-4111-8111-111111111111",
     );
     assert.equal(JSON.stringify(saved.payload.plan).includes("FORMULA"), false);
-    assert.match(rows[4].values[7].userEnteredValue.formulaValue, /REGEXEXTRACT\(TO_TEXT\(G5\)/);
-    assert.match(rows[4].values[8].userEnteredValue.formulaValue, /REGEXEXTRACT\(TO_TEXT\(G5\)/);
-    assert.match(rows[4].values[9].userEnteredValue.formulaValue, /F5\*H5\*I5\*O5/);
+    assert.match(rows[4].values[8].userEnteredValue.formulaValue, /REGEXEXTRACT\(TO_TEXT\(H5\)/);
+    assert.match(rows[4].values[9].userEnteredValue.formulaValue, /REGEXEXTRACT\(TO_TEXT\(H5\)/);
+    assert.match(rows[4].values[10].userEnteredValue.formulaValue, /G5\*I5\*J5\*P5/);
   } finally {
     h.store.close();
   }
@@ -643,7 +670,7 @@ test("create explains a missing formula in the source template when its pattern 
       (error) =>
         error.code === "roll_template_formula_missing" &&
         error.message.includes("OZON МОСКВА 10_10") &&
-        error.message.includes("F6") &&
+        error.message.includes("G6") &&
         error.message.includes("Загруженный список товаров ни при чём"),
     );
     assert.equal(h.google.counters.writes, 0);
@@ -656,13 +683,14 @@ test("create carries a proven missing formula into the new copy only", async () 
   const formulaOverrides = {};
   for (const row of [77, 78, 79, 80, 81]) {
     formulaOverrides[row] = {
-      6: "=VLOOKUP(E:E;'БДО'!B:F;5;0)",
-      9: `=IF($E${row}=\"\";\"\";--SUBSTITUTE(REGEXEXTRACT(SUBSTITUTE(SUBSTITUTE(LOWER(TRIM($G${row}));\"х\";\"x\");\"×\";\"x\");\"[0-9]+[,.]?[0-9]*$\");\",\";\".\")/100)`,
-      10: `=F${row}*H${row}*I${row}*O${row}`,
+      7: "=VLOOKUP(E:E;'БДО'!B:F;5;0)",
+      8: "=VLOOKUP(E:E;'БДО'!B:G;6;0)",
+      10: `=IFERROR(VALUE(SUBSTITUTE(REGEXEXTRACT(TO_TEXT(H${row});\"^\\s*([0-9]+[,.]?[0-9]*)[xх×][0-9]+[,.]?[0-9]*$\");\".\";\",\"))/100;\"\")`,
+      11: `=G${row}*I${row}*J${row}*P${row}`,
     };
   }
   const h = makeService({
-    missingFormulaCells: ["I80"],
+    missingFormulaCells: ["K80"],
     formulaOverrides,
   });
   const lines = Array.from({ length: 76 }, (_, index) => ({
@@ -676,15 +704,16 @@ test("create carries a proven missing formula into the new copy only", async () 
     assert.equal(result.status, "verified", JSON.stringify(result));
     const created = h.google.sheets.get(result.sheetId);
     const copiedRow = created.data[0].rowData[79].values;
-    assert.match(copiedRow[8].userEnteredValue.formulaValue, /REGEXEXTRACT\(TO_TEXT\(G80\)/);
-    assert.match(copiedRow[9].userEnteredValue.formulaValue, /F80\*H80\*I80\*O80/);
-    assert.match(copiedRow[5].userEnteredValue.formulaValue, /'БДО'!B:O;5;0/);
+    assert.match(copiedRow[8].userEnteredValue.formulaValue, /REGEXEXTRACT\(TO_TEXT\(H80\)/);
+    assert.match(copiedRow[9].userEnteredValue.formulaValue, /REGEXEXTRACT\(TO_TEXT\(H80\)/);
+    assert.match(copiedRow[10].userEnteredValue.formulaValue, /G80\*I80\*J80\*P80/);
+    assert.match(copiedRow[6].userEnteredValue.formulaValue, /'БДО'!B:O;5;0/);
     const sourceRow = h.google.sheets.get(ROLL_PRINTING_SHEET.gid).data[0].rowData[79].values;
     assert.equal(sourceRow[8].userEnteredValue, undefined);
     const operation = h.store.rollSupplyOperation(
       "81818181-8181-4181-8181-818181818181",
     );
-    assert.ok(operation.payload.plan.formulaRepairs.some((repair) => repair.cell === "I80"));
+    assert.ok(operation.payload.plan.formulaRepairs.some((repair) => repair.cell === "K80"));
   } finally {
     h.store.close();
   }
@@ -696,9 +725,9 @@ test("a literal size in the template is replaced by a verified lookup in the new
     const lines = Array.from({ length: 8 }, (_, index) => ({ article: `TEST-${index}`, quantity: 10 }));
     const result = await h.service.execute(payload("62626262-6262-4262-8262-626262626262", { lines }));
     const row = h.google.sheets.get(result.sheetId).data[0].rowData[11].values;
-    assert.match(row[6].userEnteredValue.formulaValue, /'БДО'!B:O;6;0/);
-    assert.match(row[7].userEnteredValue.formulaValue, /REGEXEXTRACT\(TO_TEXT\(G12\)/);
-    assert.equal(h.google.sheets.get(ROLL_PRINTING_SHEET.gid).data[0].rowData[11].values[6].userEnteredValue.stringValue, "100x40");
+    assert.match(row[7].userEnteredValue.formulaValue, /'БДО'!B:O;6;0/);
+    assert.match(row[8].userEnteredValue.formulaValue, /REGEXEXTRACT\(TO_TEXT\(H12\)/);
+    assert.equal(h.google.sheets.get(ROLL_PRINTING_SHEET.gid).data[0].rowData[11].values[7].userEnteredValue.stringValue, "100x40");
   } finally { h.store.close(); }
 });
 
@@ -707,7 +736,7 @@ test("WB supplies use WB only, while normalizing the OZ suffix", async () => {
   try {
     const result = await h.service.execute(payload("64646464-6464-4464-8464-646464646464", { name: "WB ТЕСТ", lines: [{ article: "TEST-001(OZ)", quantity: 8 }] }));
     const row = h.google.sheets.get(result.sheetId).data[0].rowData[4].values;
-    const f = row[6].userEnteredValue.formulaValue;
+    const f = row[7].userEnteredValue.formulaValue;
     assert.ok(f.includes("'_RITM_WB_SOURCE'!A:E;3;0"));
     assert.ok(!f.includes("'БДО'!B:O"));
     assert.match(f, /REGEXREPLACE\(UPPER\(TRIM\(\$E5\)\)/);
@@ -903,16 +932,16 @@ test("append inserts new articles at the top and preserves existing rows", async
       "TEST-002",
     );
     assert.equal(
-      sheet.data[0].rowData[4].values[14].userEnteredValue.numberValue,
+      sheet.data[0].rowData[4].values[15].userEnteredValue.numberValue,
       8,
     );
     assert.equal(
-      sheet.data[0].rowData[4].values[23].userEnteredValue.numberValue,
+      sheet.data[0].rowData[4].values[24].userEnteredValue.numberValue,
       8,
     );
-    assert.match(sheet.data[0].rowData[4].values[5].userEnteredValue.formulaValue, /'БДО'!B:O;5;0/);
+    assert.match(sheet.data[0].rowData[4].values[6].userEnteredValue.formulaValue, /'БДО'!B:O;5;0/);
     assert.notEqual(
-      sheet.data[0].rowData[4].values[28].userEnteredValue.stringValue,
+      sheet.data[0].rowData[4].values[29].userEnteredValue.stringValue,
       "old-uid-5",
     );
     assert.equal(
@@ -920,18 +949,18 @@ test("append inserts new articles at the top and preserves existing rows", async
       "TEST-001",
     );
     assert.equal(
-      sheet.data[0].rowData[5].values[14].userEnteredValue.numberValue,
+      sheet.data[0].rowData[5].values[15].userEnteredValue.numberValue,
       12,
     );
     assert.equal(
-      sheet.data[0].rowData[5].values[23].userEnteredValue.numberValue,
+      sheet.data[0].rowData[5].values[24].userEnteredValue.numberValue,
       12,
     );
     assert.equal(
-      sheet.data[0].rowData[5].values[28].userEnteredValue.stringValue,
-      originalRow.values[28].userEnteredValue.stringValue,
+      sheet.data[0].rowData[5].values[29].userEnteredValue.stringValue,
+      originalRow.values[29].userEnteredValue.stringValue,
     );
-    assert.match(originalRow.values[5].userEnteredValue.formulaValue, /'БДО'!B:O;5;0/);
+    assert.match(originalRow.values[6].userEnteredValue.formulaValue, /'БДО'!B:O;5;0/);
     const appendBatch = h.google.requests[1];
     assert.equal(
       appendBatch.some((request) => request.duplicateSheet),
@@ -945,7 +974,7 @@ test("append inserts new articles at the top and preserves existing rows", async
             .map((request) => request.updateCells.start.columnIndex),
         ),
       ].sort((a, b) => a - b),
-      [3, 4, 5, 6, 7, 8, 9, 10, 11, 14, 23, 28],
+      [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 24, 29],
     );
     assert.ok(appendBatch.some((request) => request.insertDimension));
     assert.ok(appendBatch.some((request) => request.copyPaste));
@@ -969,11 +998,11 @@ test("append preserves orphan service IDs and scans beyond the old 504-row range
     assert.equal(result.rows, 1);
     const sheet = h.google.sheets.get(ROLL_PRINTING_SHEET.gid);
     assert.equal(
-      sheet.data[0].rowData[152].values[28].userEnteredValue.stringValue,
+      sheet.data[0].rowData[152].values[29].userEnteredValue.stringValue,
       "old-uid-152",
     );
     assert.equal(
-      sheet.data[0].rowData[194].values[28].userEnteredValue.stringValue,
+      sheet.data[0].rowData[194].values[29].userEnteredValue.stringValue,
       "old-uid-194",
     );
     assert.equal(

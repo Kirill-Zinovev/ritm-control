@@ -36,6 +36,34 @@ const articleKey = (article) =>
     .toUpperCase()
     .replace(/\(OZ\)$/u, "");
 
+function indexPrintExtensions(rows) {
+  const headers = rows[0] || [];
+  const articleColumn = headers.findIndex(
+    (value) => String(value || "").trim().toLocaleLowerCase("ru-RU") === "артикул",
+  );
+  const extensionColumn = headers.findIndex((value) =>
+    ["расширение печати", "расширения"].includes(
+      String(value || "").trim().toLocaleLowerCase("ru-RU"),
+    ),
+  );
+  if (articleColumn < 0 || extensionColumn < 0)
+    fail(
+      "catalog_extension_schema_changed",
+      "Во вкладке «расширения» не найдены колонки «Артикул» и «Расширение печати». Новая поставка не создавалась.",
+    );
+  const index = new Map();
+  for (const row of rows.slice(1)) {
+    const article = String(row[articleColumn] || "").trim();
+    const extension = String(row[extensionColumn] || "").trim().toUpperCase();
+    if (!article || !extension || extension.startsWith("#")) continue;
+    const key = articleKey(article);
+    const previous = index.get(key);
+    if (!previous) index.set(key, { value: extension });
+    else if (previous.value !== extension) previous.conflict = true;
+  }
+  return index;
+}
+
 export function machineDepartment(machine) {
   const key = String(machine || "")
     .trim()
@@ -88,6 +116,9 @@ export function routeSupplyLines(lines, marketplace, catalog) {
   };
   const wb = index(catalog.WB, "WB"),
     ozon = index(catalog.OZON, "OZON");
+  const extensions = Array.isArray(catalog.extensions) && catalog.extensions.length
+    ? indexPrintExtensions(catalog.extensions)
+    : new Map();
   const seen = new Set();
   return lines.map((line) => {
     const key = articleKey(line.article);
@@ -121,10 +152,22 @@ export function routeSupplyLines(lines, marketplace, catalog) {
       };
     const machine = record?.machine || "";
     const department = machineDepartment(machine);
+    const extension = extensions.get(key);
+    if (department === "roll" && (!extension || extension.conflict))
+      return {
+        ...line,
+        machine,
+        extension: "",
+        department: null,
+        issue: extension?.conflict
+          ? "Для артикула в базе указаны разные расширения печати"
+          : "Расширение печати не найдено во вкладке «расширения»",
+      };
     return {
       ...line,
       machine,
       department,
+      extension: department === "roll" ? extension.value : null,
       issue: department
         ? null
         : "Станок отсутствует, содержит ошибку или не относится к настроенным отделам",
@@ -593,6 +636,20 @@ export class ProductionSupplyService {
         );
       ranges.push(`'${name}'!A1:O${sheet.gridProperties.rowCount}`);
     }
+    const extensionSheet = meta.sheets?.find(
+      (s) => s.properties.title.trim().toLocaleLowerCase("ru-RU") === "расширения" && !s.properties.hidden,
+    )?.properties;
+    if (
+      !extensionSheet ||
+      extensionSheet.gridProperties.rowCount > 30000 ||
+      extensionSheet.gridProperties.columnCount < 2
+    )
+      fail(
+        "catalog_extension_unavailable",
+        "Не удалось прочитать вкладку «расширения» базы. Новая поставка не создавалась.",
+        503,
+      );
+    ranges.push(`'расширения'!A1:B${extensionSheet.gridProperties.rowCount}`);
     const params = new URLSearchParams({
       valueRenderOption: "FORMATTED_VALUE",
     });
@@ -600,11 +657,12 @@ export class ProductionSupplyService {
     const data = await writer.request(
       `https://sheets.googleapis.com/v4/spreadsheets/${CATALOG_ID}/values:batchGet?${params}`,
     );
-    if (data.spreadsheetId !== CATALOG_ID || data.valueRanges?.length !== 2)
+    if (data.spreadsheetId !== CATALOG_ID || data.valueRanges?.length !== 3)
       fail("catalog_unavailable", "База товаров не прочитана полностью.");
     return {
       WB: data.valueRanges[0].values || [],
       OZON: data.valueRanges[1].values || [],
+      extensions: data.valueRanges[2].values || [],
     };
   }
   normalize(input) {
@@ -738,7 +796,11 @@ export class ProductionSupplyService {
     for (const department of Object.keys(DEPARTMENTS)) {
       const lines = routed
         .filter((l) => l.department === department)
-        .map(({ article, quantity }) => ({ article, quantity }));
+        .map(({ article, quantity, extension }) => ({
+          article,
+          quantity,
+          ...(department === "roll" ? { extension } : {}),
+        }));
       const part =
         existing?.parts.find((p) => p.department === department) ||
         (payload.action === "append" && department === selectedDepartment

@@ -53,6 +53,11 @@ const catalog = {
     ],
     ["BOX(OZ)", "BOX", "", "", "", "", "", "", "", "", "", "", "", "", "XEROX"],
   ],
+  extensions: [
+    ["Артикул", "Расширение печати"],
+    ["ROLL", "A3"],
+    ["ROLL(OZ)", "A3"],
+  ],
 };
 const payload = () => ({
   action: "create",
@@ -321,6 +326,8 @@ test("confirmed machines determine departments independently of Who prints and m
     routed.map((l) => l.department),
     ["roll", "box"],
   );
+  assert.equal(routed[0].extension, "A3");
+  assert.equal(routed[1].extension, null);
 });
 
 test("OZON suffix and broken lookup use exact base WB machine; conflicting catalog rows block", () => {
@@ -470,7 +477,7 @@ test("one owner action creates disjoint department jobs with one committed Assem
   assert.equal(result.status, "verified");
   const supply = f.store.meta("productionSupplies")[0];
   assert.equal(supply.parts.length, 2);
-  assert.deepEqual([...f.writers.roll.sheets.values()][0].lines, [p.lines[0]]);
+  assert.deepEqual([...f.writers.roll.sheets.values()][0].lines, [{ ...p.lines[0], extension: "A3" }]);
   assert.deepEqual([...f.writers.box.sheets.values()][0].lines, [p.lines[1]]);
   for (const writer of Object.values(f.writers)) {
     const sheet = [...writer.sheets.values()][0];
@@ -515,8 +522,9 @@ for (const department of ["roll", "box"]) {
     assert.equal(deleted.action, "deletePart");
     assert.equal(targetWriter.sheets.has(target.sheetId), false);
     assert.equal(survivorWriter.sheets.has(survivor.sheetId), true);
+    const survivorLine = p.lines[department === "roll" ? 1 : 0];
     assert.deepEqual(survivorWriter.sheets.get(survivor.sheetId).lines, [
-      p.lines[department === "roll" ? 1 : 0],
+      department === "box" ? { ...survivorLine, extension: "A3" } : survivorLine,
     ]);
     const remainingManifest = await survivorWriter.manifest(survivor.sheetId);
     assert.equal(remainingManifest.ready, true);
@@ -618,7 +626,7 @@ test("append from box targets the same common supply and keeps the other departm
   assert.equal(result.status, "verified", JSON.stringify(result));
   assert.equal(f.writers.roll.writes, 1);
   assert.equal(f.writers.box.writes, 2);
-  assert.deepEqual([...f.writers.roll.sheets.values()][0].lines, [p.lines[0]]);
+  assert.deepEqual([...f.writers.roll.sheets.values()][0].lines, [{ ...p.lines[0], extension: "A3" }]);
   assert.equal(f.store.meta("productionSupplies").length, 1);
   assert.equal(f.store.meta("productionSupplies")[0].id, supply.id);
 });

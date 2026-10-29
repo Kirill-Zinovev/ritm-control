@@ -11,7 +11,33 @@ const HEADER_ROW = ROLL_PRINTING_SHEET.headerRow;
 const UID_HEADER_ROW = ROLL_PRINTING_SHEET.uidHeaderRow;
 const MAX_ORDERS = 500;
 const MAX_TEMPLATE_SCAN_ROWS = 4096;
-const FORMULA_COLUMNS = [6, 7, 9, 10]; // F, G, I, J in the roll-printing template.
+// The roll-printing source sheet now has a literal `расширения` field in F.
+// All calculation/input fields to its right have moved one column to the right.
+const ROLL_FORMULA_COLUMNS = [7, 8, 10, 11]; // G, H, J, K.
+const ROLL_LAYOUT = Object.freeze({
+  article: 5,
+  extension: 6,
+  quantity: 16,
+  remainingPrint: 25,
+  uid: 30,
+  maxColumn: 30,
+  width: 9,
+  height: 10,
+  printReady: 19,
+  cutReady: 20,
+});
+const BOX_LAYOUT = Object.freeze({
+  article: 5,
+  extension: null,
+  quantity: 15,
+  remainingPrint: 24,
+  uid: 29,
+  maxColumn: 29,
+  width: 8,
+  height: 9,
+  printReady: 18,
+  cutReady: 19,
+});
 const REGISTRY_KEY = "rollPrintingAdditionalSheets";
 const fail = (code, message, status = 409) => {
   throw new RepairError(code, message, status);
@@ -218,25 +244,26 @@ function isLiteralValue(cell) {
   );
 }
 
-function inputRows(grid) {
+function inputRows(grid, layout = ROLL_LAYOUT) {
   const rowCount = grid?.properties?.gridProperties?.rowCount || 0;
   const rows = [];
   for (let row = DATA_START_ROW; row <= rowCount; row++) {
     rows.push({
       row,
-      articleCell: gridCell(grid, row, 5),
-      quantityCell: gridCell(grid, row, 15),
-      uidCell: gridCell(grid, row, 29),
+      articleCell: gridCell(grid, row, layout.article),
+      extensionCell: layout.extension ? gridCell(grid, row, layout.extension) : null,
+      quantityCell: gridCell(grid, row, layout.quantity),
+      uidCell: gridCell(grid, row, layout.uid),
     });
   }
   return rows;
 }
 
-function lastLiteralDataRow(grid) {
+function lastLiteralDataRow(grid, layout = ROLL_LAYOUT) {
   const rowCount = grid?.properties?.gridProperties?.rowCount || 0;
   let last = DATA_START_ROW - 1;
   for (let row = DATA_START_ROW; row <= rowCount; row++) {
-    for (let column = 1; column <= 29; column++) {
+    for (let column = 1; column <= layout.maxColumn; column++) {
       if (isLiteralValue(gridCell(grid, row, column))) {
         last = row;
         break;
@@ -246,14 +273,14 @@ function lastLiteralDataRow(grid) {
   return last;
 }
 
-function clearCopiedData(grid, sheetId, throughRow, formulaRepairs = []) {
+function clearCopiedData(grid, sheetId, throughRow, formulaRepairs = [], layout = ROLL_LAYOUT) {
   const repairedFormulas = new Map(
     formulaRepairs.map((repair) => [`${repair.row}:${repair.column}`, repair.formula]),
   );
   const rows = [];
   for (let row = DATA_START_ROW; row <= throughRow; row++) {
     const values = [];
-    for (let column = 1; column <= 29; column++) {
+    for (let column = 1; column <= layout.maxColumn; column++) {
       const formula =
         repairedFormulas.get(`${row}:${column}`) ||
         gridCell(grid, row, column).userEnteredValue?.formulaValue;
@@ -270,13 +297,13 @@ function clearCopiedData(grid, sheetId, throughRow, formulaRepairs = []) {
   };
 }
 
-function formulaSignature(grid, startRow, endRow, formulaRepairs = []) {
+function formulaSignature(grid, startRow, endRow, formulaRepairs = [], layout = ROLL_LAYOUT) {
   const repairedFormulas = new Map(
     formulaRepairs.map((repair) => [`${repair.row}:${repair.column}`, repair.formula]),
   );
   const formulas = [];
   for (let row = startRow; row <= endRow; row++)
-    for (let column = 1; column <= 29; column++) {
+    for (let column = 1; column <= layout.maxColumn; column++) {
       const formula =
         repairedFormulas.get(`${row}:${column}`) ||
         gridCell(grid, row, column).userEnteredValue?.formulaValue;
@@ -288,11 +315,12 @@ function formulaSignature(grid, startRow, endRow, formulaRepairs = []) {
   };
 }
 
-function validateTemplate(grid, allowEmptyUid = false) {
+function validateTemplate(grid, allowEmptyUid = false, layout = ROLL_LAYOUT, requireExtension = false) {
   if (
-    fold(entered(gridCell(grid, HEADER_ROW, 5))) !== "артикул" ||
-    fold(entered(gridCell(grid, HEADER_ROW, 15))) !== "кол-во" ||
-    (fold(entered(gridCell(grid, UID_HEADER_ROW, 29))) !== "uid" && !(allowEmptyUid && !entered(gridCell(grid, UID_HEADER_ROW, 29)) && !gridCell(grid, UID_HEADER_ROW, 29).userEnteredValue?.formulaValue))
+    fold(entered(gridCell(grid, HEADER_ROW, layout.article))) !== "артикул" ||
+    fold(entered(gridCell(grid, HEADER_ROW, layout.quantity))) !== "кол-во" ||
+    (requireExtension && fold(entered(gridCell(grid, HEADER_ROW, layout.extension))) !== "расширения") ||
+    (fold(entered(gridCell(grid, UID_HEADER_ROW, layout.uid))) !== "uid" && !(allowEmptyUid && !entered(gridCell(grid, UID_HEADER_ROW, layout.uid)) && !gridCell(grid, UID_HEADER_ROW, layout.uid).userEnteredValue?.formulaValue))
   )
     fail(
       "roll_template_schema_changed",
@@ -301,15 +329,16 @@ function validateTemplate(grid, allowEmptyUid = false) {
     );
 }
 
-function validateTemplateInputRange(grid, throughRow) {
+function validateTemplateInputRange(grid, throughRow, layout = ROLL_LAYOUT) {
   for (let row = DATA_START_ROW; row <= throughRow; row++) {
     if (
-      gridCell(grid, row, 5).userEnteredValue?.formulaValue ||
-      gridCell(grid, row, 15).userEnteredValue?.formulaValue
+      gridCell(grid, row, layout.article).userEnteredValue?.formulaValue ||
+      gridCell(grid, row, layout.quantity).userEnteredValue?.formulaValue ||
+      (layout.extension && gridCell(grid, row, layout.extension).userEnteredValue?.formulaValue)
     )
       fail(
         "roll_template_input_formula",
-        `В поле артикула или количества строки ${row} обнаружена формула; запись остановлена.`,
+        `В поле артикула, расширения или количества строки ${row} обнаружена формула; запись остановлена.`,
         409,
       );
   }
@@ -338,7 +367,7 @@ function formulaMissingMessage(cell) {
   return `В листе-шаблоне «${ROLL_PRINTING_SHEET.name}» в ячейке ${cell} нет формулы, а соседние строки не подтверждают безопасное восстановление в новой копии. Загруженный список товаров ни при чём; поставка не создана, исходный лист не изменён.`;
 }
 
-function inferFormulaRepairs(grid, startRow, count, columns = FORMULA_COLUMNS) {
+function inferFormulaRepairs(grid, startRow, count, columns = ROLL_FORMULA_COLUMNS) {
   const endRow = startRow + count - 1;
   const rowCount = grid?.properties?.gridProperties?.rowCount || 0;
   if (endRow > rowCount)
@@ -484,7 +513,32 @@ function boxDimensionFormulaRepairs(startRow, count) {
 }
 
 function rollDimensionFormulaRepairs(startRow, count) {
-  return boxDimensionFormulaRepairs(startRow, count).filter((item) => [8, 9, 10, 11].includes(item.column));
+  const repairs = [];
+  const widthPattern = String.raw`^\s*([0-9]+[,.]?[0-9]*)\s*[xх×]\s*[0-9]+[,.]?[0-9]*\s*$`;
+  const heightPattern = String.raw`^\s*[0-9]+[,.]?[0-9]*\s*[xх×]\s*([0-9]+[,.]?[0-9]*)\s*$`;
+  for (let row = startRow; row < startRow + count; row++) {
+    const width = `=IFERROR(VALUE(SUBSTITUTE(REGEXEXTRACT(TO_TEXT(H${row});"${widthPattern}");".";","))/100;"")`;
+    const height = `=IFERROR(VALUE(SUBSTITUTE(REGEXEXTRACT(TO_TEXT(H${row});"${heightPattern}");".";","))/100;"")`;
+    repairs.push(
+      { row, column: 9, cell: `I${row}`, sourceCell: `H${row}`, formula: width },
+      { row, column: 10, cell: `J${row}`, sourceCell: `H${row}`, formula: height },
+      {
+        row,
+        column: 11,
+        cell: `K${row}`,
+        sourceCell: `G${row}:J${row}`,
+        formula: `=IF(OR(G${row}="";I${row}="";J${row}="";P${row}="");"";G${row}*I${row}*J${row}*P${row})`,
+      },
+      {
+        row,
+        column: 12,
+        cell: `L${row}`,
+        sourceCell: `G${row}:J${row}`,
+        formula: `=IF(OR(G${row}="";I${row}="";J${row}="";R${row}="");"";G${row}*I${row}*J${row}*R${row})`,
+      },
+    );
+  }
+  return repairs;
 }
 
 function rollCatalogFormulaRepairs(startRow, count, name, box = false) {
@@ -493,7 +547,9 @@ function rollCatalogFormulaRepairs(startRow, count, name, box = false) {
   const wb = /(?:^|[^\p{L}\p{N}])WB(?=$|[^\p{L}\p{N}])/u.test(title);
   if (ozon === wb) return [];
   const repairs = [];
-  const columns = [[4, 14, 5], [6, 5, 2], [7, 6, 3], [12, 9, 4]];
+  const columns = box
+    ? [[4, 14, 5], [6, 5, 2], [7, 6, 3], [12, 9, 4]]
+    : [[4, 14, 5], [7, 5, 2], [8, 6, 3], [13, 9, 4]];
   for (let row = startRow; row < startRow + count; row++) {
     const sku = `REGEXREPLACE(UPPER(TRIM($E${row}));"\\(OZ\\)$";"")`;
     for (const [column, ozonIndex, wbIndex] of columns) {
@@ -540,7 +596,8 @@ export class RollSupplySheetsWriter {
     this.documentId = documentId;
     this.template = template;
     this.box = box;
-    this.formulaColumns = box ? [6, 10] : FORMULA_COLUMNS;
+    this.layout = box ? BOX_LAYOUT : ROLL_LAYOUT;
+    this.formulaColumns = box ? [6, 10] : ROLL_FORMULA_COLUMNS;
     this.fetcher = (...args) => fetcher(...args);
     this.timeoutMs = timeoutMs;
     this.preparedTemplates = new Map();
@@ -656,7 +713,7 @@ export class RollSupplySheetsWriter {
   }
 
   async grid(sheetName, endRow = DATA_START_ROW + MAX_ORDERS - 1) {
-    const range = `'${sheetName.replaceAll("'", "''")}'!A1:AC${endRow}`;
+    const range = `'${sheetName.replaceAll("'", "''")}'!A1:${columnName(this.layout.maxColumn)}${endRow}`;
     const params = new URLSearchParams({
       includeGridData: "true",
       ranges: range,
@@ -707,7 +764,7 @@ export class RollSupplySheetsWriter {
       template.title,
       Math.max(scanRows, DATA_START_ROW + MAX_ORDERS - 1),
     );
-    validateTemplate(sourceGrid, this.box);
+    validateTemplate(sourceGrid, this.box, this.layout, !this.box);
     if (gridCell(sourceGrid, 1, 1).userEnteredValue?.formulaValue)
       fail(
         "roll_template_title_formula",
@@ -724,9 +781,9 @@ export class RollSupplySheetsWriter {
       this.formulaColumns,
     );
     formulaRepairs.push(...catalogRepairs);
-    const sourceRows = inputRows(sourceGrid);
+    const sourceRows = inputRows(sourceGrid, this.layout);
     const clearThrough = Math.max(
-      lastLiteralDataRow(sourceGrid),
+      lastLiteralDataRow(sourceGrid, this.layout),
       DATA_START_ROW + lines.length - 1,
     );
     if (this.box)
@@ -742,8 +799,9 @@ export class RollSupplySheetsWriter {
       DATA_START_ROW,
       clearThrough,
       formulaRepairs,
+      this.layout,
     );
-    validateTemplateInputRange(sourceGrid, clearThrough);
+    validateTemplateInputRange(sourceGrid, clearThrough, this.layout);
     if (this.box && lines.some((_, i) => [18, 19].some(column => gridCell(sourceGrid, DATA_START_ROW + i, column).userEnteredValue?.formulaValue)))
       fail("box_status_formula", "В полях готовности бокса найдена формула. Запись остановлена.");
     if (
@@ -809,8 +867,8 @@ export class RollSupplySheetsWriter {
       name,
       Math.max(scanRows, DATA_START_ROW + MAX_ORDERS - 1),
     );
-    validateTemplate(grid);
-    const rows = inputRows(grid);
+    validateTemplate(grid, this.box, this.layout, !this.box);
+    const rows = inputRows(grid, this.layout);
     const existingArticles = new Set(
       rows
         .map((row) => entered(row.articleCell))
@@ -861,7 +919,7 @@ export class RollSupplySheetsWriter {
         `Нельзя добавить артикул в начало: в строке ${templateRow} отсутствуют формулы ${missingFormulaColumns.map(columnName).join(", ")}. Данные не записаны.`,
         409,
       );
-    if ([5, 15, 24, 29, ...(this.box ? [18, 19] : [])].some((column) =>
+    if ([this.layout.article, this.layout.extension, this.layout.quantity, this.layout.remainingPrint, this.layout.uid, ...(this.box ? [this.layout.printReady, this.layout.cutReady] : [])].filter(Boolean).some((column) =>
       gridCell(grid, templateRow, column).userEnteredValue?.formulaValue,
     ))
       fail(
@@ -872,6 +930,7 @@ export class RollSupplySheetsWriter {
     const plannedRows = existingRows.map((row) => ({
       row: row.row,
       article: entered(row.articleCell),
+      extension: row.extensionCell ? entered(row.extensionCell) : null,
       quantity: entered(row.quantityCell),
       uid: entered(row.uidCell),
     }));
@@ -900,7 +959,7 @@ export class RollSupplySheetsWriter {
       lines,
       uids: uniqueIds(startRow, lines, operationId),
       existingRows: plannedRows,
-      copyFormulaColumns: Array.from({ length: 29 }, (_, i) => i + 1).filter(column => gridCell(grid, DATA_START_ROW, column).userEnteredValue?.formulaValue),
+      copyFormulaColumns: Array.from({ length: this.layout.maxColumn }, (_, i) => i + 1).filter(column => gridCell(grid, DATA_START_ROW, column).userEnteredValue?.formulaValue),
       formulaSourceRow: DATA_START_ROW + lines.length,
       formulaRepairs: [...catalogRepairs, ...(this.box
         ? boxDimensionFormulaRepairs(startRow, lines.length)
@@ -925,8 +984,8 @@ export class RollSupplySheetsWriter {
     if (!rawUid || rawUid.includes("::"))
       fail("roll_supply_item_changed", "Не удалось подтвердить ID артикула в выбранной поставке.", 409);
     const grid = await this.grid(name, Math.max(target.gridProperties?.rowCount || 0, DATA_START_ROW + MAX_ORDERS - 1));
-    validateTemplate(grid);
-    const matches = inputRows(grid).filter((row) => entered(row.uidCell) === rawUid);
+    validateTemplate(grid, this.box, this.layout, !this.box);
+    const matches = inputRows(grid, this.layout).filter((row) => entered(row.uidCell) === rawUid);
     if (matches.length !== 1)
       fail("roll_supply_item_changed", "Артикул не найден по уникальному ID. Обновите список поставки.", 409);
     const row = matches[0];
@@ -944,8 +1003,8 @@ export class RollSupplySheetsWriter {
         : null;
     const cut = Number.isFinite(order.cutProgress) && order.cutProgress >= 0 ? order.cutProgress : null;
     const packed = Number.isFinite(order.packed) && order.packed >= 0 ? order.packed : null;
-    if (gridCell(grid, row.row, 24).userEnteredValue?.formulaValue)
-      fail("roll_supply_remaining_formula", `Остаток печати X${row.row} содержит формулу; изменение остановлено без записи.`, 409);
+    if (gridCell(grid, row.row, this.layout.remainingPrint).userEnteredValue?.formulaValue)
+      fail("roll_supply_remaining_formula", `Остаток печати ${columnName(this.layout.remainingPrint)}${row.row} содержит формулу; изменение остановлено без записи.`, 409);
     if (this.formulaColumns.some((column) => !gridCell(grid, row.row, column).userEnteredValue?.formulaValue))
       fail("roll_supply_formula_missing", `В строке ${row.row} не найдены обязательные формулы. Изменение остановлено без записи.`, 409);
     if (action === "removeItem") {
@@ -958,6 +1017,7 @@ export class RollSupplySheetsWriter {
         row: row.row,
         uid: rawUid,
         article,
+        extension: row.extensionCell ? entered(row.extensionCell) : null,
         expectedQuantity,
         sourceSnapshot: { printed, cut, packed, packingRecords: Number(order.packingRecords) || 0 },
       };
@@ -973,6 +1033,7 @@ export class RollSupplySheetsWriter {
       row: row.row,
       uid: rawUid,
       article,
+      extension: row.extensionCell ? entered(row.extensionCell) : null,
       expectedQuantity,
       quantity,
       remainingPrint: quantity - printed,
@@ -1011,10 +1072,11 @@ export class RollSupplySheetsWriter {
         ? { article: plan.article, quantity: plan.quantity, remainingPrint: plan.remainingPrint, uid: plan.uid }
         : { article: "", quantity: "", remainingPrint: "", uid: "" };
       const requests = [
-        cellsForColumn({ sheetId: plan.sheetId, startRow: plan.row, columnIndex: 4, items: [{ article: values.article }] }, "article", values.article ? "string" : "clear"),
-        cellsForColumn({ sheetId: plan.sheetId, startRow: plan.row, columnIndex: 14, items: [{ quantity: values.quantity }] }, "quantity", values.quantity === "" ? "clear" : "number"),
-        cellsForColumn({ sheetId: plan.sheetId, startRow: plan.row, columnIndex: 23, items: [{ quantity: values.remainingPrint }] }, "quantity", values.remainingPrint === "" ? "clear" : "number"),
-        cellsForColumn({ sheetId: plan.sheetId, startRow: plan.row, columnIndex: 28, items: [{ uid: values.uid }] }, "uid", values.uid ? "string" : "clear"),
+        cellsForColumn({ sheetId: plan.sheetId, startRow: plan.row, columnIndex: this.layout.article - 1, items: [{ article: values.article }] }, "article", values.article ? "string" : "clear"),
+        ...(this.layout.extension ? [cellsForColumn({ sheetId: plan.sheetId, startRow: plan.row, columnIndex: this.layout.extension - 1, items: [{ extension: plan.action === "removeItem" ? "" : plan.extension || "" }] }, "extension", plan.action === "removeItem" ? "clear" : "string")] : []),
+        cellsForColumn({ sheetId: plan.sheetId, startRow: plan.row, columnIndex: this.layout.quantity - 1, items: [{ quantity: values.quantity }] }, "quantity", values.quantity === "" ? "clear" : "number"),
+        cellsForColumn({ sheetId: plan.sheetId, startRow: plan.row, columnIndex: this.layout.remainingPrint - 1, items: [{ quantity: values.remainingPrint }] }, "quantity", values.remainingPrint === "" ? "clear" : "number"),
+        cellsForColumn({ sheetId: plan.sheetId, startRow: plan.row, columnIndex: this.layout.uid - 1, items: [{ uid: values.uid }] }, "uid", values.uid ? "string" : "clear"),
       ];
       const result = await this.request(
         `https://sheets.googleapis.com/v4/spreadsheets/${this.documentId}:batchUpdate`,
@@ -1044,6 +1106,11 @@ export class RollSupplySheetsWriter {
     const articleItems = Array.from({ length: inputCount }, (_, index) => ({
       article: plan.lines[index]?.article || "",
     }));
+    const extensionItems = this.layout.extension
+      ? Array.from({ length: inputCount }, (_, index) => ({
+          extension: plan.lines[index]?.extension || "",
+        }))
+      : [];
     const quantityItems = Array.from({ length: inputCount }, (_, index) => ({
       quantity: plan.lines[index]?.quantity ?? "",
     }));
@@ -1108,6 +1175,7 @@ export class RollSupplySheetsWriter {
           sheetId,
           plan.clearThrough,
           plan.formulaRepairs,
+          this.layout,
         ),
       );
       const titleCell = {
@@ -1144,21 +1212,25 @@ export class RollSupplySheetsWriter {
         {
           sheetId,
           startRow: plan.startRow,
-          columnIndex: 4,
+          columnIndex: this.layout.article - 1,
           items: articleItems,
         },
         "article",
         "string",
       ),
       ...(!this.box ? [cellsForColumn(
-        { sheetId, startRow: plan.startRow, columnIndex: 23, items: plan.lines.map(line => ({ quantity: line.quantity })) },
+        { sheetId, startRow: plan.startRow, columnIndex: this.layout.remainingPrint - 1, items: plan.lines.map(line => ({ quantity: line.quantity })) },
         "quantity", "number",
+      )] : []),
+      ...(this.layout.extension ? [cellsForColumn(
+        { sheetId, startRow: plan.startRow, columnIndex: this.layout.extension - 1, items: extensionItems },
+        "extension", "string",
       )] : []),
       cellsForColumn(
         {
           sheetId,
           startRow: plan.startRow,
-          columnIndex: 14,
+          columnIndex: this.layout.quantity - 1,
           items: quantityItems,
         },
         "quantity",
@@ -1170,7 +1242,7 @@ export class RollSupplySheetsWriter {
     }));
     requests.push(
       cellsForColumn(
-        { sheetId, startRow: plan.startRow, columnIndex: 28, items: uidItems },
+        { sheetId, startRow: plan.startRow, columnIndex: this.layout.uid - 1, items: uidItems },
         "uid",
         "string",
       ),
@@ -1232,14 +1304,15 @@ export class RollSupplySheetsWriter {
       ),
     );
     if (plan.action === "updateItem" || plan.action === "removeItem") {
-      const currentArticle = entered(gridCell(grid, plan.row, 5));
-      const currentQuantity = entered(gridCell(grid, plan.row, 15));
-      const currentUid = entered(gridCell(grid, plan.row, 29));
+      const currentArticle = entered(gridCell(grid, plan.row, this.layout.article));
+      const currentExtension = this.layout.extension ? entered(gridCell(grid, plan.row, this.layout.extension)) : null;
+      const currentQuantity = entered(gridCell(grid, plan.row, this.layout.quantity));
+      const currentUid = entered(gridCell(grid, plan.row, this.layout.uid));
       const expectedRemoved = plan.action === "removeItem";
-      if (expectedRemoved ? currentArticle || currentQuantity || currentUid : currentArticle !== plan.article || Number(currentQuantity) !== plan.quantity || currentUid !== plan.uid)
+      if (expectedRemoved ? currentArticle || currentExtension || currentQuantity || currentUid : currentArticle !== plan.article || currentExtension !== plan.extension || Number(currentQuantity) !== plan.quantity || currentUid !== plan.uid)
         fail("roll_supply_item_readback_failed", `Google Sheets не подтвердил изменение артикула в строке ${plan.row}. Повторная запись заблокирована.`, 503);
-      if (expectedRemoved ? entered(gridCell(grid, plan.row, 24)) !== "" : Number(entered(gridCell(grid, plan.row, 24))) !== plan.remainingPrint)
-        fail("roll_supply_item_progress_readback_failed", `Остаток печати X${plan.row} не совпал с ожидаемым значением. Повторная запись заблокирована.`, 503);
+      if (expectedRemoved ? entered(gridCell(grid, plan.row, this.layout.remainingPrint)) !== "" : Number(entered(gridCell(grid, plan.row, this.layout.remainingPrint))) !== plan.remainingPrint)
+        fail("roll_supply_item_progress_readback_failed", `Остаток печати ${columnName(this.layout.remainingPrint)}${plan.row} не совпал с ожидаемым значением. Повторная запись заблокирована.`, 503);
       if (this.formulaColumns.some((column) => !gridCell(grid, plan.row, column).userEnteredValue?.formulaValue))
         fail("roll_supply_formula_readback_failed", `После изменения строки ${plan.row} формулы не подтверждены. Повторная запись заблокирована.`, 503);
       return { verifiedAt: new Date().toISOString(), sheetId: plan.sheetId, name: plan.name, row: plan.row, rows: 1, calculations: [] };
@@ -1247,7 +1320,7 @@ export class RollSupplySheetsWriter {
     if (plan.action === "append") {
       for (const item of plan.existingRows) {
         const row = item.row + plan.lines.length;
-        if (entered(gridCell(grid, row, 5)) !== item.article || Number(entered(gridCell(grid, row, 15))) !== Number(item.quantity) || entered(gridCell(grid, row, 29)) !== item.uid)
+        if (entered(gridCell(grid, row, this.layout.article)) !== item.article || (this.layout.extension && entered(gridCell(grid, row, this.layout.extension)) !== item.extension) || Number(entered(gridCell(grid, row, this.layout.quantity))) !== Number(item.quantity) || entered(gridCell(grid, row, this.layout.uid)) !== item.uid)
           fail("roll_supply_existing_rows_shift_failed", `После вставки в начало не удалось подтвердить прежний артикул и ID в строке ${row}. Повторная запись заблокирована.`, 503);
       }
     }
@@ -1268,6 +1341,8 @@ export class RollSupplySheetsWriter {
         grid,
         DATA_START_ROW,
         plan.clearThrough,
+        [],
+        this.layout,
       );
       if (
         actualFormulas.count !== plan.formulaSignature.count ||
@@ -1281,14 +1356,15 @@ export class RollSupplySheetsWriter {
       const expected = new Map();
       plan.lines.forEach((line, index) => {
         const row = plan.startRow + index;
-        expected.set(`E${row}`, line.article);
-        expected.set(`O${row}`, line.quantity);
-        if (!this.box) expected.set(`X${row}`, line.quantity);
+        expected.set(`${columnName(this.layout.article)}${row}`, line.article);
+        expected.set(`${columnName(this.layout.quantity)}${row}`, line.quantity);
+        if (this.layout.extension) expected.set(`${columnName(this.layout.extension)}${row}`, line.extension || "");
+        if (!this.box) expected.set(`${columnName(this.layout.remainingPrint)}${row}`, line.quantity);
         if (this.box) { expected.set(`R${row}`, false); expected.set(`S${row}`, false); }
-        expected.set(`AC${row}`, plan.uids[index].uid);
+        expected.set(`${columnName(this.layout.uid)}${row}`, plan.uids[index].uid);
       });
       for (let row = DATA_START_ROW; row <= plan.clearThrough; row++) {
-        for (let column = 1; column <= 29; column++) {
+        for (let column = 1; column <= this.layout.maxColumn; column++) {
           const cell = gridCell(grid, row, column);
           if (cell.userEnteredValue?.formulaValue) continue;
           const address = columnName(column) + row;
@@ -1321,10 +1397,12 @@ export class RollSupplySheetsWriter {
       const row = plan.startRow + index;
       if (this.box && [18, 19].some(column => entered(gridCell(grid, row, column)) !== false))
         fail("box_status_readback_failed", "Исходная готовность новых товаров бокса не подтверждена.", 503);
-      const article = entered(gridCell(grid, row, 5));
-      const quantity = entered(gridCell(grid, row, 15));
+      const article = entered(gridCell(grid, row, this.layout.article));
+      const extension = this.layout.extension ? entered(gridCell(grid, row, this.layout.extension)) : null;
+      const quantity = entered(gridCell(grid, row, this.layout.quantity));
       if (
         article !== plan.lines[index].article ||
+        (this.layout.extension && extension !== String(plan.lines[index].extension || "").trim()) ||
         Number(quantity) !== plan.lines[index].quantity
       )
         fail(
@@ -1332,10 +1410,10 @@ export class RollSupplySheetsWriter {
           `Google вернул другое значение в строке ${row}; операция не объявлена успешной.`,
           503,
         );
-      if (!this.box && Number(entered(gridCell(grid, row, 24))) !== plan.lines[index].quantity)
+      if (!this.box && Number(entered(gridCell(grid, row, this.layout.remainingPrint))) !== plan.lines[index].quantity)
         fail(
           "roll_supply_print_remainder_readback_failed",
-          `План записан, но остаток печати X${row} не инициализирован количеством поставки. Повторная запись заблокирована.`,
+          `План записан, но остаток печати ${columnName(this.layout.remainingPrint)}${row} не инициализирован количеством поставки. Повторная запись заблокирована.`,
           503,
         );
       if (
@@ -1361,7 +1439,7 @@ export class RollSupplySheetsWriter {
           `Данные записаны, но размеры и площадь строки ${row} не подтверждены. Повторная запись заблокирована.`,
           503,
         );
-      if (!effective(gridCell(grid, row, 29)))
+      if (!effective(gridCell(grid, row, this.layout.uid)))
         fail(
           "roll_supply_uid_readback_failed",
           `Данные записаны, но UID строки ${row} не появился. Повторная запись заблокирована.`,
@@ -1839,7 +1917,7 @@ export class RollSupplyManagementService {
 }
 
 export function rollSupplyFormulaColumns() {
-  return FORMULA_COLUMNS.map((column) => String.fromCharCode(64 + column));
+  return ROLL_FORMULA_COLUMNS.map(columnName);
 }
 
 export function supplyManifestRequests(sheetId, manifest) {
