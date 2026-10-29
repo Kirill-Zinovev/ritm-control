@@ -173,8 +173,9 @@ export function ProductionControls({
       });
       if (activeKeyRef.current !== shipmentIdsKey) return;
       if (Array.isArray(result.locks)) { setShipmentLocks(result.locks); setLocksForKey(shipmentIdsKey); }
-      if (!result.confirmed) setLockActionError("Изменение ожидает подтверждения Assembly. Нажмите «Повторить подтверждение», если ожидание затянулось.");
-      else if (!Array.isArray(result.locks) || result.locks.length !== activeShipmentIds.length || !result.locks.every((lock) => lock.locked === targetLocked && !lock.pending))
+      if (!result.confirmed && (!Array.isArray(result.locks) || !result.locks.some((lock) => lock.pending)))
+        setLockActionError("Не удалось подтвердить новое состояние замка. Обновите данные и проверьте ещё раз.");
+      else if (result.confirmed && (!Array.isArray(result.locks) || result.locks.length !== activeShipmentIds.length || !result.locks.every((lock) => lock.locked === targetLocked && !lock.pending)))
         setLockActionError("Не удалось подтвердить новое состояние замка. Обновите данные и проверьте ещё раз.");
       await refresh();
     } catch (cause) {
