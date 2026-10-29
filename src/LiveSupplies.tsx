@@ -2380,6 +2380,7 @@ export function LiveSuppliesWorkspace({
                     : step.status === "pending"
                       ? "ожидает загрузки"
                       : "требует сверки"}
+                  {step.message && <> · {step.message}</>}
                 </span>
               ))}
               {!!operation?.calculations?.length && (
@@ -2399,6 +2400,30 @@ export function LiveSuppliesWorkspace({
                   Открыть вкладку <ArrowSquareOut size={14} />
                 </a>
               )}
+              {operation &&
+                operation.status === "partial" && (
+                  <Button type="button" disabled={busy} onClick={async () => {
+                    setBusy(true);
+                    setFormError("");
+                    try {
+                      const response = await fetch("/api/roll-supplies", {
+                        method: "POST", credentials: "same-origin",
+                        headers: { "content-type": "application/json" },
+                        body: JSON.stringify({ action: "resume", operationId: operation.id, explicitWriteApproval: true }),
+                        signal: AbortSignal.timeout(240000),
+                      });
+                      const data = await readRollSupplyResponse(response);
+                      setOperation(data.operation);
+                      setNotice(supplyOperationStatus(data.operation));
+                      await reloadWriter();
+                      if (data.operation.status === "verified") await onRefresh();
+                    } catch (cause) {
+                      setFormError(cause instanceof Error ? cause.message : "Не удалось продолжить загрузку.");
+                    } finally { setBusy(false); }
+                  }}>
+                    Проверить и продолжить эту поставку
+                  </Button>
+                )}
               {operation &&
                 [
                   "uncertain",

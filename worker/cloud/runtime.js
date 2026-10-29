@@ -76,6 +76,11 @@ export async function recoverPendingShipmentLock(bindings, store, fetcher = fetc
 
 export async function maintenance(bindings, store, { fetcher = fetch, refresh = true } = {}) {
   const result = { ok: true, assemblySync: null, deliverySkipped: !cloudConfig(bindings).writesEnabled };
+  const diagnosticScope = await store.scope();
+  result.pendingSupplyOperations = (diagnosticScope.meta("productionSupplyOperations") || []).filter((op) => op.status !== "verified").map((op) => ({
+    id: op.id, name: op.name, action: op.action, status: op.status, message: op.message,
+    steps: (op.steps || []).map((step) => ({ department: step.department, status: step.status, message: step.message || null, sheetId: step.plan?.sheetId, action: step.plan?.action })),
+  }));
   if (!result.deliverySkipped) result.assemblySync = await drainOutbox(bindings, store, fetcher);
   if (!result.deliverySkipped) {
     try { result.lockRecovery = await recoverPendingShipmentLock(bindings, store, fetcher); }
