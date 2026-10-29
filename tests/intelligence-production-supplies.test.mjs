@@ -548,6 +548,24 @@ for (const department of ["roll", "box"]) {
   });
 }
 
+test("an uncertain absent create waits for Google then resumes with the identical sheet ID", async () => {
+  const f = fixture(), p = payload(), preview = await f.service.preview(p);
+  const realExecute = f.writers.roll.execute;
+  let originalId;
+  f.writers.roll.execute = async (plan) => { originalId = plan.sheetId; throw Object.assign(new Error("connection lost before acceptance"), { uncertain: true }); };
+  assert.equal((await f.service.execute({ ...p, previewId: preview.id })).status, "partial");
+  const input = { action: "resume", operationId: p.operationId, explicitWriteApproval: true };
+  const early = f.createService();
+  assert.equal((await early.execute(input)).status, "partial");
+  assert.equal(f.writers.roll.writes, 0);
+  f.writers.roll.execute = realExecute;
+  const later = f.createService(); later.now = () => Date.now() + 181000;
+  assert.equal((await later.execute(input)).status, "verified");
+  assert.equal(f.writers.roll.writes, 1);
+  assert.equal(f.writers.box.writes, 1);
+  assert.ok(f.writers.roll.sheets.has(originalId));
+});
+
 test("known rejection in second department resumes only its unsent work", async () => {
   const f = fixture(),
     p = payload(),

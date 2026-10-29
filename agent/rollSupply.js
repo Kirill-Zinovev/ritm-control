@@ -589,7 +589,7 @@ function formulaColumnRequests(sheetId, repairs) {
 }
 
 export class RollSupplySheetsWriter {
-  constructor({ credentialWriter, fetcher = fetch, timeoutMs = 25000, documentId = ROLL_PRINTING_SHEET_ID, template = ROLL_PRINTING_SHEET, box = false } = {}) {
+  constructor({ credentialWriter, fetcher = fetch, timeoutMs = 25000, beforeWrite = null, documentId = ROLL_PRINTING_SHEET_ID, template = ROLL_PRINTING_SHEET, box = false } = {}) {
     if (!credentialWriter || typeof credentialWriter.token !== "function")
       throw new TypeError("A configured production writer is required");
     this.credentials = credentialWriter;
@@ -600,11 +600,14 @@ export class RollSupplySheetsWriter {
     this.formulaColumns = box ? [6, 10] : ROLL_FORMULA_COLUMNS;
     this.fetcher = (...args) => fetcher(...args);
     this.timeoutMs = timeoutMs;
+    this.beforeWrite = beforeWrite;
     this.preparedTemplates = new Map();
   }
 
   async request(url, { method = "GET", body, write = false } = {}) {
     const token = await this.credentials.token();
+    // Durable journaling happens before the Google response timeout starts.
+    if (write && this.beforeWrite) await this.beforeWrite();
     this.credentials.metrics[write ? "writeRequests" : "readRequests"]++;
     let response;
     try {
@@ -618,11 +621,12 @@ export class RollSupplySheetsWriter {
         ...(body ? { body: JSON.stringify(body) } : {}),
         signal: AbortSignal.timeout(this.timeoutMs),
       });
-    } catch {
+    } catch (cause) {
+      if (cause?.beforeExternalWrite === true) throw cause;
       throw Object.assign(
         new Error(
           write
-            ? "Ответ Google Sheets на запись не получен. Результат неизвестен; повторная запись заблокирована."
+            ? "Ответ Google Sheets на запись не получен" + (cause?.name === "TimeoutError" || cause?.name === "AbortError" ? " за " + Math.round(this.timeoutMs / 1000) + " секунд" : " (" + String(cause?.code || cause?.name || "network_error").slice(0, 60) + ")") + ". Результат неизвестен; требуется сверка."
             : "Google Sheets API не ответил на проверочный запрос.",
         ),
         {

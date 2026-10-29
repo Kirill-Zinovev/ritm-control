@@ -33,10 +33,13 @@ export async function createServices(bindings, scope, { fetcher = fetch, refresh
     const url = new URL(input), match = url.pathname.match(/^\/v4\/spreadsheets\/([A-Za-z0-9_-]+)(?:[/:]|$)/);
     if (url.protocol !== "https:" || url.hostname !== "sheets.googleapis.com" || url.username || url.password || !match || !config.sources.includes(match[1]))
       throw new CloudError("google_request_forbidden", "Запрос к этому источнику не разрешён.", 403);
-    if ((init.method || "GET") !== "GET") await guard(match[1]);
+    if ((init.method || "GET") !== "GET") {
+      try { await guard(match[1]); }
+      catch (error) { error.beforeExternalWrite = true; error.uncertain = false; throw error; }
+    }
     return cloudFetch(fetcher,url.href,init);
   };
-  const writers = reader.configured ? Object.fromEntries(Object.entries(DEPARTMENTS).map(([department, target]) => [department, new ProductionSupplyWriter({ department, credentialWriter: writerCredentials, fetcher: guardedFetch, documentId: target.documentId, template: target.template })])) : null;
+  const writers = reader.configured ? Object.fromEntries(Object.entries(DEPARTMENTS).map(([department, target]) => [department, new ProductionSupplyWriter({ department, credentialWriter: writerCredentials, fetcher: guardedFetch, beforeWrite: () => guard(target.documentId), documentId: target.documentId, template: target.template })])) : null;
   const queue = new AssemblySyncQueue(scope, { secret: bindings.RITM_ASSEMBLY_SYNC_SECRET || "", fetchImpl: (...args) => cloudFetch(fetcher,...args), beforeDeliver: () => guard() });
   // No process-owned timers in Sites. Requests and the protected maintenance
   // endpoint drain the same durable outbox; the scheduler survives closed tabs.

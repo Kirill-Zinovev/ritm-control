@@ -1002,6 +1002,20 @@ export class ProductionSupplyService {
       for (const step of op.steps) {
         const writer = this.writers[step.department];
         if (step.status === "verified") continue;
+        // A timed-out CREATE can be safely retried only after Google's maximum
+        // processing window, with authoritative absence and the SAME sheet ID.
+        // duplicateSheet rejects that ID atomically if the first call did land.
+        if (step.status === "uncertain" && step.plan.action === "create") {
+          const started = Date.parse(step.writeStartedAt || op.createdAt);
+          if (Number.isFinite(started) && this.now() - started > 180000) {
+            const sheets = await writer.metadata();
+            if (!sheets.some((sheet) => sheet.sheetId === step.plan.sheetId || sheet.title === step.plan.name)) {
+              step.status = "pending";
+              step.message = null;
+              this.save(op);
+            }
+          }
+        }
         if (["uncertain", "checking"].includes(step.status)) {
           try {
             if (step.plan.action !== "manifest") await writer.verify(step.plan);
@@ -1055,6 +1069,7 @@ export class ProductionSupplyService {
           this.save(op);
         }
         step.status = "writing";
+        step.writeStartedAt = new Date(this.now()).toISOString();
         this.save(op);
         try {
           if (step.plan.action === "manifest") {
