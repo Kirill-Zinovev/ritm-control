@@ -700,6 +700,7 @@ export class ProductionSupplyService {
       at: this.now(),
     };
     this.previews.set(id, value);
+    this.store.saveTransferPreview?.("production:" + id, value.at + 600000, JSON.stringify(value));
     for (const [key, prior] of this.previews)
       if (this.now() - prior.at > 600000) this.previews.delete(key);
     return {
@@ -717,6 +718,13 @@ export class ProductionSupplyService {
           .reduce((a, l) => a + l.quantity, 0),
       })),
     };
+  }
+  previewById(id) {
+    const stored = this.store.transferPreview?.("production:" + id);
+    if (stored?.payload) {
+      try { return JSON.parse(stored.payload); } catch { return null; }
+    }
+    return this.previews.get(id) || null;
   }
   async prepare(payload, routed) {
     const registry = this.store.meta(registryKey) || [];
@@ -928,7 +936,7 @@ export class ProductionSupplyService {
           );
         return this.publicOperation(op);
       }
-      const preview = this.previews.get(normalized.previewId);
+      const preview = this.previewById(normalized.previewId);
       if (
         !preview ||
         this.now() - preview.at > 600000 ||
@@ -972,7 +980,7 @@ export class ProductionSupplyService {
           shipmentMarketplace(payload.name),
           await this.catalog(),
         );
-        if (digest(fresh) !== digest(this.previews.get(input.previewId).routed))
+        if (digest(fresh) !== digest(this.previewById(input.previewId)?.routed))
           fail(
             "production_routing_changed",
             "Станки в базе изменились. Проверьте распределение заново.",

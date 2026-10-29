@@ -72,10 +72,15 @@ export async function createServices(bindings, scope, { fetcher = fetch, refresh
         throw new CloudError("shipment_lock_unconfirmed", "Замок поставки ожидает подтверждения Assembly. Состав не продолжен; проверьте состояние операции и повторите.", 503);
     },
   });
-  production.previews = new Map((scope.meta("productionPreviewCache") || []).filter((row) => Number.isFinite(row[1]?.at) && Date.now() - row[1].at <= 600000));
+  // Old releases stored all active production previews as one cloud_state
+  // value. Replace that oversized legacy cache once and keep each preview in
+  // cloud_transfer_previews with its own expiry instead.
+  const legacyPreviews = scope.meta("productionPreviewCache");
+  if (Array.isArray(legacyPreviews) && legacyPreviews.length) scope.meta("productionPreviewCache", []);
+  production.previews = new Map();
   const transfer = new AssemblyTransferService(scope, { reader, queue, backfill: !!scope.lease });
   return { reader, writers, legacy, production, transfer, queue, guard,
-    savePreviews() { scope.meta("productionPreviewCache", [...production.previews]); },
+    savePreviews() {},
     state() {
       const state = legacy.state();
       const writable = config.writesEnabled && !!bindings.RITM_GOOGLE_WRITER_JSON && scope.meta("migrationReady") === true && scope.meta("cloudCutover")?.id === bindings.RITM_CLOUD_CUTOVER_ID;

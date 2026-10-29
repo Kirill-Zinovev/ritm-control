@@ -95,6 +95,24 @@ test("operation journal survives a lost server response and retains the same eve
   } finally { db.close(); }
 });
 
+test("production previews use expiring rows instead of a growing cloud_state cache", async () => {
+  let at = 1000;
+  const { db, store } = fixture({ now: () => at });
+  const id = "production:" + crypto.randomUUID();
+  try {
+    await store.withScope(async (scope) => {
+      scope.meta("productionPreviewCache", [{ payload: "legacy preview cache".repeat(5000) }]);
+      scope.meta("productionPreviewCache", []);
+      scope.saveTransferPreview(id, at + 600000, JSON.stringify({ id, routed: [{ article: "TEST-1", quantity: 4 }] }));
+    });
+    assert.equal(db.db.prepare("SELECT value FROM cloud_state WHERE key='productionPreviewCache'").get().value, "[]");
+    assert.ok((await store.scope()).transferPreview(id)?.payload.includes("TEST-1"));
+    at += 600001;
+    await store.withScope(async () => {});
+    assert.equal(db.db.prepare("SELECT count(*) AS n FROM cloud_transfer_previews WHERE id=?").get(id).n, 0);
+  } finally { db.close(); }
+});
+
 test("chunked source snapshots round-trip without truncation and detect corrupted contents", async () => {
   const { db, store } = fixture();
   const lease = await store.acquire("refresh:printing");

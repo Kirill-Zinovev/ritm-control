@@ -121,7 +121,7 @@ export class CloudStore {
     const data = await this.db.batch([
       this.db.prepare("SELECT key,value FROM cloud_state"),
       this.db.prepare("SELECT kind,id,payload,ordinal FROM cloud_operations ORDER BY ordinal,created_at,id"),
-      this.db.prepare("SELECT * FROM cloud_transfer_previews"),
+      this.db.prepare("SELECT * FROM cloud_transfer_previews WHERE expires_at>? ").bind(this.now()),
       this.db.prepare("SELECT * FROM cloud_sync_events"),
     ]);
     return new CloudScope(this, lease, data);
@@ -156,6 +156,7 @@ export class CloudStore {
       statements.push(guarded("INSERT INTO cloud_sync_events(id,action,created_at,attempts,next_attempt_at,delivered_at,last_error,payload,outcome,receipt) SELECT ?,?,?,?,?,?,?,?,?,? WHERE {lease} ON CONFLICT(id) DO UPDATE SET attempts=excluded.attempts,next_attempt_at=excluded.next_attempt_at,delivered_at=excluded.delivered_at,last_error=excluded.last_error,payload=excluded.payload,outcome=excluded.outcome,receipt=excluded.receipt", [row.id, row.action, row.created_at, row.attempts || 0, row.next_attempt_at, row.delivered_at ?? null, row.last_error ?? null, row.payload ?? null, row.outcome ?? null, row.receipt ?? null]));
     }
     for (const row of scope.logs) statements.push(guarded("INSERT INTO cloud_audit(id,at,type,message,incident_id) SELECT ?,?,?,?,? WHERE {lease}", [row.id, row.at, row.type, row.message, row.incidentId]));
+    statements.push(guarded("DELETE FROM cloud_transfer_previews WHERE expires_at<=? AND {lease}", [this.now()]));
     if (statements.length) {
       if (statements.length > 90) throw new CloudError("checkpoint_too_large", "Обновление истории нужно разделить на этапы.");
       const result = await this.db.batch(statements);
