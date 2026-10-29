@@ -15,6 +15,7 @@ import { recordCutover } from "./cutover.js";
 import { exportCloud } from "./export.js";
 import { activeWarehouseShipmentIds, readWarehouseSnapshot } from "./warehouse.js";
 import { listWarehouseCartonDispatch, setWarehouseCartonDispatch } from "./warehouseDispatch.js";
+import { activeShipmentIds as activePrintingShipmentIds, deliverShipmentLockEvent, listShipmentLocks, normalizeShipmentIds, setShipmentLocks } from "./shipmentLocks.js";
 
 const signIn = "/?page=supplies";
 const methods = (request, allowed) => { if (!allowed.includes(request.method)) throw new CloudError("method_not_allowed", "Метод запроса не поддерживается.", 405); };
@@ -26,12 +27,14 @@ function managerRouteAllowed(method, path) {
     "/api/assembly-transfers/sources", "/api/assembly-transfers/links",
     "/api/assembly-transfers/source", "/api/assembly-transfers/operation",
     "/api/production-controls",
+    "/api/shipment-locks",
   ].includes(path);
   return method === "POST" && [
     "/api/roll-supplies", "/api/roll-supplies/preview",
     "/api/assembly-transfers", "/api/assembly-transfers/preview",
     "/api/warehouse/dispatch",
     "/api/production-controls",
+    "/api/shipment-locks",
   ].includes(path);
 }
 
@@ -232,12 +235,43 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
       });
       return json({ ok: true, ...result });
     }
+    if (path === "/api/shipment-locks") {
+      methods(request, ["GET", "POST"]);
+      if (assemblyControlApp || bridgeId) throw new CloudError("shipment_lock_manager_scope_required", "Управлять замком поставки можно только в RITM.", 403);
+      if (request.method === "GET") {
+        const shipmentIds = url.searchParams.getAll("shipmentId").concat((url.searchParams.get("shipmentIds") || "").split(",").filter(Boolean));
+        return json({ ok: true, locks: listShipmentLocks(await store.scope(), shipmentIds) });
+      }
+      const input = await readJson(request, 4096);
+      if (!["lock", "unlock"].includes(input?.action)) throw new CloudError("shipment_lock_action_invalid", "Выберите, закрыть или открыть поставку.", 400);
+      const shipmentIds = normalizeShipmentIds(input.shipmentIds);
+      const currentSnapshot = await store.snapshot("printing");
+      if (!currentSnapshot || store.now() - currentSnapshot.at > config.snapshotMaxAgeMs)
+        throw new CloudError("shipment_lock_snapshot_stale", "Сначала обновите данные поставок; замок не изменён.", 503);
+      const active = activePrintingShipmentIds(currentSnapshot.value);
+      if (!active || shipmentIds.some((id) => !active.has(id)))
+        throw new CloudError("shipment_lock_shipment_unavailable", "Поставка изменилась или больше не активна. Обновите RITM.", 409);
+      const result = await store.withScope(async (scope) => {
+        if (scope.meta("migrationReady") !== true) throw new CloudError("migration_not_imported", "Реестр поставок ещё не готов. Замок не изменён.", 503);
+        const value = await setShipmentLocks(scope, {
+          shipmentIds,
+          locked: input.action === "lock",
+          requestId: input.requestId,
+          name: input.shipmentName,
+          changedBy: principal?.displayName || principal?.username || "RITM",
+          deliver: (event) => deliverShipmentLockEvent(bindings, event, fetcher),
+        });
+        if (value.confirmed) appendAudit(scope, principal, path, { id: value.locks[0]?.eventId || "unchanged" });
+        return value;
+      });
+      return json({ ok: true, ...result }, result.confirmed ? 200 : 202);
+    }
     if (path === "/api/assembly-controls") {
       methods(request, ["GET"]);
       if (!assemblyControlApp) throw new CloudError("assembly_control_auth_required", "Запрос должен прийти из RITM Assembly.", 403);
       const shipmentId = url.searchParams.get("shipmentId") || "";
       const scope = await store.scope();
-      return json({ ok: true, controls: listAssemblyControls(scope, shipmentId) });
+      return json({ ok: true, controls: listAssemblyControls(scope, shipmentId), shipmentLock: listShipmentLocks(scope, shipmentId ? [shipmentId] : [])[0] || null });
     }
     if (path === "/api/assembly-controls/complete") {
       methods(request, ["POST"]);

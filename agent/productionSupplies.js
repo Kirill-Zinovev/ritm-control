@@ -214,9 +214,9 @@ export class ProductionSupplyWriter extends RollSupplySheetsWriter {
 export class ProductionSupplyService {
   constructor(
     store,
-    { writers, legacy, now = () => Date.now(), refresh = null, recoverInterrupted = true } = {},
+    { writers, legacy, now = () => Date.now(), refresh = null, recoverInterrupted = true, beforeCreateWrite = null } = {},
   ) {
-    Object.assign(this, { store, writers, legacy, now, refresh });
+    Object.assign(this, { store, writers, legacy, now, refresh, beforeCreateWrite });
     this.previews = new Map();
     this.busy = false;
     // An interrupted write is never replayed. Its exact persisted plan must be
@@ -795,6 +795,7 @@ export class ProductionSupplyService {
       shipmentId: id,
       action: payload.action,
       name: payload.name,
+      ...(payload.action === "create" && payload.lockAfterCreate === true ? { lockAfterCreate: true } : {}),
       lines: payload.lines,
       skippedLines: routed.filter((l) => !l.department),
       requestHash: digest(payload),
@@ -922,6 +923,11 @@ export class ProductionSupplyService {
           `Поставка «${op.name}»: добавляется ${op.steps.reduce((sum, step) => sum + step.lines.length, 0)} позиций, пропускается ${op.skippedLines?.length || 0}; распределение по станкам подтверждено`,
           null,
         );
+      }
+      if (op.action === "create" && op.lockAfterCreate === true) {
+        if (typeof this.beforeCreateWrite !== "function")
+          fail("shipment_lock_delivery_unavailable", "Не удалось подтвердить замок в Assembly. Запись поставки остановлена до изменения таблиц.", 503);
+        await this.beforeCreateWrite(op);
       }
       for (const step of op.steps) {
         const writer = this.writers[step.department];

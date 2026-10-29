@@ -545,6 +545,7 @@ export function LiveSuppliesWorkspace({
   const [itemQuantity, setItemQuantity] = useState("");
   const [itemFormError, setItemFormError] = useState("");
   const [name, setName] = useState("");
+  const [lockAfterCreate, setLockAfterCreate] = useState(false);
   const [itemsText, setItemsText] = useState("");
   const [fileName, setFileName] = useState("");
   const [formError, setFormError] = useState("");
@@ -562,6 +563,7 @@ export function LiveSuppliesWorkspace({
   );
   const [recoveryError, setRecoveryError] = useState("");
   const operationId = useRef("");
+  const routingInputKey = JSON.stringify([dialog, name, itemsText, appendTarget, dialog === "create" && lockAfterCreate]);
   const summaries = useMemo(() => buildSummaries(live), [live]);
   const effectiveBoxLinks = useMemo(() => {
     const links = [...assemblyBoxLinks];
@@ -874,6 +876,7 @@ export function LiveSuppliesWorkspace({
         : null,
     );
     setName(mode === "append" ? selected?.sheet.name || "" : "");
+    setLockAfterCreate(false);
     setItemsText("");
     setFileName("");
     setFormError("");
@@ -969,7 +972,7 @@ export function LiveSuppliesWorkspace({
     setBusy(true);
     setFormError("");
     setNotice("");
-    const inputKey = JSON.stringify([dialog, name, itemsText, appendTarget]);
+    const inputKey = routingInputKey;
     if (!routingPreview || routingPreview.input !== inputKey) {
       try {
         const response = await fetch("/api/roll-supplies/preview", {
@@ -982,6 +985,7 @@ export function LiveSuppliesWorkspace({
             operationId: operationId.current,
             name: dialog === "append" ? appendTarget!.name : name.trim(),
             lines,
+            ...(dialog === "create" ? { lockAfterCreate } : {}),
             ...(dialog === "append"
               ? {
                   sheetId: appendTarget!.sheetId,
@@ -1031,6 +1035,7 @@ export function LiveSuppliesWorkspace({
         name: dialog === "append" ? appendTarget!.name : name.trim(),
         lines,
         previewId: routingPreview.id,
+        ...(dialog === "create" ? { lockAfterCreate } : {}),
         ...(dialog === "append"
           ? {
               sheetId: appendTarget!.sheetId,
@@ -2238,20 +2243,34 @@ export function LiveSuppliesWorkspace({
       >
         <form noValidate onSubmit={submit}>
           {dialog === "create" && (
-            <Field
-              label="Название поставки"
-              error={formError && !name.trim() ? formError : undefined}
-            >
-              <input
-                value={name}
-                maxLength={100}
-                readOnly={
-                  busy || (!!operation && operation.status !== "failed")
-                }
-                onChange={(event) => setName(event.target.value)}
-                placeholder="Например, Ozon · Москва · 20 октября"
-              />
-            </Field>
+            <>
+              <Field
+                label="Название поставки"
+                error={formError && !name.trim() ? formError : undefined}
+              >
+                <input
+                  value={name}
+                  maxLength={100}
+                  readOnly={
+                    busy || (!!operation && operation.status !== "failed")
+                  }
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder="Например, Ozon · Москва · 20 октября"
+                />
+              </Field>
+              <label className="supply-lock-option">
+                <input
+                  type="checkbox"
+                  checked={lockAfterCreate}
+                  disabled={busy || (!!operation && operation.status !== "failed")}
+                  onChange={(event) => setLockAfterCreate(event.target.checked)}
+                />
+                <span>
+                  <strong>Закрыть для сборки сразу после создания</strong>
+                  <small>Сборщики увидят поставку, но не смогут записывать работу и работать с коробами, пока вы не снимете замок.</small>
+                </span>
+              </label>
+            </>
           )}
           <ExcelItemsField
             value={itemsText}
@@ -2271,8 +2290,7 @@ export function LiveSuppliesWorkspace({
             canExport={!!itemsText.trim()}
             readOnly={busy || (!!operation && operation.status !== "failed")}
           />
-          {routingPreview?.input ===
-            JSON.stringify([dialog, name, itemsText, appendTarget]) && (
+          {routingPreview?.input === routingInputKey && (
             <div
               className="supply-write-confirmation"
               aria-label="Распределение товаров по отделам"
@@ -2429,8 +2447,7 @@ export function LiveSuppliesWorkspace({
                 importing ||
                 downloading ||
                 exporting ||
-                (routingPreview?.input ===
-                  JSON.stringify([dialog, name, itemsText, appendTarget]) &&
+                (routingPreview?.input === routingInputKey &&
                   routingPreview.blocked) ||
                 !canWrite
               }
@@ -2438,8 +2455,7 @@ export function LiveSuppliesWorkspace({
               {busy
                 ? "Проверяю и записываю…"
                 : !routingPreview ||
-                    routingPreview.input !==
-                      JSON.stringify([dialog, name, itemsText, appendTarget])
+                    routingPreview.input !== routingInputKey
                   ? "Проверить распределение"
                   : dialog === "append"
                     ? "Подтвердить и добавить товары"

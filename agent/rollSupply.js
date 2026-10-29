@@ -75,7 +75,7 @@ function normalizeLines(lines) {
 export function validateRollSupplyPayload(input) {
   const allowed =
     input?.action === "create"
-      ? ["action", "explicitWriteApproval", "lines", "name", "operationId"]
+      ? ["action", "explicitWriteApproval", "lines", "name", "operationId", ...(input.lockAfterCreate === undefined ? [] : ["lockAfterCreate"])]
       : input?.action === "append"
         ? [
           "action",
@@ -122,6 +122,8 @@ export function validateRollSupplyPayload(input) {
       "Подтвердите точное название листа и состав поставки действием в форме.",
       400,
     );
+  if (input.action === "create" && input.lockAfterCreate !== undefined && typeof input.lockAfterCreate !== "boolean")
+    fail("invalid_shipment_lock", "Проверьте настройку замка поставки.", 400);
   if (
     input.action !== "create" &&
     (!Number.isSafeInteger(input.sheetId) || input.sheetId <= 0)
@@ -173,6 +175,7 @@ export function validateRollSupplyPayload(input) {
     operationId: input.operationId,
     name: input.name,
     ...(input.action === "append" ? { sheetId: input.sheetId } : {}),
+    ...(input.action === "create" && input.lockAfterCreate === true ? { lockAfterCreate: true } : {}),
     lines: normalizeLines(input.lines),
   };
 }

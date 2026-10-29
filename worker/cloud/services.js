@@ -6,6 +6,7 @@ import { CloudSheetsReader } from "./googleSheets.js";
 import { cloudConfig } from "./config.js";
 import { CloudError } from "./access.js";
 import { cloudFetch } from "./fetch.js";
+import { deliverShipmentLockEvent, setShipmentLocks } from "./shipmentLocks.js";
 
 export function requireCutover(bindings, scope) {
   const config = cloudConfig(bindings), cutover = scope.meta("cloudCutover");
@@ -47,7 +48,21 @@ export async function createServices(bindings, scope, { fetcher = fetch, refresh
     return { ok: latestPrinting.ok === true, partial: latestPrinting.partial === true };
   } : null;
   const legacy = new RollSupplyManagementService(scope, { writer: writers?.roll || null, recoverInterrupted: !!scope.lease, refresh: refreshPrinting, getPrintingSnapshot: () => latestPrinting });
-  const production = new ProductionSupplyService(scope, { writers, legacy, recoverInterrupted: !!scope.lease, refresh: refreshPrinting });
+  const production = new ProductionSupplyService(scope, {
+    writers, legacy, recoverInterrupted: !!scope.lease, refresh: refreshPrinting,
+    beforeCreateWrite: async (operation) => {
+      const result = await setShipmentLocks(scope, {
+        shipmentIds: [operation.shipmentId],
+        locked: true,
+        name: operation.name,
+        changedBy: "RITM",
+        sourceOperationId: operation.id,
+        deliver: (event) => deliverShipmentLockEvent(bindings, event, fetcher),
+      });
+      if (!result.confirmed)
+        throw new CloudError("shipment_lock_unconfirmed", "Замок поставки ожидает подтверждения Assembly. Состав не продолжен; проверьте состояние операции и повторите.", 503);
+    },
+  });
   production.previews = new Map((scope.meta("productionPreviewCache") || []).filter((row) => Number.isFinite(row[1]?.at) && Date.now() - row[1].at <= 600000));
   const transfer = new AssemblyTransferService(scope, { reader, queue, backfill: !!scope.lease });
   return { reader, writers, legacy, production, transfer, queue, guard,
