@@ -127,6 +127,30 @@ async function readSnapshot(kind, url, bindings, store, options) {
   return selected.stale === true ? { ...selected, staleSnapshot: true } : selected;
 }
 
+export async function currentShipmentLockSnapshot(bindings, store, { fetcher = fetch, refresh = refreshSnapshot, wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
+  let snapshot = await store.snapshot("printing");
+  if (snapshot && store.now() - snapshot.at <= cloudConfig(bindings).snapshotMaxAgeMs) return snapshot;
+  let updated;
+  try { updated = await refresh("printing", bindings, store, { fetcher }); }
+  catch (error) {
+    if (error?.code === "cloud_operation_busy") {
+      for (let i = 0; i < 12; i++) {
+        await wait(1000);
+        snapshot = await store.snapshot("printing");
+        if (snapshot && store.now() - snapshot.at <= cloudConfig(bindings).snapshotMaxAgeMs) return snapshot;
+      }
+      throw new CloudError("shipment_lock_snapshot_busy", "Данные поставок ещё обновляются. Подождите и повторите изменение замка.", 503);
+    }
+    throw new CloudError("shipment_lock_snapshot_stale", "Не удалось обновить данные поставок. Замок не изменён; повторите после восстановления связи.", 503);
+  }
+  if (!updated || updated.stale === true || updated.refreshFailed === true)
+    throw new CloudError("shipment_lock_snapshot_stale", "Не удалось обновить данные поставок. Замок не изменён; повторите после восстановления связи.", 503);
+  snapshot = await store.snapshot("printing");
+  if (!snapshot || store.now() - snapshot.at > cloudConfig(bindings).snapshotMaxAgeMs)
+    throw new CloudError("shipment_lock_snapshot_stale", "Не удалось подтвердить обновление данных поставок. Замок не изменён.", 503);
+  return snapshot;
+}
+
 export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {}) {
   const url = new URL(request.url), path = url.pathname;
   try {
@@ -249,9 +273,7 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
       const input = await readJson(request, 4096);
       if (!["lock", "unlock"].includes(input?.action)) throw new CloudError("shipment_lock_action_invalid", "Выберите, закрыть или открыть поставку.", 400);
       const shipmentIds = normalizeShipmentIds(input.shipmentIds);
-      const currentSnapshot = await store.snapshot("printing");
-      if (!currentSnapshot || store.now() - currentSnapshot.at > config.snapshotMaxAgeMs)
-        throw new CloudError("shipment_lock_snapshot_stale", "Сначала обновите данные поставок; замок не изменён.", 503);
+      const currentSnapshot = await currentShipmentLockSnapshot(bindings, store, { fetcher });
       const active = activePrintingShipmentIds(currentSnapshot.value);
       if (!active || shipmentIds.some((id) => !active.has(id)))
         throw new CloudError("shipment_lock_shipment_unavailable", "Поставка изменилась или больше не активна. Обновите RITM.", 409);

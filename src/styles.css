@@ -6139,7 +6139,7 @@ td small {
 .shipment-lock-state.locked .shipment-lock-state-icon { color: #b3423d; background: #ffe7e5; }
 .shipment-lock-state.pending { border-color: #f0d7a9; color: #805516; background: #fffaf0; }
 .shipment-lock-state.pending .shipment-lock-state-icon { color: #a36a11; background: #fff0ce; }
-.shipment-lock-state.pending svg { animation: shipment-lock-spin 1.4s linear infinite; }
+.shipment-lock-state.pending svg.lucide-refresh-cw { animation: shipment-lock-spin 1.4s linear infinite; }
 @keyframes shipment-lock-spin { to { transform: rotate(360deg); } }
 .production-control-list { display: grid; margin-top: 12px; border-top: 1px solid var(--border); }
 .production-control-row {

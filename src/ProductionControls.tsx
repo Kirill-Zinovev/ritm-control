@@ -97,9 +97,11 @@ export function ProductionControls({
   const activeShipmentIds = useMemo(() => shipmentIdsKey ? shipmentIdsKey.split(",") : [], [shipmentIdsKey]);
   const [controls, setControls] = useState<Control[]>([]);
   const [shipmentLocks, setShipmentLocks] = useState<ShipmentLock[]>([]);
+  const [locksForKey, setLocksForKey] = useState("");
   const [loading, setLoading] = useState(true);
   const [lockSaving, setLockSaving] = useState(false);
   const [lockError, setLockError] = useState("");
+  const [lockActionError, setLockActionError] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
@@ -113,7 +115,9 @@ export function ProductionControls({
   const [title, setTitle] = useState("");
   const [note, setNote] = useState("");
   const batchRequest = useRef<{ fingerprint: string; id: string } | null>(null);
-  const lockRequest = useRef("");
+  const refreshSequence = useRef(0);
+  const activeKeyRef = useRef(shipmentIdsKey);
+  activeKeyRef.current = shipmentIdsKey;
   const uniqueArticles = useMemo(() => [...new Map(articles.map((value) => value.trim()).filter(Boolean).map((value) => [articleKey(value), value])).values()], [articles]);
   const articleLookup = useMemo(() => new Map(uniqueArticles.map((value) => [articleKey(value), value])), [uniqueArticles]);
   const filteredArticles = useMemo(() => {
@@ -122,38 +126,43 @@ export function ProductionControls({
   }, [articleSearch, uniqueArticles]);
 
   const refresh = useCallback(async () => {
-    if (!shipmentIdsKey) { setControls([]); setShipmentLocks([]); setError(""); setLockError(""); setLoading(false); return; }
+    const sequence = ++refreshSequence.current;
+    if (!shipmentIdsKey) { setControls([]); setShipmentLocks([]); setLocksForKey(""); setError(""); setLockError(""); setLoading(false); return; }
     setLoading(true);
     try {
       const [controlsResult, locksResult] = await Promise.allSettled([
         request<{ controls: Control[] }>(`/api/production-controls?shipmentIds=${encodeURIComponent(shipmentIdsKey)}`),
         request<{ locks: ShipmentLock[] }>(`/api/shipment-locks?shipmentIds=${encodeURIComponent(shipmentIdsKey)}`),
       ]);
-      if (controlsResult.status === "rejected") throw controlsResult.reason;
-      setControls(Array.isArray(controlsResult.value.controls) ? controlsResult.value.controls : []);
-      setError("");
+      if (sequence !== refreshSequence.current || activeKeyRef.current !== shipmentIdsKey) return;
+      if (controlsResult.status === "fulfilled") {
+        setControls(Array.isArray(controlsResult.value.controls) ? controlsResult.value.controls : []);
+        setError("");
+      } else setError(controlsResult.reason instanceof Error ? controlsResult.reason.message : "Не удалось прочитать контроль поставки.");
       if (locksResult.status === "fulfilled") {
         setShipmentLocks(Array.isArray(locksResult.value.locks) ? locksResult.value.locks : []);
+        setLocksForKey(shipmentIdsKey);
         setLockError("");
       } else setLockError(locksResult.reason instanceof Error ? locksResult.reason.message : "Не удалось проверить замок поставки.");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось прочитать контроль поставки.");
+      if (sequence === refreshSequence.current && activeKeyRef.current === shipmentIdsKey) setError(cause instanceof Error ? cause.message : "Не удалось прочитать контроль поставки.");
     } finally {
-      setLoading(false);
+      if (sequence === refreshSequence.current && activeKeyRef.current === shipmentIdsKey) setLoading(false);
     }
   }, [shipmentIdsKey]);
 
-  const pendingLock = shipmentLocks.find((lock) => lock.pending);
-  const shipmentLocked = shipmentLocks.some((lock) => lock.locked);
+  const lockKnown = !!shipmentIdsKey && locksForKey === shipmentIdsKey && !lockError && shipmentLocks.length === activeShipmentIds.length && activeShipmentIds.every((id) => shipmentLocks.some((lock) => lock.shipmentId === id));
+  const pendingLock = lockKnown ? shipmentLocks.find((lock) => lock.pending) : undefined;
+  const shipmentLocked = lockKnown && shipmentLocks.every((lock) => lock.locked);
+  const partiallyLocked = lockKnown && !shipmentLocked && shipmentLocks.some((lock) => lock.locked);
   const toggleShipmentLock = async () => {
-    if (!activeShipmentIds.length || lockSaving || (lockError && !pendingLock) || shipmentLocks.length !== activeShipmentIds.length) return;
+    if (!activeShipmentIds.length || lockSaving || !lockKnown) return;
     const targetLocked = pendingLock ? pendingLock.status === "locking" : !shipmentLocked;
     const requestId = pendingLock?.eventId || crypto.randomUUID();
-    lockRequest.current = requestId;
     setLockSaving(true);
-    setLockError("");
+    setLockActionError("");
     try {
-      const result = await request<{ confirmed: boolean }>("/api/shipment-locks", {
+      const result = await request<{ confirmed: boolean; locks: ShipmentLock[] }>("/api/shipment-locks", {
         method: "POST",
         body: JSON.stringify({
           action: targetLocked ? "lock" : "unlock",
@@ -162,17 +171,23 @@ export function ProductionControls({
           shipmentName,
         }),
       });
-      if (!result.confirmed) setLockError("Замок ожидает подтверждения Assembly. Повторите проверку через кнопку рядом.");
+      if (activeKeyRef.current !== shipmentIdsKey) return;
+      if (Array.isArray(result.locks)) { setShipmentLocks(result.locks); setLocksForKey(shipmentIdsKey); }
+      if (!result.confirmed) setLockActionError("Изменение ожидает подтверждения Assembly. Нажмите «Повторить подтверждение», если ожидание затянулось.");
+      else if (!Array.isArray(result.locks) || result.locks.length !== activeShipmentIds.length || !result.locks.every((lock) => lock.locked === targetLocked && !lock.pending))
+        setLockActionError("Не удалось подтвердить новое состояние замка. Обновите данные и проверьте ещё раз.");
       await refresh();
     } catch (cause) {
-      setLockError(cause instanceof Error ? cause.message : "Не удалось изменить замок поставки.");
+      if (activeKeyRef.current !== shipmentIdsKey) return;
       await refresh();
+      if (activeKeyRef.current === shipmentIdsKey) setLockActionError(cause instanceof Error ? cause.message : "Не удалось изменить замок поставки.");
     } finally {
       setLockSaving(false);
     }
   };
 
   useEffect(() => {
+    setLockActionError("");
     void refresh();
     const onFocus = () => { if (document.visibilityState === "visible") void refresh(); };
     const timer = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, 60000);
@@ -303,21 +318,22 @@ export function ProductionControls({
             {activeCount > 0 && <span className="production-controls-count">{activeCount} активн.</span>}
           </div>
           <div className="production-controls-actions">
-            <Button onClick={() => void toggleShipmentLock()} disabled={!activeShipmentIds.length || loading || lockSaving || (!!lockError && !pendingLock) || shipmentLocks.length !== activeShipmentIds.length} kind={shipmentLocked && !pendingLock ? "danger" : "secondary"} title={lockError || undefined}>
+            <Button onClick={() => void toggleShipmentLock()} disabled={!lockKnown || loading || lockSaving} kind={shipmentLocked && !pendingLock ? "danger" : "secondary"} title={lockError || undefined}>
               {pendingLock ? <RefreshCw size={15} /> : shipmentLocked ? <UnlockKeyhole size={15} /> : <LockKeyhole size={15} />}
-              {lockSaving ? "Подтверждаю…" : pendingLock ? "Повторить подтверждение" : shipmentLocked ? "Снять замок" : "Закрыть для сборки"}
+              {lockSaving ? "Подтверждаю…" : pendingLock ? "Повторить подтверждение" : shipmentLocked ? "Открыть для сборки" : partiallyLocked ? "Закрыть всю поставку" : "Закрыть для сборки"}
             </Button>
             <Button onClick={() => void refresh()} disabled={loading} aria-label="Обновить задачи"><RefreshCw size={15} />{loading ? "Обновляю…" : "Обновить"}</Button>
             <Button kind="primary" onClick={() => setModalOpen(true)} disabled={!activeShipmentIds.length} title={!activeShipmentIds.length ? "Поставка ещё не связана с Assembly" : undefined}><Plus size={16} />Добавить задачу</Button>
           </div>
         </div>
-        <div className={`shipment-lock-state ${pendingLock ? "pending" : shipmentLocked ? "locked" : "open"}`} role="status">
-          <span className="shipment-lock-state-icon">{pendingLock ? <RefreshCw size={17} /> : shipmentLocked ? <LockKeyhole size={17} /> : <UnlockKeyhole size={17} />}</span>
-          <span><strong>{pendingLock ? (pendingLock.status === "unlocking" ? "Подтверждаем открытие Assembly" : "Подтверждаем замок в Assembly") : shipmentLocked ? "Поставка закрыта для сборки" : "Сборка по поставке открыта"}</strong><small>{pendingLock ? "Новые операции остаются заблокированы, пока обе системы не подтвердят изменение. Если ожидание затянулось, повторите проверку." : shipmentLocked ? "Сборщики не смогут записывать работу, добавлять товары в короба или закрывать короба. История и состав сохранены." : "Сборщики могут записывать работу и управлять коробами."}</small></span>
+        <div className={`shipment-lock-state ${!lockKnown || pendingLock || partiallyLocked ? "pending" : shipmentLocked ? "locked" : "open"}`} role="status">
+          <span className="shipment-lock-state-icon">{!lockKnown ? <TriangleAlert size={17} /> : pendingLock ? <RefreshCw size={17} /> : shipmentLocked || partiallyLocked ? <LockKeyhole size={17} /> : <UnlockKeyhole size={17} />}</span>
+          <span><strong>{!lockKnown ? (loading ? "Проверяем состояние сборки" : "Состояние замка не подтверждено") : pendingLock ? (pendingLock.status === "unlocking" ? "Подтверждаем открытие в Assembly" : "Подтверждаем закрытие в Assembly") : partiallyLocked ? "Закрыта только часть поставки" : shipmentLocked ? "Поставка закрыта для сборки" : "Поставка открыта для сборки"}</strong><small>{!lockKnown ? "Проверьте связь и обновите состояние перед изменением замка." : pendingLock ? "Дождитесь подтверждения Assembly. Если ожидание затянулось, повторите подтверждение." : partiallyLocked ? "Для полного закрытия нажмите «Закрыть всю поставку»." : shipmentLocked ? "Сборщики не смогут записывать работу и менять короба." : "Сборщики могут записывать работу и управлять коробами."}{lockKnown && !pendingLock && shipmentLocks.some((lock) => lock.changedAt) ? ` · Изменено ${dateLabel(shipmentLocks.map((lock) => lock.changedAt).filter(Boolean).sort().at(-1) || null)}` : ""}</small></span>
         </div>
         {!activeShipmentIds.length && <p className="production-controls-message">Поставка пока не связана со сборкой. Задачу можно будет добавить после синхронизации.</p>}
         {error && <div className="production-controls-error" role="alert">{error}</div>}
         {lockError && <div className="production-controls-error" role="alert">{lockError}</div>}
+        {lockActionError && <div className="production-controls-error" role="alert">{lockActionError}</div>}
         {loading && visibleControls.length === 0 ? <p className="production-controls-message">Загружаю задачи…</p> : visibleControls.length === 0 ? (
           <p className="production-controls-message">Пока нет задач. Добавьте напоминание или проверку — сборщики увидят её в окне упаковки выбранного артикула.</p>
         ) : (
