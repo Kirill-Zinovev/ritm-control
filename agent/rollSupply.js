@@ -1764,19 +1764,40 @@ export class RollSupplyManagementService {
                   registeredSheets,
                 });
       const approvedAt = new Date(this.now()).toISOString();
+      // Persist only the recovery identity and compact target metadata. The
+      // full write plan contains copied sheet grids/formulas and can exceed
+      // the durable journal limit even for valid production supplies. The
+      // complete plan remains in memory for execute/verify; it is never needed
+      // to decide whether this request may be retried or to reconcile its gid.
+      const journalPayload = {
+        name: payload.name,
+        ...(payload.lines ? {
+          lines: payload.lines.map((line) => ({
+            article: line.article,
+            quantity: line.quantity,
+            ...(line.extension ? { extension: line.extension } : {}),
+          })),
+        } : {}),
+        ...(payload.sheetId ? { sheetId: payload.sheetId } : {}),
+        ...(payload.uid ? { uid: payload.uid } : {}),
+        ...(payload.article ? { article: payload.article } : {}),
+        plan: {
+          action: plan.action,
+          name: plan.name,
+          ...(Number.isSafeInteger(plan.sheetId) ? { sheetId: plan.sheetId } : {}),
+          ...(plan.uid ? { uid: plan.uid } : {}),
+        },
+        approval: {
+          principal: "authenticated_local_owner",
+          approvedAt,
+          exactOperationId: payload.operationId,
+        },
+      };
       this.store.beginRollSupplyOperation(
         payload.operationId,
         payload.action,
         hash,
-        {
-          ...payload,
-          plan,
-          approval: {
-            principal: "authenticated_local_owner",
-            approvedAt,
-            exactOperationId: payload.operationId,
-          },
-        },
+        journalPayload,
         approvedAt,
       );
       this.store.log(

@@ -713,7 +713,9 @@ test("create carries a proven missing formula into the new copy only", async () 
     const operation = h.store.rollSupplyOperation(
       "81818181-8181-4181-8181-818181818181",
     );
-    assert.ok(operation.payload.plan.formulaRepairs.some((repair) => repair.cell === "K80"));
+    assert.equal(operation.payload.plan.sheetId, result.sheetId);
+    assert.equal(operation.payload.plan.formulaRepairs, undefined, "large formula repair data stays out of the durable journal");
+    assert.equal(operation.payload.lines.length, lines.length, "the journal retains enough request identity for safe reconciliation");
   } finally {
     h.store.close();
   }
