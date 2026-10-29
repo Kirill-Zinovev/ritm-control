@@ -51,8 +51,17 @@ export async function createServices(bindings, scope, { fetcher = fetch, refresh
   const production = new ProductionSupplyService(scope, {
     writers, legacy, recoverInterrupted: !!scope.lease, refresh: refreshPrinting,
     beforeCreateWrite: async (operation) => {
+      const shipmentIds = (operation.steps || []).map((step) => {
+        const sheetId = Number(step?.plan?.sheetId);
+        const department = step?.department;
+        if (!['roll', 'box'].includes(department) || !Number.isSafeInteger(sheetId) || sheetId <= 0)
+          throw new CloudError("shipment_lock_identity_unavailable", "Не удалось подтвердить листы новой поставки для замка. Запись остановлена.", 503);
+        return `RITM-${department.toUpperCase()}-${sheetId}`;
+      });
+      if (!shipmentIds.length || shipmentIds.length > 20)
+        throw new CloudError("shipment_lock_identity_unavailable", "Не удалось определить направления новой поставки для замка. Запись остановлена.", 503);
       const result = await setShipmentLocks(scope, {
-        shipmentIds: [operation.shipmentId],
+        shipmentIds,
         locked: true,
         name: operation.name,
         changedBy: "RITM",

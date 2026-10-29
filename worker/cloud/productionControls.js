@@ -1,4 +1,5 @@
 import { CloudError } from "./access.js";
+import { shipmentLock } from "./shipmentLocks.js";
 
 const UUID = /^[a-f0-9-]{36}$/i;
 const SHIPMENT_ID = /^[a-z0-9._:-]{1,120}$/i;
@@ -211,6 +212,7 @@ export function completeAssemblyControl(scope, input, { now = Date.now } = {}) {
   if (!(current.shipmentIds || [current.shipmentId]).includes(shipmentId) || current.section !== "assembly_packing" || (current.scope === "article" && current.article !== article))
     fail("control_scope_mismatch", "Задача относится к другой поставке или артикулу.", 409);
   if (current.status === "completed" || current.status === "acknowledged") return { control: structuredClone(current), duplicate: true };
+  if (shipmentLock(scope, shipmentId).locked) fail("shipment_locked", "Поставка закрыта руководителем. Отметка временно недоступна.", 409);
   if (current.status !== "active") fail("control_not_active", "Задача уже не активна.", 409);
   const timestamp = new Date(now()).toISOString();
   const next = {
