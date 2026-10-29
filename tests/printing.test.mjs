@@ -238,6 +238,21 @@ test("production date B is used instead of the record timestamp M", () => {
   assert.equal(r.events[0].employee, "Павел");
   assert.equal(r.events[0].date, "2026-10-06");
 });
+test("roll printing maps P-prefixed rolls to Pasha and keeps seasonal Pavel separate", () => {
+  const pRoll = log(24, 4.224, "П1", "roll-p1");
+  const roll = collectJournalPrinting(ix, [pRoll], { sourceId: "roll-printing" });
+  assert.equal(roll.events.length, 1);
+  assert.equal(roll.events[0].employee, "Паша");
+
+  const latinRoll = log(16, 2.816, "P2", "roll-p2");
+  const latin = collectJournalPrinting(ix, [latinRoll], { sourceId: "roll-printing" });
+  assert.equal(latin.events[0].employee, "Паша");
+
+  const seasonal = collectJournalPrinting(ix, [log(10, 1.76, "П1", "seasonal-p1")], {
+    sourceId: "seasonal-printing",
+  });
+  assert.equal(seasonal.events[0].employee, "Павел");
+});
 test("journal output area L is retained without roll precision adjustments", () => {
   const r = calc([log(100, 17.6, "Дмитрий", "AUTO_PRINT_r1", "07.10.2026")]);
   assert.equal(r.events.length, 1);

@@ -6,6 +6,7 @@ export const ROLL_PRINTING_URL =
 export const PRINTERS = [
   { id: "printer-dmitry", name: "Дмитрий" },
   { id: "printer-pavel", name: "Павел" },
+  { id: "printer-pasha", name: "Паша" },
   { id: "printer-andrey", name: "Андрей" },
 ];
 export type LiveEvent = {

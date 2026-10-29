@@ -12,7 +12,7 @@ function ritmBridgeNumber_(v) {
         );
   return Number.isFinite(n) ? n : 0;
 }
-function ritmBridgeEmployee_(v, operation) {
+function ritmBridgeEmployee_(v, operation, sourceId) {
   var s = String(v || "")
     .trim()
     .toLowerCase();
@@ -20,6 +20,11 @@ function ritmBridgeEmployee_(v, operation) {
   if (operation === "Резка" && s === "лукман") return "Лукман";
   if (/^(дмитрий|дима)$/.test(s) || /^[дd](?:\d|$)/.test(s)) return "Дмитрий";
   if (s === "андрей" || /^[аa](?:\d|$)/.test(s)) return "Андрей";
+  if (
+    operation === "Печать" &&
+    sourceId === "roll-printing" &&
+    (/^(павел|паша)$/.test(s) || /^[пp](?:\d|$)/.test(s))
+  ) return "Паша";
   if (/^(павел|паша)$/.test(s) || /^[пp](?:\d|$)/.test(s)) return "Павел";
   return "";
 }
@@ -86,7 +91,7 @@ function collectJournalOperation(index, journal, options, operation) {
           ? { ...fallback, uid: String(r[7]).trim(), article: String(r[6]).trim() }
           : null,
       order = resolvedOrder || historicalOrder,
-      employee = ritmBridgeEmployee_(r[2], operation),
+      employee = ritmBridgeEmployee_(r[2], operation, options.sourceId || order?.sourceId || options.orderFallback?.sourceId),
       date = ritmBridgeDay_(r[1]),
       quantity = ritmBridgeNumber_(r[9]),
       area = ritmBridgeNumber_(r[11]),
@@ -650,6 +655,7 @@ export async function loadPrinting(fetcher = fetch, options = {}) {
       );
     const facts = collectJournalPrinting(sourceIndex, journal.slice(1), {
       name: journalExport.sourceName,
+      sourceId: source.id,
       eventIdPrefix: source.eventIdPrefix,
       orderFallback: {
         sheetId: supplyExports[0].gid,
@@ -664,6 +670,7 @@ export async function loadPrinting(fetcher = fetch, options = {}) {
     });
     const cuts = collectJournalCutting(sourceIndex, journal.slice(1), {
       name: journalExport.sourceName,
+      sourceId: source.id,
       eventIdPrefix: source.eventIdPrefix + "cut:",
       orderFallback: {
         sheetId: supplyExports[0].gid,
