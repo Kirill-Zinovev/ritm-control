@@ -125,6 +125,25 @@ test("chunked source snapshots round-trip without truncation and detect corrupte
   } finally { await store.release(lease); db.close(); }
 });
 
+test("large production plans survive checkpoint and restart exactly without dropping recovery fields", async () => {
+  const { db, store } = fixture();
+  const op = { id: crypto.randomUUID(), status: "pending", requestHash: "same-request", createdAt: new Date().toISOString(), steps: [{ department: "roll", status: "pending", plan: { sheetId: 123, formulas: "=ВПР(E5;'БДО'!B:O;6;0)".repeat(60000) } }] };
+  try {
+    assert.ok(new TextEncoder().encode(JSON.stringify(op)).length > 900000, "reproduces the rejected record size");
+    await store.withScope(async (scope) => { scope.meta("productionSupplyOperations", [op]); await scope.checkpoint(); });
+    const stored = db.db.prepare("SELECT payload FROM cloud_operations WHERE id=?").get(op.id).payload;
+    assert.equal(JSON.parse(stored).encoding, "ritm:gzip-json:v1");
+    assert.ok(stored.length < 900000);
+    assert.deepEqual((await store.scope()).meta("productionSupplyOperations"), [op]);
+    await store.withScope(async (scope) => { const [same] = scope.meta("productionSupplyOperations"); same.status = "partial"; scope.meta("productionSupplyOperations", [same]); });
+    assert.equal((await store.scope()).meta("productionSupplyOperations")[0].steps[0].plan.formulas, op.steps[0].plan.formulas);
+    const corrupt = JSON.parse(db.db.prepare("SELECT payload FROM cloud_operations WHERE id=?").get(op.id).payload);
+    corrupt.digest = "bad";
+    db.db.prepare("UPDATE cloud_operations SET payload=? WHERE id=?").run(JSON.stringify(corrupt), op.id);
+    await assert.rejects(store.scope(), /целостности/);
+  } finally { db.close(); }
+});
+
 test("cloud writes require both explicit cutover and reconciliation of inherited pending operations", async () => {
   const { db, store } = fixture();
   try {

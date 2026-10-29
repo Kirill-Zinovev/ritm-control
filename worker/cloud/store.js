@@ -2,11 +2,43 @@ import { CloudError } from "./access.js";
 
 const clone = (value) => value == null ? value : structuredClone(value);
 const rows = (result) => result.results || [];
-const serialize = (value) => {
+const MAX_RECORD_BYTES = 32000000;
+const serialize = async (value) => {
   const text = JSON.stringify(value);
-  if (new TextEncoder().encode(text).length > 900000) throw new CloudError("state_too_large", "История операции требует архивирования перед продолжением.");
-  return text;
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.length <= 900000) return text;
+  if (bytes.length > MAX_RECORD_BYTES) throw new CloudError("state_too_large", "План операции превышает безопасный объём. Запись остановлена до отправки в Google Sheets.");
+  const packed = new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer());
+  let binary = "";
+  for (let i = 0; i < packed.length; i += 16384) binary += String.fromCharCode(...packed.subarray(i, i + 16384));
+  const result = JSON.stringify({ encoding: "ritm:gzip-json:v1", bytes: bytes.length, digest: await digest(text), data: btoa(binary) });
+  if (result.length > 900000) throw new CloudError("state_too_large", "План операции превышает безопасный объём хранения. Запись остановлена до отправки в Google Sheets.");
+  return result;
 };
+
+async function unpack(text) {
+  const envelope = JSON.parse(text);
+  if (envelope?.encoding !== "ritm:gzip-json:v1") return text;
+  try {
+    if (!Number.isSafeInteger(envelope.bytes) || envelope.bytes < 0 || envelope.bytes > MAX_RECORD_BYTES) throw new Error("size");
+    const bytes = Uint8Array.from(atob(envelope.data), (c) => c.charCodeAt(0));
+    const reader = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip")).getReader();
+    const chunks = []; let length = 0;
+    try {
+      for (;;) {
+        const { value, done } = await reader.read(); if (done) break;
+        length += value.length;
+        if (length > envelope.bytes) throw new Error("size");
+        chunks.push(value);
+      }
+    } finally { await reader.cancel().catch(() => {}); }
+    const restored = new Uint8Array(length); let offset = 0;
+    for (const chunk of chunks) { restored.set(chunk, offset); offset += chunk.length; }
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(restored);
+    if (length !== envelope.bytes || await digest(decoded) !== envelope.digest) throw new Error("digest");
+    return decoded;
+  } catch { throw new CloudError("journal_corrupt", "Запись журнала не прошла проверку целостности. Повторная запись заблокирована."); }
+}
 
 // Synchronous domain methods operate only inside a leased, per-request unit of
 // work. All external writes must checkpoint this journal before sending bytes.
@@ -124,6 +156,8 @@ export class CloudStore {
       this.db.prepare("SELECT * FROM cloud_transfer_previews WHERE expires_at>? ").bind(this.now()),
       this.db.prepare("SELECT * FROM cloud_sync_events"),
     ]);
+    for (const row of rows(data[0])) row.value = await unpack(row.value);
+    for (const row of rows(data[1])) row.payload = await unpack(row.payload);
     return new CloudScope(this, lease, data);
   }
   async withScope(callback) {
@@ -140,10 +174,10 @@ export class CloudStore {
     const condition = "EXISTS(SELECT 1 FROM cloud_leases WHERE name=? AND owner=? AND fence=? AND expires_at>?)";
     const guarded = (sql, values) => this.db.prepare(sql.replace(/\{lease\}/g, condition)).bind(...values, lease.name, lease.owner, lease.fence, this.now());
     const statements = [];
-    for (const key of scope.dirtyValues) statements.push(guarded("INSERT INTO cloud_state(key,value,updated_at) SELECT ?,?,? WHERE {lease} ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at", [key, serialize(scope.values.get(key)), this.now()]));
+    for (const key of scope.dirtyValues) statements.push(guarded("INSERT INTO cloud_state(key,value,updated_at) SELECT ?,?,? WHERE {lease} ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at", [key, await serialize(scope.values.get(key)), this.now()]));
     for (const key of scope.dirtyOperations) {
       const { kind, value, ordinal } = scope.operations.get(key);
-      statements.push(guarded("INSERT INTO cloud_operations(kind,id,payload,created_at,ordinal) SELECT ?,?,?,?,? WHERE {lease} ON CONFLICT(kind,id) DO UPDATE SET payload=excluded.payload,ordinal=excluded.ordinal", [kind, value.id, serialize(value), value.createdAt || value.updatedAt || new Date(this.now()).toISOString(), ordinal]));
+      statements.push(guarded("INSERT INTO cloud_operations(kind,id,payload,created_at,ordinal) SELECT ?,?,?,?,? WHERE {lease} ON CONFLICT(kind,id) DO UPDATE SET payload=excluded.payload,ordinal=excluded.ordinal", [kind, value.id, await serialize(value), value.createdAt || value.updatedAt || new Date(this.now()).toISOString(), ordinal]));
     }
     for (const id of scope.dirtyPreviews) {
       const row = scope.previews.get(id);
