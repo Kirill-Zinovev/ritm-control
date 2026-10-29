@@ -70,7 +70,7 @@ export async function recoverPendingShipmentLock(bindings, store, fetcher = fetc
       deliver: (event) => deliverShipmentLockEvent(bindings, event, fetcher),
     });
     const remaining = [...scope.operations.values()].filter((row) => row.kind === "production-shipment-lock" && ["locking", "unlocking"].includes(row.value?.status));
-    return { attempted: 1, confirmed: result.confirmed === true, remaining: new Set(remaining.map((row) => row.value.eventId)).size };
+    return { attempted: 1, confirmed: result.confirmed === true, remaining: new Set(remaining.map((row) => row.value.eventId)).size, eventId: record.eventId, shipmentIds: record.shipmentIds, targetLocked: record.targetLocked };
   });
 }
 
