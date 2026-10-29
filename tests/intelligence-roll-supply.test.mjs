@@ -138,6 +138,7 @@ function googleHarness({
     properties: structuredClone(template.properties),
     data: structuredClone(template.data),
   });
+  sheets.set(1475850544, { properties: { sheetId: 1475850544, title: "_RITM_WB_SOURCE", gridProperties: { rowCount: 4000 } }, data: [{ rowData: [] }] });
 
   function updateCell(sheet, row, column, value) {
     const data = sheet.data[0];
@@ -404,13 +405,11 @@ test("new supply clears template data, renames the heading and initializes print
     assert.equal(rows[4].values[23].userEnteredValue.numberValue, 12);
     assert.equal(rows[8].values[23].userEnteredValue, undefined);
     assert.equal(rows[193].values[28].userEnteredValue, undefined);
-    assert.equal(
-      rows[4].values[5].userEnteredValue.formulaValue,
-      "=FORMULA_6_5",
-    );
+    const leavesFormula = rows[4].values[5].userEnteredValue.formulaValue;
+    assert.ok(leavesFormula.indexOf("'БДО'!B:O;5;0") < leavesFormula.indexOf("'_RITM_WB_SOURCE'!A:E;2;0"));
     assert.equal(rows[4].values[1].userEnteredValue.formulaValue, "=IMAGE(E5)");
     assert.equal(rows[4].values[2].userEnteredValue.formulaValue, "=LOOKUP(E5)");
-    assert.equal(rows[4].values[3].userEnteredValue.formulaValue, "=MACHINE(E5)");
+    assert.match(rows[4].values[3].userEnteredValue.formulaValue, /'БДО'!B:O;14;0/);
     const saved = h.store.rollSupplyOperation(
       "11111111-1111-4111-8111-111111111111",
     );
@@ -679,10 +678,7 @@ test("create carries a proven missing formula into the new copy only", async () 
     const copiedRow = created.data[0].rowData[79].values;
     assert.match(copiedRow[8].userEnteredValue.formulaValue, /REGEXEXTRACT\(TO_TEXT\(G80\)/);
     assert.match(copiedRow[9].userEnteredValue.formulaValue, /F80\*H80\*I80\*O80/);
-    assert.equal(
-      copiedRow[5].userEnteredValue.formulaValue,
-      "=VLOOKUP(E:E;'БДО'!B:F;5;0)",
-    );
+    assert.match(copiedRow[5].userEnteredValue.formulaValue, /'БДО'!B:O;5;0/);
     const sourceRow = h.google.sheets.get(ROLL_PRINTING_SHEET.gid).data[0].rowData[79].values;
     assert.equal(sourceRow[8].userEnteredValue, undefined);
     const operation = h.store.rollSupplyOperation(
@@ -700,9 +696,30 @@ test("a literal size in the template is replaced by a verified lookup in the new
     const lines = Array.from({ length: 8 }, (_, index) => ({ article: `TEST-${index}`, quantity: 10 }));
     const result = await h.service.execute(payload("62626262-6262-4262-8262-626262626262", { lines }));
     const row = h.google.sheets.get(result.sheetId).data[0].rowData[11].values;
-    assert.equal(row[6].userEnteredValue.formulaValue, "=VLOOKUP(E:E;'БДО'!B:G;6;0)");
+    assert.match(row[6].userEnteredValue.formulaValue, /'БДО'!B:O;6;0/);
     assert.match(row[7].userEnteredValue.formulaValue, /REGEXEXTRACT\(TO_TEXT\(G12\)/);
     assert.equal(h.google.sheets.get(ROLL_PRINTING_SHEET.gid).data[0].rowData[11].values[6].userEnteredValue.stringValue, "100x40");
+  } finally { h.store.close(); }
+});
+
+test("WB supplies use WB only, while normalizing the OZ suffix", async () => {
+  const h = makeService();
+  try {
+    const result = await h.service.execute(payload("64646464-6464-4464-8464-646464646464", { name: "WB ТЕСТ", lines: [{ article: "TEST-001(OZ)", quantity: 8 }] }));
+    const row = h.google.sheets.get(result.sheetId).data[0].rowData[4].values;
+    const f = row[6].userEnteredValue.formulaValue;
+    assert.ok(f.includes("'_RITM_WB_SOURCE'!A:E;3;0"));
+    assert.ok(!f.includes("'БДО'!B:O"));
+    assert.match(f, /REGEXREPLACE\(UPPER\(TRIM\(\$E5\)\)/);
+  } finally { h.store.close(); }
+});
+
+test("missing WB fallback source stops before writing the new sheet", async () => {
+  const h = makeService();
+  try {
+    h.google.sheets.delete(1475850544);
+    await assert.rejects(h.service.execute(payload("65656565-6565-4565-8565-656565656565")), { code: "roll_catalog_source_missing" });
+    assert.equal(h.google.counters.writes, 0);
   } finally { h.store.close(); }
 });
 
@@ -893,10 +910,7 @@ test("append inserts new articles at the top and preserves existing rows", async
       sheet.data[0].rowData[4].values[23].userEnteredValue.numberValue,
       8,
     );
-    assert.equal(
-      sheet.data[0].rowData[4].values[5].userEnteredValue.formulaValue,
-      "=FORMULA_6_5",
-    );
+    assert.match(sheet.data[0].rowData[4].values[5].userEnteredValue.formulaValue, /'БДО'!B:O;5;0/);
     assert.notEqual(
       sheet.data[0].rowData[4].values[28].userEnteredValue.stringValue,
       "old-uid-5",
@@ -917,10 +931,7 @@ test("append inserts new articles at the top and preserves existing rows", async
       sheet.data[0].rowData[5].values[28].userEnteredValue.stringValue,
       originalRow.values[28].userEnteredValue.stringValue,
     );
-    assert.equal(
-      originalRow.values[5].userEnteredValue.formulaValue,
-      "=FORMULA_6_5",
-    );
+    assert.match(originalRow.values[5].userEnteredValue.formulaValue, /'БДО'!B:O;5;0/);
     const appendBatch = h.google.requests[1];
     assert.equal(
       appendBatch.some((request) => request.duplicateSheet),
@@ -934,7 +945,7 @@ test("append inserts new articles at the top and preserves existing rows", async
             .map((request) => request.updateCells.start.columnIndex),
         ),
       ].sort((a, b) => a - b),
-      [4, 7, 8, 9, 10, 14, 23, 28],
+      [3, 4, 5, 6, 7, 8, 9, 10, 11, 14, 23, 28],
     );
     assert.ok(appendBatch.some((request) => request.insertDimension));
     assert.ok(appendBatch.some((request) => request.copyPaste));

@@ -484,6 +484,27 @@ function rollDimensionFormulaRepairs(startRow, count) {
   return boxDimensionFormulaRepairs(startRow, count).filter((item) => [8, 9, 10, 11].includes(item.column));
 }
 
+function rollCatalogFormulaRepairs(startRow, count, name, box = false) {
+  const title = String(name || "").toUpperCase();
+  const ozon = /(?:^|[^\p{L}\p{N}])OZON(?=$|[^\p{L}\p{N}])/u.test(title);
+  const wb = /(?:^|[^\p{L}\p{N}])WB(?=$|[^\p{L}\p{N}])/u.test(title);
+  if (ozon === wb) return [];
+  const repairs = [];
+  const columns = [[4, 14, 5], [6, 5, 2], [7, 6, 3], [12, 9, 4]];
+  for (let row = startRow; row < startRow + count; row++) {
+    const sku = `REGEXREPLACE(UPPER(TRIM($E${row}));"\\(OZ\\)$";"")`;
+    for (const [column, ozonIndex, wbIndex] of columns) {
+      const fromOzon = `VLOOKUP(${sku};'${box ? "Cache FBO" : "БДО"}'!B:O;${ozonIndex};0)`;
+      const fromWb = `VLOOKUP(${sku};'_RITM_WB_SOURCE'!A:E;${wbIndex};0)`;
+      const formula = ozon
+        ? `=IF($E${row}="";"";LET(source_value;IFNA(${fromOzon};"");IF(OR(source_value="";source_value=0);${fromWb};source_value)))`
+        : `=IF($E${row}="";"";${fromWb})`;
+      repairs.push({ row, column, cell: `${columnName(column)}${row}`, sourceCell: `E${row}`, formula });
+    }
+  }
+  return repairs;
+}
+
 function formulaColumnRequests(sheetId, repairs) {
   const columns = new Map();
   for (const repair of repairs || []) {
@@ -690,12 +711,16 @@ export class RollSupplySheetsWriter {
         "Заголовок A1 шаблона содержит формулу и не может быть безопасно заменён названием поставки.",
         409,
       );
+    const catalogRepairs = rollCatalogFormulaRepairs(DATA_START_ROW, lines.length, name, this.box);
+    if (catalogRepairs.length && !sheets.some((sheet) => sheet.title === "_RITM_WB_SOURCE"))
+      fail("roll_catalog_source_missing", "Не найден источник WB для проверки товаров. Создание остановлено.", 409);
     const formulaRepairs = inferFormulaRepairs(
       sourceGrid,
       DATA_START_ROW,
       lines.length,
       this.formulaColumns,
     );
+    formulaRepairs.push(...catalogRepairs);
     const sourceRows = inputRows(sourceGrid);
     const clearThrough = Math.max(
       lastLiteralDataRow(sourceGrid),
@@ -821,6 +846,9 @@ export class RollSupplySheetsWriter {
         409,
       );
     const templateRow = DATA_START_ROW;
+    const catalogRepairs = rollCatalogFormulaRepairs(DATA_START_ROW, lines.length, name, this.box);
+    if (catalogRepairs.length && !sheets.some((sheet) => sheet.title === "_RITM_WB_SOURCE"))
+      fail("roll_catalog_source_missing", "Не найден источник WB для проверки товаров. Добавление остановлено.", 409);
     const missingFormulaColumns = this.formulaColumns.filter(
       (column) => !gridCell(grid, templateRow, column).userEnteredValue?.formulaValue,
     );
@@ -871,9 +899,9 @@ export class RollSupplySheetsWriter {
       existingRows: plannedRows,
       copyFormulaColumns: Array.from({ length: 29 }, (_, i) => i + 1).filter(column => gridCell(grid, DATA_START_ROW, column).userEnteredValue?.formulaValue),
       formulaSourceRow: DATA_START_ROW + lines.length,
-      formulaRepairs: this.box
+      formulaRepairs: [...catalogRepairs, ...(this.box
         ? boxDimensionFormulaRepairs(startRow, lines.length)
-        : rollDimensionFormulaRepairs(startRow, lines.length),
+        : rollDimensionFormulaRepairs(startRow, lines.length))],
       verifyThrough: Math.max(scanRows, DATA_START_ROW + MAX_ORDERS - 1) + lines.length,
     };
   }
