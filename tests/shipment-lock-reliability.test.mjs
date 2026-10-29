@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { currentShipmentLockSnapshot } from "../worker/cloud/runtime.js";
+import { currentShipmentLockSnapshot, recoverPendingShipmentLock } from "../worker/cloud/runtime.js";
 import { deliverShipmentLockEvent, setShipmentLocks, shipmentLock } from "../worker/cloud/shipmentLocks.js";
 
 const id = "RITM-ROLL-123";
@@ -61,6 +61,27 @@ test("Assembly receipt refuses an unexpected second redirect", async () => {
   const fetcher=async()=>++calls===1 ? new Response(null,{status:302,headers:{location:"https://script.googleusercontent.com/receipt"}}) : new Response(null,{status:302,headers:{location:"https://untrusted.example/"}});
   assert.equal(await deliverShipmentLockEvent(bindings,event,fetcher),false);
   assert.equal(calls,2);
+});
+
+test("maintenance resumes the recorded pending operation using the same event", async () => {
+  const scope=scopeFixture();
+  await setShipmentLocks(scope,{shipmentIds:[id],locked:true,requestId:request1,deliver:async()=>false});
+  const bindings = {RITM_ASSEMBLY_WEB_APP_URL:`https://script.google.com/macros/s/${"a".repeat(30)}/exec`, RITM_ASSEMBLY_SYNC_SECRET:"a".repeat(64)};
+  let event, calls=0;
+  const fetcher=async(url,init)=>{
+    calls++;
+    if(calls===1){event=JSON.parse(init.body).event;return new Response(null,{status:302,headers:{location:"https://script.googleusercontent.com/receipt"}});}
+    return Response.json({ok:true,status:"synced",eventId:request1});
+  };
+  const result=await recoverPendingShipmentLock(bindings,{withScope:async fn=>fn(scope)},fetcher);
+  assert.equal(result.confirmed,true); assert.equal(result.remaining,0);
+  assert.equal(event.eventId,request1); assert.equal(shipmentLock(scope,id).status,"locked");
+});
+
+test("maintenance does not deliver when no lock is pending", async () => {
+  const scope=scopeFixture();
+  const result=await recoverPendingShipmentLock({}, {withScope:async fn=>fn(scope)}, async()=>{throw new Error("unexpected delivery");});
+  assert.deepEqual(result,{attempted:0,confirmed:true,remaining:0});
 });
 
 test("stale shipment snapshot refreshes before lock is allowed", async () => {

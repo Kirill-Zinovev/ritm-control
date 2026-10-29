@@ -54,16 +54,41 @@ export async function drainOutbox(bindings, store, fetcher = fetch) {
   });
 }
 
+export async function recoverPendingShipmentLock(bindings, store, fetcher = fetch) {
+  return store.withScope(async (scope) => {
+    const pending = [...scope.operations.values()].filter((row) => row.kind === "production-shipment-lock" && ["locking", "unlocking"].includes(row.value?.status));
+    if (!pending.length) return { attempted: 0, confirmed: true, remaining: 0 };
+    const record = pending[0].value;
+    if (!record.eventId || !Array.isArray(record.shipmentIds) || typeof record.targetLocked !== "boolean")
+      throw new CloudError("shipment_lock_recovery_invalid", "Не удалось безопасно восстановить состояние замка.", 409);
+    const result = await setShipmentLocks(scope, {
+      shipmentIds: record.shipmentIds,
+      locked: record.targetLocked,
+      requestId: record.eventId,
+      name: record.name,
+      changedBy: record.changedBy,
+      deliver: (event) => deliverShipmentLockEvent(bindings, event, fetcher),
+    });
+    const remaining = [...scope.operations.values()].filter((row) => row.kind === "production-shipment-lock" && ["locking", "unlocking"].includes(row.value?.status));
+    return { attempted: 1, confirmed: result.confirmed === true, remaining: new Set(remaining.map((row) => row.value.eventId)).size };
+  });
+}
+
 export async function maintenance(bindings, store, { fetcher = fetch, refresh = true } = {}) {
   const result = { ok: true, assemblySync: null, deliverySkipped: !cloudConfig(bindings).writesEnabled };
   if (!result.deliverySkipped) result.assemblySync = await drainOutbox(bindings, store, fetcher);
+  if (!result.deliverySkipped) {
+    try { result.lockRecovery = await recoverPendingShipmentLock(bindings, store, fetcher); }
+    catch (error) { result.lockRecovery = { attempted: 0, confirmed: false, error: error.code || "lock_recovery_failed" }; }
+    result.ok = result.lockRecovery.confirmed === true;
+  }
   if (refresh) {
     result.refreshed = [];
     for (const kind of ["printing", "assembly"]) {
       try { const value = await refreshSnapshot(kind, bindings, store, { fetcher }); result.refreshed.push({ kind, ok: value.refreshFailed !== true, snapshotAt: value.snapshotAt, failure: value.refreshFailure }); }
       catch (error) { result.refreshed.push({ kind, ok: false, error: error.code || "refresh_failed" }); }
     }
-    result.ok = result.refreshed.every(row => row.ok);
+    result.ok = result.ok && result.refreshed.every(row => row.ok);
   }
   return result;
 }
