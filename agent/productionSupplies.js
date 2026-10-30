@@ -167,7 +167,7 @@ export function routeSupplyLines(lines, marketplace, catalog) {
       ...line,
       machine,
       department,
-      extension: department === "roll" ? extension.value : null,
+      extension: extension && !extension.conflict ? extension.value : null,
       issue: department
         ? null
         : "Станок отсутствует, содержит ошибку или не относится к настроенным отделам",
@@ -807,7 +807,7 @@ export class ProductionSupplyService {
         .map(({ article, quantity, extension }) => ({
           article,
           quantity,
-          ...(department === "roll" ? { extension } : {}),
+          ...(extension ? { extension } : {}),
         }));
       const part =
         existing?.parts.find((p) => p.department === department) ||

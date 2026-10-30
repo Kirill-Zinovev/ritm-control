@@ -4,6 +4,7 @@ import { IncidentStore } from "../agent/store.js";
 import {
   RollSupplyManagementService,
   RollSupplySheetsWriter,
+  boxTemplateWithExtension,
 } from "../agent/rollSupply.js";
 import {
   ROLL_PRINTING_SHEET,
@@ -184,6 +185,13 @@ function googleHarness({
           const range = request.insertDimension.range;
           const sheet = sheets.get(range.sheetId);
           const count = range.endIndex - range.startIndex;
+          if (range.dimension === "COLUMNS") {
+            assert.equal(range.startIndex, 5);
+            const upgraded = boxTemplateWithExtension(sheet);
+            sheet.data = upgraded.data;
+            replies.push({});
+            continue;
+          }
           sheet.data[0].rowData.splice(
             range.startIndex,
             0,
@@ -336,10 +344,10 @@ test("box destination copies its own template, initializes checkbox facts and ne
   const source = google.sheets.get(DEPARTMENTS.box.template.gid);
   const target = google.sheets.get(plan.sheetId);
   assert.equal(source.data[0].rowData[0].values[28].userEnteredValue, undefined, "source template UID header must remain untouched");
-  assert.equal(target.data[0].rowData[0].values[28].userEnteredValue.stringValue, "UID");
-  assert.equal(target.data[0].rowData[4].values[23].userEnteredValue, undefined, "X is an extras column in box, never a print remainder");
-  assert.equal(target.data[0].rowData[4].values[17].userEnteredValue.boolValue, false);
+  assert.equal(target.data[0].rowData[0].values[29].userEnteredValue.stringValue, "UID");
+  assert.equal(target.data[0].rowData[4].values[24].userEnteredValue, undefined, "X is an extras column in box, never a print remainder");
   assert.equal(target.data[0].rowData[4].values[18].userEnteredValue.boolValue, false);
+  assert.equal(target.data[0].rowData[4].values[19].userEnteredValue.boolValue, false);
   assert.equal((await writer.manifest(plan.sheetId)).ready, false);
   await writer.publish(plan, plan.manifest);
   assert.equal((await writer.manifest(plan.sheetId)).ready, true);
@@ -1114,4 +1122,42 @@ test("restart converts in-flight supply writes and checks to no-retry states", (
   } finally {
     store.close();
   }
+});
+
+test("adding extension preserves external lookups, strings and absolute local formula references", () => {
+  const grid = { data: [{ rowData: Array.from({ length: 5 }, () => ({ values: [] })) }] };
+  grid.data[0].rowData[4].values[9] = { userEnteredValue: { formulaValue: '=IF($E5="F5";SUM(F5:$I$5);VLOOKUP(E5;\'Cache FBO\'!B:G;6;0))' } };
+  const result = boxTemplateWithExtension(grid);
+  assert.equal(result.data[0].rowData[4].values[10].userEnteredValue.formulaValue,
+    '=IF($E5="F5";SUM(G5:$J$5);VLOOKUP(E5;\'Cache FBO\'!B:G;6;0))');
+  assert.equal(result.data[0].rowData[3].values[5].userEnteredValue.stringValue, "расширения");
+  assert.equal(grid.data[0].rowData[4].values[9].userEnteredValue.formulaValue.includes('SUM(F5:$I$5)'), true);
+});
+
+test("new box has extension F, shifted calculations and neutral appearance; original template is preserved", async () => {
+  const google = googleHarness({ box: true });
+  const source = google.sheets.get(DEPARTMENTS.box.template.gid);
+  source.basicFilter = { range: { sheetId: source.properties.sheetId } };
+  source.conditionalFormats = [{ ranges: [] }, { ranges: [] }];
+  const before = structuredClone(source);
+  const writer = new ProductionSupplyWriter({ department: "box", credentialWriter: { token: async () => "test-token", metrics: { readRequests: 0, writeRequests: 0 } }, fetcher: google.fetcher });
+  const input = payload("13131313-1313-4313-8313-131313131313", { lines: [{ article: "TEST-001", quantity: 12, extension: "U3" }] });
+  const plan = await writer.prepareCreate(input);
+  await writer.execute(plan); await writer.verify(plan);
+  const target = google.sheets.get(plan.sheetId), row = target.data[0].rowData[4].values;
+  assert.equal(row[5].userEnteredValue.stringValue, "U3");
+  assert.equal(row[15].userEnteredValue.numberValue, 12);
+  assert.match(row[10].userEnteredValue.formulaValue, /G5\*I5\*J5\*P5/);
+  assert.match(row[17].userEnteredValue.formulaValue, /IF\(S5;0;P5\)/);
+  assert.equal(row[18].userEnteredValue.boolValue, false);
+  assert.equal(row[19].userEnteredValue.boolValue, false);
+  const batch = google.requests[0];
+  assert.deepEqual(batch.filter(r => r.deleteConditionalFormatRule).map(r => r.deleteConditionalFormatRule), [{ sheetId: plan.sheetId, index: 1 }, { sheetId: plan.sheetId, index: 0 }]);
+  assert.ok(batch.some(r => r.clearBasicFilter?.sheetId === plan.sheetId));
+  assert.ok(batch.some(r => r.repeatCell?.range.sheetId === plan.sheetId));
+  assert.deepEqual(source, before);
+  const restarted = new ProductionSupplyWriter({ department: "box", credentialWriter: { token: async () => "test-token", metrics: { readRequests: 0, writeRequests: 0 } }, fetcher: google.fetcher });
+  const append = await restarted.prepareAppend({ operationId: "14141414-1414-4414-8414-141414141414", name: input.name, sheetId: plan.sheetId, lines: [{ article: "SECOND", quantity: 4, extension: "DTF" }], registeredSheets: [{ gid: plan.sheetId, name: input.name }] });
+  await restarted.execute(append); await restarted.verify(append);
+  assert.equal(google.sheets.get(plan.sheetId).data[0].rowData[4].values[5].userEnteredValue.stringValue, "DTF");
 });

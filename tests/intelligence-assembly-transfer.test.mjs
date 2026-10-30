@@ -59,8 +59,8 @@ function fixture(columnCount = 29, { rollLayout = "legacy", boxLayout = "legacy"
           : { stringValue: value ?? "" };
       const department = id === ASSEMBLY_TRANSFER_SOURCES.roll.id ? "roll" : "box";
       const layout = department === "roll" ? rollLayout : boxLayout;
-      const quantityColumn = department === "roll" && layout === "extended" ? 16 : 15;
-      const uidColumn = department === "roll" && layout === "extended" ? 30 : 29;
+      const quantityColumn = layout === "extended" ? 16 : 15;
+      const uidColumn = layout === "extended" ? 30 : 29;
       const columnNumber = (letters) => [...letters].reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0);
       const data = params.ranges.map((range) => {
         assert.ok(!range.includes("5001"), "source ranges must remain within the physical grid");
@@ -75,7 +75,7 @@ function fixture(columnCount = 29, { rollLayout = "legacy", boxLayout = "legacy"
           if (row === 4) {
             if (column === 5) return "Артикул";
             if (column === quantityColumn) return "Кол-во";
-            if (department === "roll" && layout === "extended" && column === 6) return "Расширения";
+            if (layout === "extended" && column === 6) return "Расширения";
             return "";
           }
           if (row === 1 && column === uidColumn) return "UID";
@@ -84,7 +84,7 @@ function fixture(columnCount = 29, { rollLayout = "legacy", boxLayout = "legacy"
           if (column === 5) return source.sku;
           if (column === quantityColumn) return source.quantity;
           if (column === uidColumn) return source.uid;
-          if (department === "roll" && layout === "extended" && column === 6) return "A3";
+          if (layout === "extended" && column === 6) return "A3";
           return "";
         };
         return {
@@ -294,6 +294,17 @@ test("roll source reads new extension layout with quantity in P and UID in AD", 
   } finally {
     await f.close();
   }
+});
+
+test("box source reads extension layout with quantity P and UID AD", async () => {
+  const f = fixture(30, { boxLayout: "extended" });
+  try {
+    const source = await f.service.source("box", 50);
+    assert.equal(source.items[0].uid, "uid-1");
+    assert.equal(source.items[0].quantity, 12);
+    assert.ok(f.reader.calls.some(call => call.params.ranges?.includes("'OZON existing'!P5:P1000")));
+    assert.ok(f.reader.calls.some(call => call.params.ranges?.includes("'OZON existing'!AD5:AD1000")));
+  } finally { await f.close(); }
 });
 
 test("source changes between selection, preview and confirmation prevent enqueue", async () => {

@@ -38,6 +38,32 @@ const BOX_LAYOUT = Object.freeze({
   printReady: 18,
   cutReady: 19,
 });
+// Add F only in a new box copy; old worksheets keep their original schema.
+export function boxTemplateWithExtension(grid) {
+  const result = structuredClone(grid);
+  const shift = reference => reference.replace(/\$?[A-Z]{1,3}/g, token => {
+    const letters = token.replace("$", "");
+    const col = [...letters].reduce((n, char) => n * 26 + char.charCodeAt(0) - 64, 0);
+    return col < 6 ? token : (token.startsWith("$") ? "$" : "") + columnName(col + 1);
+  });
+  for (const row of result.data[0].rowData || []) {
+    row.values ||= [];
+    row.values.splice(5, 0, {});
+    for (const cell of row.values) {
+      const formula = cell?.userEnteredValue?.formulaValue;
+      if (!formula) continue;
+      // Quoted strings and qualified references belong to other sheets and
+      // must retain their original columns when F is inserted in this sheet.
+      cell.userEnteredValue.formulaValue = formula.replace(
+        /"(?:[^"]|"")*"|(?:'(?:[^']|'')+'|[\p{L}_][\p{L}\p{N}_]*)!\$?[A-Z]{1,3}(?:\$?[1-9]\d*)?(?::\$?[A-Z]{1,3}(?:\$?[1-9]\d*)?)?|(?<![\p{L}\p{N}_])(?:\$?[A-Z]{1,3}\$?[1-9]\d*(?::\$?[A-Z]{1,3}\$?[1-9]\d*)?|\$?[A-Z]{1,3}:\$?[A-Z]{1,3})(?![\p{L}\p{N}_(!])/gu,
+        token => token.startsWith('"') || token.includes("!") ? token : shift(token),
+      );
+    }
+  }
+  result.data[0].rowData[HEADER_ROW - 1].values[5] = { userEnteredValue: { stringValue: "расширения" } };
+  return result;
+}
+
 const REGISTRY_KEY = "rollPrintingAdditionalSheets";
 const fail = (code, message, status = 409) => {
   throw new RepairError(code, message, status);
@@ -476,7 +502,7 @@ function cellsForColumn(values, valueKey, kind) {
   };
 }
 
-function boxDimensionFormulaRepairs(startRow, count) {
+function boxDimensionFormulaRepairs(startRow, count, layout = BOX_LAYOUT) {
   const repairs = [];
   const widthPattern = String.raw`^\s*([0-9]+[,.]?[0-9]*)\s*[xх×]\s*[0-9]+[,.]?[0-9]*\s*$`;
   const heightPattern = String.raw`^\s*[0-9]+[,.]?[0-9]*\s*[xх×]\s*([0-9]+[,.]?[0-9]*)\s*$`;
@@ -509,6 +535,13 @@ function boxDimensionFormulaRepairs(startRow, count) {
       },
     );
   }
+  if (layout.extension) return repairs.map(repair => {
+    const fake = { data: [{ rowData: Array.from({ length: HEADER_ROW }, () => ({ values: [] })) }] };
+    fake.data[0].rowData[0].values[repair.column - 1] = { userEnteredValue: { formulaValue: repair.formula } };
+    const upgraded = boxTemplateWithExtension(fake);
+    const column = repair.column >= 6 ? repair.column + 1 : repair.column;
+    return { ...repair, column, cell: `${columnName(column)}${repair.row}`, formula: upgraded.data[0].rowData[0].values[column - 1].userEnteredValue.formulaValue };
+  });
   return repairs;
 }
 
@@ -541,7 +574,7 @@ function rollDimensionFormulaRepairs(startRow, count) {
   return repairs;
 }
 
-function rollCatalogFormulaRepairs(startRow, count, name, box = false) {
+function rollCatalogFormulaRepairs(startRow, count, name, box = false, layout = BOX_LAYOUT) {
   const title = String(name || "").toUpperCase();
   const ozon = /(?:^|[^\p{L}\p{N}])OZON(?=$|[^\p{L}\p{N}])/u.test(title);
   const wb = /(?:^|[^\p{L}\p{N}])WB(?=$|[^\p{L}\p{N}])/u.test(title);
@@ -552,7 +585,8 @@ function rollCatalogFormulaRepairs(startRow, count, name, box = false) {
     : [[4, 14, 5], [7, 5, 2], [8, 6, 3], [13, 9, 4]];
   for (let row = startRow; row < startRow + count; row++) {
     const sku = `REGEXREPLACE(UPPER(TRIM($E${row}));"\\(OZ\\)$";"")`;
-    for (const [column, ozonIndex, wbIndex] of columns) {
+    for (const [originalColumn, ozonIndex, wbIndex] of columns) {
+      const column = box && layout.extension && originalColumn >= 6 ? originalColumn + 1 : originalColumn;
       const fromOzon = `VLOOKUP(${sku};'${box ? "Cache FBO" : "БДО"}'!B:O;${ozonIndex};0)`;
       const fromWb = `VLOOKUP(${sku};'_RITM_WB_SOURCE'!A:E;${wbIndex};0)`;
       const formula = ozon
@@ -684,6 +718,12 @@ export class RollSupplySheetsWriter {
     }
   }
 
+  configureLayout(extended) {
+    if (!this.box) return;
+    this.layout = extended ? ROLL_LAYOUT : BOX_LAYOUT;
+    this.formulaColumns = extended ? [7, 11] : [6, 10];
+  }
+
   async verifyEditAccess() {
     const value = await this.request(
       `https://www.googleapis.com/drive/v3/files/${this.documentId}?fields=id,capabilities(canEdit)`,
@@ -717,12 +757,12 @@ export class RollSupplySheetsWriter {
   }
 
   async grid(sheetName, endRow = DATA_START_ROW + MAX_ORDERS - 1) {
-    const range = `'${sheetName.replaceAll("'", "''")}'!A1:${columnName(this.layout.maxColumn)}${endRow}`;
+    const range = `'${sheetName.replaceAll("'", "''")}'!A1:${columnName(Math.max(this.layout.maxColumn, 30))}${endRow}`;
     const params = new URLSearchParams({
       includeGridData: "true",
       ranges: range,
       fields:
-        "spreadsheetId,sheets(properties(sheetId,title,gridProperties(rowCount)),data(startRow,startColumn,rowData(values(userEnteredValue,effectiveValue))))",
+        "spreadsheetId,sheets(properties(sheetId,title,gridProperties(rowCount)),conditionalFormats,basicFilter,data(startRow,startColumn,rowData(values(userEnteredValue,effectiveValue))))",
     });
     const data = await this.request(
       `https://sheets.googleapis.com/v4/spreadsheets/${this.documentId}?${params}`,
@@ -736,6 +776,7 @@ export class RollSupplySheetsWriter {
         "Google не подтвердил выбранный лист.",
         409,
       );
+    if (this.box) this.configureLayout(fold(entered(gridCell(result, HEADER_ROW, 6))) === "расширения");
     return result;
   }
 
@@ -764,18 +805,20 @@ export class RollSupplySheetsWriter {
         "В шаблоне слишком много строк для полной проверки. Запись остановлена без изменений.",
         409,
       );
-    const sourceGrid = await this.grid(
+    let sourceGrid = await this.grid(
       template.title,
       Math.max(scanRows, DATA_START_ROW + MAX_ORDERS - 1),
     );
-    validateTemplate(sourceGrid, this.box, this.layout, !this.box);
+    const insertExtension = this.box && !this.layout.extension;
+    if (insertExtension) { sourceGrid = boxTemplateWithExtension(sourceGrid); this.configureLayout(true); }
+    validateTemplate(sourceGrid, this.box, this.layout, true);
     if (gridCell(sourceGrid, 1, 1).userEnteredValue?.formulaValue)
       fail(
         "roll_template_title_formula",
         "Заголовок A1 шаблона содержит формулу и не может быть безопасно заменён названием поставки.",
         409,
       );
-    const catalogRepairs = rollCatalogFormulaRepairs(DATA_START_ROW, lines.length, name, this.box);
+    const catalogRepairs = rollCatalogFormulaRepairs(DATA_START_ROW, lines.length, name, this.box, this.layout);
     if (catalogRepairs.length && !sheets.some((sheet) => sheet.title === "_RITM_WB_SOURCE"))
       fail("roll_catalog_source_missing", "Не найден источник WB для проверки товаров. Создание остановлено.", 409);
     const formulaRepairs = inferFormulaRepairs(
@@ -794,7 +837,7 @@ export class RollSupplySheetsWriter {
       formulaRepairs.push(
         ...boxDimensionFormulaRepairs(
           DATA_START_ROW,
-          clearThrough - DATA_START_ROW + 1,
+          clearThrough - DATA_START_ROW + 1, this.layout,
         ),
       );
     else formulaRepairs.push(...rollDimensionFormulaRepairs(DATA_START_ROW, lines.length));
@@ -806,7 +849,7 @@ export class RollSupplySheetsWriter {
       this.layout,
     );
     validateTemplateInputRange(sourceGrid, clearThrough, this.layout);
-    if (this.box && lines.some((_, i) => [18, 19].some(column => gridCell(sourceGrid, DATA_START_ROW + i, column).userEnteredValue?.formulaValue)))
+    if (this.box && lines.some((_, i) => [this.layout.printReady, this.layout.cutReady].some(column => gridCell(sourceGrid, DATA_START_ROW + i, column).userEnteredValue?.formulaValue)))
       fail("box_status_formula", "В полях готовности бокса найдена формула. Запись остановлена.");
     if (
       sourceRows
@@ -826,6 +869,8 @@ export class RollSupplySheetsWriter {
     this.preparedTemplates.set(operationId, sourceGrid);
     return {
       action: "create",
+      insertExtension,
+      extendedBox: this.box && !!this.layout.extension,
       operationId,
       name,
       sheetId: newSheetId,
@@ -911,7 +956,7 @@ export class RollSupplySheetsWriter {
         409,
       );
     const templateRow = DATA_START_ROW;
-    const catalogRepairs = rollCatalogFormulaRepairs(DATA_START_ROW, lines.length, name, this.box);
+    const catalogRepairs = rollCatalogFormulaRepairs(DATA_START_ROW, lines.length, name, this.box, this.layout);
     if (catalogRepairs.length && !sheets.some((sheet) => sheet.title === "_RITM_WB_SOURCE"))
       fail("roll_catalog_source_missing", "Не найден источник WB для проверки товаров. Добавление остановлено.", 409);
     const missingFormulaColumns = this.formulaColumns.filter(
@@ -956,6 +1001,7 @@ export class RollSupplySheetsWriter {
     }
     return {
       action: "append",
+      extendedBox: this.box && !!this.layout.extension,
       name,
       sheetId,
       startRow,
@@ -966,7 +1012,7 @@ export class RollSupplySheetsWriter {
       copyFormulaColumns: Array.from({ length: this.layout.maxColumn }, (_, i) => i + 1).filter(column => gridCell(grid, DATA_START_ROW, column).userEnteredValue?.formulaValue),
       formulaSourceRow: DATA_START_ROW + lines.length,
       formulaRepairs: [...catalogRepairs, ...(this.box
-        ? boxDimensionFormulaRepairs(startRow, lines.length)
+        ? boxDimensionFormulaRepairs(startRow, lines.length, this.layout)
         : rollDimensionFormulaRepairs(startRow, lines.length))],
       verifyThrough: Math.max(scanRows, DATA_START_ROW + MAX_ORDERS - 1) + lines.length,
     };
@@ -1071,6 +1117,7 @@ export class RollSupplySheetsWriter {
   }
 
   async execute(plan) {
+    if (this.box && ["create", "append"].includes(plan.action) && plan.extendedBox !== undefined) this.configureLayout(plan.extendedBox === true);
     if (plan.action === "updateItem" || plan.action === "removeItem") {
       const values = plan.action === "updateItem"
         ? { article: plan.article, quantity: plan.quantity, remainingPrint: plan.remainingPrint, uid: plan.uid }
@@ -1165,6 +1212,7 @@ export class RollSupplySheetsWriter {
         },
       });
     if (plan.action === "create") {
+      if (plan.insertExtension) requests.push({ insertDimension: { range: { sheetId, dimension: "COLUMNS", startIndex: 5, endIndex: 6 }, inheritFromBefore: true } });
       const sourceGrid = this.preparedTemplates.get(plan.operationId);
       if (!sourceGrid)
         fail(
@@ -1173,6 +1221,12 @@ export class RollSupplySheetsWriter {
           409,
         );
       this.preparedTemplates.delete(plan.operationId);
+      requests.push({ clearBasicFilter: { sheetId } });
+      for (let index = (sourceGrid.conditionalFormats || []).length - 1; index >= 0; index--)
+        requests.push({ deleteConditionalFormatRule: { sheetId, index } });
+      requests.push({ repeatCell: { range: { sheetId }, cell: { userEnteredFormat: { backgroundColorStyle: { rgbColor: { red: 1, green: 1, blue: 1 } }, textFormat: { foregroundColorStyle: { rgbColor: { red: 0, green: 0, blue: 0 } } } } }, fields: "userEnteredFormat.backgroundColor,userEnteredFormat.backgroundColorStyle,userEnteredFormat.textFormat.foregroundColor,userEnteredFormat.textFormat.foregroundColorStyle" } });
+      requests.push({ updateDimensionProperties: { range: { sheetId, dimension: "ROWS", startIndex: 0, endIndex: sourceGrid.properties.gridProperties.rowCount }, properties: { hiddenByUser: false }, fields: "hiddenByUser" } });
+      if (plan.insertExtension) requests.push(cellsForColumn({ sheetId, startRow: HEADER_ROW, columnIndex: 5, items: [{ extension: "расширения" }] }, "extension", "string"));
       requests.push(
         clearCopiedData(
           sourceGrid,
@@ -1251,8 +1305,8 @@ export class RollSupplySheetsWriter {
         "string",
       ),
     );
-    if (this.box && plan.action === "create") requests.push(cellsForColumn({ sheetId, startRow: 1, columnIndex: 28, items: [{ uid: "UID" }] }, "uid", "string"));
-    if (this.box) requests.push({ updateCells: { start: { sheetId, rowIndex: plan.startRow - 1, columnIndex: 17 },
+    if (this.box && plan.action === "create") requests.push(cellsForColumn({ sheetId, startRow: 1, columnIndex: this.layout.uid - 1, items: [{ uid: "UID" }] }, "uid", "string"));
+    if (this.box) requests.push({ updateCells: { start: { sheetId, rowIndex: plan.startRow - 1, columnIndex: this.layout.printReady - 1 },
       rows: plan.lines.map(() => ({ values: [{ userEnteredValue: { boolValue: false } }, { userEnteredValue: { boolValue: false } }] })), fields: "userEnteredValue" } });
     if (plan.manifest) requests.push(...supplyManifestRequests(sheetId, plan.manifest));
     const result = await this.request(
@@ -1364,7 +1418,7 @@ export class RollSupplySheetsWriter {
         expected.set(`${columnName(this.layout.quantity)}${row}`, line.quantity);
         if (this.layout.extension) expected.set(`${columnName(this.layout.extension)}${row}`, line.extension || "");
         if (!this.box) expected.set(`${columnName(this.layout.remainingPrint)}${row}`, line.quantity);
-        if (this.box) { expected.set(`R${row}`, false); expected.set(`S${row}`, false); }
+        if (this.box) { expected.set(`${columnName(this.layout.printReady)}${row}`, false); expected.set(`${columnName(this.layout.cutReady)}${row}`, false); }
         expected.set(`${columnName(this.layout.uid)}${row}`, plan.uids[index].uid);
       });
       for (let row = DATA_START_ROW; row <= plan.clearThrough; row++) {
@@ -1399,7 +1453,7 @@ export class RollSupplySheetsWriter {
     const calculations = [];
     for (let index = 0; index < plan.lines.length; index++) {
       const row = plan.startRow + index;
-      if (this.box && [18, 19].some(column => entered(gridCell(grid, row, column)) !== false))
+      if (this.box && [this.layout.printReady, this.layout.cutReady].some(column => entered(gridCell(grid, row, column)) !== false))
         fail("box_status_readback_failed", "Исходная готовность новых товаров бокса не подтверждена.", 503);
       const article = entered(gridCell(grid, row, this.layout.article));
       const extension = this.layout.extension ? entered(gridCell(grid, row, this.layout.extension)) : null;
@@ -1433,7 +1487,7 @@ export class RollSupplySheetsWriter {
         );
       if (
         this.box &&
-        [8, 9, 10, 11].some(
+        [this.layout.width, this.layout.height, this.layout.height + 1, this.layout.height + 2].some(
           (column) =>
             !gridCell(grid, row, column).userEnteredValue?.formulaValue,
         )
@@ -1459,8 +1513,8 @@ export class RollSupplySheetsWriter {
           });
       }
       if (this.box) {
-        const width = gridCell(grid, row, 8).effectiveValue?.numberValue;
-        const height = gridCell(grid, row, 9).effectiveValue?.numberValue;
+        const width = gridCell(grid, row, this.layout.width).effectiveValue?.numberValue;
+        const height = gridCell(grid, row, this.layout.height).effectiveValue?.numberValue;
         if (!(Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0))
           calculations.push({
             cell: `G${row}`,

@@ -13,7 +13,7 @@ export const ASSEMBLY_TRANSFER_SOURCES = {
   box: { id: BOX_PRINTING_SHEET_ID, name: "Бокс" },
 };
 const TRANSFER_MIN_COLUMNS = { roll: 15, box: 15 };
-const TRANSFER_MAX_HEADER_COLUMNS = { roll: 16, box: 15 };
+const TRANSFER_MAX_HEADER_COLUMNS = { roll: 16, box: 16 };
 const columnName = (column) => {
   let value = "";
   for (; column > 0; column = Math.floor((column - 1) / 26))
@@ -27,6 +27,8 @@ function resolveTransferLayout(department, at, columnCount) {
   const qtyP = headerKey(at(16, 4)) === "кол-во";
   if (qtyO && qtyP) return null;
   if (department === "box") {
+    if (qtyP && ["расширения", "расширение печати"].includes(headerKey(at(6, 4))))
+      return { quantity: 16, extension: 6, uid: 30, quantityHeader: "Кол-во" };
     return qtyO
       ? { quantity: 15, extension: null, uid: 29, quantityHeader: "Кол-во" }
       : null;
