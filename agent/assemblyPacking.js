@@ -217,6 +217,21 @@ export function attachAssemblyPacking(printing, workLog, checkedAt) {
     byPosition.set(key, { quantity: 0, records: 0 });
   }
 
+  // Older Assembly events used source row identity before a UID was assigned.
+  // Accept that identity only for the same row/article and an unambiguous
+  // article within this shipment and department. Never match by article alone.
+  const articleScope = order => JSON.stringify([workShipmentId(order), order.sourceId, order.article]);
+  const counts = new Map();
+  for (const order of orderPositions.values()) {
+    const scope = articleScope(order);
+    counts.set(scope, (counts.get(scope) || 0) + 1);
+  }
+  for (const order of [...orderPositions.values()]) {
+    if (!order.rawUid || !Number.isSafeInteger(order.row) || order.row < 1 || counts.get(articleScope(order)) !== 1) continue;
+    const alias = `${workShipmentId(order)}|${order.sourceId === "box-printing" ? `box:${order.sheetId}|` : ""}row:${order.row}|${String(order.article || "")}`;
+    if (!orderPositions.has(alias)) orderPositions.set(alias, order);
+  }
+
   let eventCount = 0;
   let sourceUpdatedAt = null;
   for (const event of workLog.events || []) {
@@ -228,7 +243,7 @@ export function attachAssemblyPacking(printing, workLog, checkedAt) {
       else affectedShipments.add(event.shipmentId);
       continue;
     }
-    const summary = byPosition.get(event.positionId);
+    const summary = byPosition.get(workPositionId(order));
     summary.quantity += event.quantity;
     summary.records++;
     eventCount++;

@@ -332,3 +332,24 @@ test("a WorkLog too large for the bounded read stays unavailable instead of trun
   assert.equal(result.packing.status, "unavailable");
   assert.equal(result.supplies[0].packed, null);
 });
+
+test("legacy row packaging follows a newly assigned UID on the same unique article row", () => {
+  const order = { sourceId: "roll-printing", sheetId: 119710351, row: 8, rawUid: "new-uid", article: "KS0002.A7665" };
+  const event = { shipmentId: "RITM-ROLL-119710351", positionId: "RITM-ROLL-119710351|row:8|KS0002.A7665", article: order.article, quantity: 15, createdAt: "2026-10-29T14:00:00Z" };
+  const result = attachAssemblyPacking({ supplies: [order] }, { invalid: [], events: [event, { ...event, quantity: 7, positionId: "RITM-ROLL-119710351|uid:new-uid|KS0002.A7665" }] }, "2026-10-30T07:00:00Z");
+  assert.equal(result.supplies[0].packed, 22);
+  assert.equal(result.supplies[0].packingRecords, 2);
+  assert.equal(result.packing.status, "available");
+  const moved = attachAssemblyPacking({ supplies: [{ ...order, row: 9 }] }, { invalid: [], events: [event] }, "2026-10-30T07:00:00Z");
+  assert.equal(moved.supplies[0].packed, null);
+});
+
+test("legacy row fallback refuses repeated articles and does not cross departments", () => {
+  const order = { sourceId: "roll-printing", sheetId: 119710351, row: 8, rawUid: "new-uid", article: "SKU" };
+  const event = { shipmentId: "RITM-ROLL-119710351", positionId: "RITM-ROLL-119710351|row:8|SKU", article: "SKU", quantity: 15, createdAt: "2026-10-29T14:00:00Z" };
+  const repeated = attachAssemblyPacking({ supplies: [order, { ...order, row: 9, rawUid: "another" }] }, { invalid: [], events: [event] }, "2026-10-30T07:00:00Z");
+  assert.equal(repeated.packing.status, "partial");
+  assert.equal(repeated.supplies[0].packed, null);
+  const box = attachAssemblyPacking({ supplies: [{ ...order, sourceId: "box-printing", assemblyShipmentId: event.shipmentId }] }, { invalid: [], events: [event] }, "2026-10-30T07:00:00Z");
+  assert.equal(box.supplies[0].packed, null);
+});
