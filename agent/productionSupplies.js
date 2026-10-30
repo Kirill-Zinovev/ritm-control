@@ -340,7 +340,7 @@ export class ProductionSupplyService {
     };
   }
   state() {
-    const history = this.operations();
+    const history = this.operations().filter(op => op.status !== "cancelled");
     return {
       available: !!this.writers?.roll && !!this.writers?.box,
       busy: this.busy,
@@ -501,7 +501,7 @@ export class ProductionSupplyService {
   }
   async runDeletePart(op) {
     const pending = this.operations().find(
-      (candidate) => candidate.id !== op.id && candidate.status !== "verified",
+      (candidate) => candidate.id !== op.id && !["verified", "cancelled"].includes(candidate.status),
     );
     if (
       pending ||
@@ -874,7 +874,31 @@ export class ProductionSupplyService {
       manifest,
     };
   }
+  async cancelAbsentCreate(input) {
+    if (input.explicitWriteApproval !== true || Object.keys(input).sort().join() !== ["action", "operationId", "explicitWriteApproval"].sort().join())
+      fail("production_confirmation_required", "Подтвердите отмену операции.");
+    const op = this.operations().find(item => item.id === input.operationId);
+    if (!op) fail("production_operation_missing", "Операция не найдена.", 404);
+    if (op.status === "cancelled") return this.publicOperation(op);
+    if (op.action !== "create" || op.status === "verified" || !op.steps?.length || op.steps.some(step => step.plan?.action !== "create"))
+      fail("production_cancel_not_safe", "Отменить так можно только незавершённое создание новой поставки.");
+    for (const step of op.steps) {
+      const started = Date.parse(step.writeStartedAt || op.updatedAt);
+      if (!Number.isFinite(started) || this.now() - started <= 180000)
+        fail("production_cancel_wait", "Предыдущий запрос ещё может выполняться. Повторите отмену через три минуты.");
+      const sheets = await this.writers[step.department].metadata();
+      if (sheets.some(sheet => sheet.sheetId === step.plan.sheetId || sheet.title === op.name))
+        fail("production_cancel_sheet_exists", "Часть поставки уже есть в таблице. Автоматическая отмена остановлена для сохранности данных.");
+    }
+    op.status = "cancelled";
+    op.cancelledAt = new Date(this.now()).toISOString();
+    op.message = "Создание отменено: отсутствие листов проверено в обоих отделах. Можно создать новую поставку.";
+    this.save(op);
+    this.store.log("production_supply_cancelled", op.message, null);
+    return this.publicOperation(op);
+  }
   async execute(input) {
+    if (input?.action === "cancelAbsentCreate") return this.cancelAbsentCreate(input);
     if (!this.state().available)
       fail(
         "production_writer_unavailable",
@@ -894,7 +918,7 @@ export class ProductionSupplyService {
       const op = await this.prepareDeletePart(input);
       if (this.busy || this.legacy?.busy)
         fail("production_operation_active", "Дождитесь завершения текущей операции.");
-      const pending = this.operations().find((item) => item.status !== "verified");
+      const pending = this.operations().find((item) => !["verified", "cancelled"].includes(item.status));
       if (
         pending ||
         this.legacy?.writeConflict(
@@ -952,14 +976,14 @@ export class ProductionSupplyService {
           "Нет распознанных товаров для добавления. Уточните станки в базе и проверьте список заново.",
         );
     }
-    if (op?.status === "verified") return this.publicOperation(op);
+    if (["verified", "cancelled"].includes(op?.status)) return this.publicOperation(op);
     if (this.busy || this.legacy?.busy)
       fail(
         "production_operation_active",
         "Дождитесь завершения текущей операции.",
       );
     const pending = this.operations().find(
-      (o) => o.id !== op?.id && o.status !== "verified",
+      (o) => o.id !== op?.id && !["verified", "cancelled"].includes(o.status),
     );
     if (
       pending ||

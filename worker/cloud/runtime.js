@@ -77,7 +77,7 @@ export async function recoverPendingShipmentLock(bindings, store, fetcher = fetc
 export async function maintenance(bindings, store, { fetcher = fetch, refresh = true } = {}) {
   const result = { ok: true, assemblySync: null, deliverySkipped: !cloudConfig(bindings).writesEnabled };
   const diagnosticScope = await store.scope();
-  result.pendingSupplyOperations = (diagnosticScope.meta("productionSupplyOperations") || []).filter((op) => op.status !== "verified").map((op) => ({
+  result.pendingSupplyOperations = (diagnosticScope.meta("productionSupplyOperations") || []).filter((op) => !["verified", "cancelled"].includes(op.status)).map((op) => ({
     id: op.id, name: op.name, action: op.action, status: op.status, message: op.message,
     steps: (op.steps || []).map((step) => ({ department: step.department, status: step.status, message: step.message || null, sheetId: step.plan?.sheetId, action: step.plan?.action })),
   }));
@@ -436,12 +436,12 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
           await services.guard();
           if (path === "/api/assembly-transfers") value = await services.transfer.execute(input);
           else {
-            const routed = ["create", "append", "resume", "deletePart"].includes(input?.action);
-            if (!routed && services.production.operations().some((op) => op.status !== "verified")) throw new CloudError("production_operation_pending", "Сначала завершите сверку общей поставки.", 409);
+            const routed = ["create", "append", "resume", "deletePart", "cancelAbsentCreate"].includes(input?.action);
+            if (!routed && services.production.operations().some((op) => !["verified", "cancelled"].includes(op.status))) throw new CloudError("production_operation_pending", "Сначала завершите сверку общей поставки.", 409);
             if (input?.action === "delete" && (scope.meta("productionSupplies") || []).some((supply) => supply.parts.some((part) => part.department === "roll" && part.sheetId === input.sheetId)))
               throw new CloudError("linked_supply_delete_forbidden", "Это часть общей поставки. Удалите производственный участок через его действие.", 409);
             value = routed ? await services.production.execute(input) : await services.legacy.execute(input);
-            services.queue.enqueue(value);
+            if (value.status !== "cancelled") services.queue.enqueue(value);
           }
           appendAudit(scope, principal, path, value);
           await scope.checkpoint();

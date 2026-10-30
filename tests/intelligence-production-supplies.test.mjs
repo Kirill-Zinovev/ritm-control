@@ -671,3 +671,27 @@ test("a repeated article already present in another department is rejected befor
   assert.equal(f.writers.roll.writes, 1);
   assert.equal(f.writers.box.writes, 1);
 });
+
+test("cancel absent creation preserves audit, releases pending guard and never writes sheets", async () => {
+  const f = fixture(), p = payload(), preview = await f.service.preview(p);
+  f.writers.roll.execute = async () => { throw Object.assign(new Error("lost response"), { uncertain: true }); };
+  await f.service.execute({ ...p, previewId: preview.id });
+  const service = f.createService(); service.now = () => Date.now() + 181000;
+  const input = { action: "cancelAbsentCreate", operationId: p.operationId, explicitWriteApproval: true };
+  assert.equal((await service.execute(input)).status, "cancelled");
+  assert.equal((await service.execute(input)).status, "cancelled");
+  assert.equal(service.state().operations.some(op => op.id === p.operationId), false);
+  assert.equal(service.operations().find(op => op.id === p.operationId).status, "cancelled");
+  assert.equal(f.writers.roll.writes + f.writers.box.writes, 0);
+});
+
+test("cancel refuses a created department and a still running request", async () => {
+  const f = fixture(), p = payload(), preview = await f.service.preview(p);
+  f.writers.box.reject = true;
+  await f.service.execute({ ...p, previewId: preview.id });
+  const input = { action: "cancelAbsentCreate", operationId: p.operationId, explicitWriteApproval: true };
+  await assert.rejects(() => f.service.execute(input), /три минуты/);
+  const service = f.createService(); service.now = () => Date.now() + 181000;
+  await assert.rejects(() => service.execute(input), /уже есть/);
+  assert.equal(service.operations().find(op => op.id === p.operationId).status, "partial");
+});

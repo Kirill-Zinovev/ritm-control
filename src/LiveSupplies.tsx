@@ -1302,6 +1302,21 @@ export function LiveSuppliesWorkspace({
                     ? "Удаление требует проверки"
                     : "Загрузка требует проверки"}
               </strong>
+              {item.action === "create" && item.status !== "verified" && (
+                <Button disabled={busy} onClick={async () => {
+                  setBusy(true); setRecoveryError("");
+                  try {
+                    const response = await fetch("/api/roll-supplies", {
+                      method: "POST", credentials: "same-origin",
+                      headers: { "content-type": "application/json" },
+                      body: JSON.stringify({ action: "cancelAbsentCreate", operationId: item.id, explicitWriteApproval: true }),
+                    });
+                    await readRollSupplyResponse(response);
+                    await reloadWriter();
+                  } catch (cause) { setRecoveryError(cause instanceof Error ? cause.message : "Не удалось отменить создание."); }
+                  finally { setBusy(false); }
+                }}>Отменить незавершённое создание</Button>
+              )}
               {item.status !== "verified" && (
                 <details>
                   <summary>Подробности</summary>
