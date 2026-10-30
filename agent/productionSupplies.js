@@ -257,9 +257,9 @@ export class ProductionSupplyWriter extends RollSupplySheetsWriter {
 export class ProductionSupplyService {
   constructor(
     store,
-    { writers, legacy, now = () => Date.now(), refresh = null, recoverInterrupted = true, beforeCreateWrite = null } = {},
+    { writers, legacy, now = () => Date.now(), refresh = null, refreshAfterWrite = true, recoverInterrupted = true, beforeCreateWrite = null } = {},
   ) {
-    Object.assign(this, { store, writers, legacy, now, refresh, beforeCreateWrite });
+    Object.assign(this, { store, writers, legacy, now, refresh, refreshAfterWrite, beforeCreateWrite });
     this.previews = new Map();
     this.busy = false;
     // An interrupted write is never replayed. Its exact persisted plan must be
@@ -1184,10 +1184,12 @@ export class ProductionSupplyService {
           dimensionIssues.map((c) => c.cell).join(", ") +
           ". Площадь этих позиций оставлена незаполненной.";
       this.save(op);
-      try {
-        await this.refresh?.();
-      } catch {
-        /* Writes have their own verified readback. */
+      if (this.refreshAfterWrite) {
+        try {
+          await this.refresh?.();
+        } catch {
+          /* Writes have their own verified readback. */
+        }
       }
       return this.publicOperation(op);
     } catch (error) {

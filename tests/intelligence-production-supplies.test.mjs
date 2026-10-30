@@ -377,6 +377,20 @@ test("preview separates unknown articles and writes only the recognized subset",
   );
 });
 
+test("cloud supply creation can return after verified writes without waiting for full source refresh", async () => {
+  const f = fixture();
+  const service = f.createService();
+  let refreshCalls = 0;
+  service.refresh = async () => { refreshCalls++; };
+  service.refreshAfterWrite = false;
+  const input = payload();
+  const preview = await service.preview(input);
+  const result = await service.execute({ ...input, previewId: preview.id });
+  assert.equal(result.status, "verified");
+  assert.equal(refreshCalls, 0);
+  assert.ok(Object.values(f.writers).every((writer) => writer.writes === 1));
+});
+
 test("an entirely unknown list creates no empty supply or department jobs", async () => {
   const f = fixture(),
     p = { ...payload(), lines: [{ article: "MISSING", quantity: 2 }] };

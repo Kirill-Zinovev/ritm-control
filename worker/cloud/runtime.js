@@ -127,7 +127,7 @@ export async function refreshSnapshot(kind, bindings, store, { scope = null, fet
   } finally { await store.release(lease); }
 }
 
-async function readSnapshot(kind, url, bindings, store, options) {
+export async function readSnapshot(kind, url, bindings, store, options) {
   const snapshot = await store.snapshot(kind);
   let payload;
   if (!snapshot || url.searchParams.get("refresh") === "1" || store.now() - snapshot.at >= cloudConfig(bindings).snapshotMaxAgeMs) {
@@ -135,16 +135,22 @@ async function readSnapshot(kind, url, bindings, store, options) {
     catch (error) {
       if (!snapshot) throw error;
       const refreshInProgress = error?.code === "cloud_operation_busy";
+      const snapshotFresh = store.now() - snapshot.at < cloudConfig(bindings).snapshotMaxAgeMs;
       payload = {
         ...snapshot.value,
-        stale: true,
+        // A competing refresh should not invalidate a still-fresh verified
+        // snapshot. Writes still fail closed once that snapshot is older than
+        // the normal cache lifetime.
+        stale: !snapshotFresh,
         snapshotAt: new Date(snapshot.at).toISOString(),
         refreshFailed: !refreshInProgress,
         refreshInProgress,
         refreshRetryAfterMs: refreshInProgress ? 15000 : 60000,
-        staleReason: refreshInProgress
+        staleReason: refreshInProgress && !snapshotFresh
           ? "Обновление уже выполняется. Пока показан предыдущий проверенный снимок."
-          : "Обновить источник пока не удалось. Показан предыдущий проверенный снимок.",
+          : refreshInProgress
+            ? null
+            : "Обновить источник пока не удалось. Показан предыдущий проверенный снимок.",
       };
     }
   } else payload = { ...snapshot.value, stale: false, snapshotAt: new Date(snapshot.at).toISOString(), refreshFailed: false, refreshInProgress: false };
@@ -449,6 +455,8 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
         } finally { services.savePreviews(); }
       });
       if (result.operation && ctx?.waitUntil) ctx.waitUntil(drainOutbox(bindings, store, fetcher).catch(() => {}));
+      if (result.operation?.status === "verified" && ["create", "append"].includes(result.operation.action) && ctx?.waitUntil)
+        ctx.waitUntil(refreshSnapshot("printing", bindings, store, { fetcher }).catch(() => {}));
       return json(result, result.operation?.status === "pending" ? 202 : 200);
     }
     throw new CloudError("cloud_route_pending", "Этот раздел ещё не прошёл перенос в облачную версию.", 503);

@@ -744,22 +744,30 @@ export function LiveSuppliesWorkspace({
         : selected?.orders || [],
     [selected, onlyMissingArea],
   );
+  const snapshotAtMs = live ? Date.parse(live.snapshotAt || live.updatedAt) : NaN;
+  const hasFreshSnapshot =
+    Number.isFinite(snapshotAtMs) &&
+    Date.now() - snapshotAtMs < 5 * 60 * 1000;
   const canWrite =
+    // Allow writes against a recently verified snapshot while its background
+    // refresh is running. Supply creation still performs its own fresh catalog,
+    // template, ID and readback preflights on the server.
+    hasFreshSnapshot &&
     !!writer?.available &&
     !!live &&
     !live.stale &&
     live.quality?.status !== "partial" &&
     !error &&
-    !loading &&
+    (!loading || hasFreshSnapshot) &&
     !busy &&
     !writer.busy;
   const writeBlockedReason = !writer?.available
     ? writer?.reason || "Проверьте доступ к управлению поставками"
-    : !live || live.stale
+    : !live || live.stale || !hasFreshSnapshot
       ? "Сначала дождитесь свежей загрузки источника"
       : live.quality?.status === "partial"
         ? "В обновлённых данных есть строки с ошибками; проверьте журнал"
-        : error || loading || busy || writer.busy
+        : error || (loading && !hasFreshSnapshot) || busy || writer.busy
           ? "Дождитесь завершения обновления"
           : undefined;
   const selectedDepartment =
@@ -1059,8 +1067,8 @@ export function LiveSuppliesWorkspace({
         result.status === "verified" ||
         result.status === "verified_with_calculation_errors"
       ) {
-        await reloadWriter();
-        await onRefresh();
+        void reloadWriter();
+        void onRefresh();
         if (result.sheetId) setSelectedId(`roll-printing:${result.sheetId}`);
         if (result.status === "verified") {
           setDialog(null);

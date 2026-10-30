@@ -47,6 +47,7 @@ function googleHarness({
   literalSizeRows = [],
   formulaOverrides = {},
   templateRows = 600,
+  boxExtendedTemplate = false,
 } = {}) {
   const documentId = box ? DEPARTMENTS.box.documentId : ROLL_PRINTING_SHEET_ID;
   const descriptor = box ? DEPARTMENTS.box.template : ROLL_PRINTING_SHEET;
@@ -80,6 +81,11 @@ function googleHarness({
     if (sheetRow === (descriptor.headerRow || 4)) {
       values[4] = { userEnteredValue: { stringValue: "Артикул" } };
       values[(box ? 15 : rollQuantityColumn) - 1] = { userEnteredValue: { stringValue: "Кол-во" } };
+      if (box) {
+        values[16] = { userEnteredValue: { stringValue: "Взяли в работу" } };
+        values[17] = { userEnteredValue: { stringValue: "Завершил печать" } };
+        values[18] = { userEnteredValue: { stringValue: "Завершил порезку" } };
+      }
       if (!box) values[rollExtensionColumn - 1] = { userEnteredValue: { stringValue: "Расширения" } };
     }
     if (!box && sheetRow === (descriptor.uidHeaderRow || 1))
@@ -138,6 +144,15 @@ function googleHarness({
         values[0] = { userEnteredValue: { numberValue: 46302 } };
     }
     rowData.push({ values });
+  }
+  if (box && boxExtendedTemplate) {
+    const extended = boxTemplateWithExtension(template);
+    const headers = extended.data[0].rowData[(descriptor.headerRow || 4) - 1].values;
+    headers[5] = { userEnteredValue: { stringValue: "расширения" } };
+    headers[16] = { userEnteredValue: { stringValue: "Взяли в работу" } };
+    headers[17] = { userEnteredValue: { stringValue: "Завершил печать" } };
+    headers[18] = { userEnteredValue: { stringValue: "Завершил порезку" } };
+    template.data = extended.data;
   }
   sheets.set(descriptor.gid, {
     properties: structuredClone(template.properties),
@@ -234,6 +249,13 @@ function googleHarness({
           replies.push({ duplicateSheet: { properties: copied.properties } });
         } else if (request.deleteSheet) {
           sheets.delete(request.deleteSheet.sheetId);
+          replies.push({});
+        } else if (request.deleteDimension) {
+          const range = request.deleteDimension.range;
+          const sheet = sheets.get(range.sheetId);
+          assert.equal(range.dimension, "ROWS");
+          sheet.data[0].rowData.splice(range.startIndex, range.endIndex - range.startIndex);
+          sheet.properties.gridProperties.rowCount -= range.endIndex - range.startIndex;
           replies.push({});
         } else if (request.updateCells) {
           const update = request.updateCells;
@@ -354,8 +376,8 @@ test("box destination copies its own template, initializes checkbox facts and ne
   assert.equal(google.requests[0][0].duplicateSheet.sourceSheetId, DEPARTMENTS.box.template.gid);
 });
 
-test("box create verification reads formulas through the full copied template range", async () => {
-  const google = googleHarness({ box: true, templateRows: 700 });
+test("new box keeps only supply rows and links unchecked work, print, and cut boxes to each article", async () => {
+  const google = googleHarness({ box: true, boxExtendedTemplate: true, templateRows: 700 });
   const writer = new ProductionSupplyWriter({
     department: "box",
     credentialWriter: {
@@ -364,12 +386,24 @@ test("box create verification reads formulas through the full copied template ra
     },
     fetcher: google.fetcher,
   });
-  const input = payload("12121212-1212-4212-8212-121212121212");
+  const input = payload("12121212-1212-4212-8212-121212121212", {
+    lines: [{ article: "TEST-001", quantity: 12 }, { article: "TEST-002", quantity: 7 }],
+  });
   const plan = await writer.prepareCreate(input);
   await writer.execute(plan);
   const verified = await writer.verify(plan);
-  assert.equal(plan.clearThrough, 700);
-  assert.equal(verified.rows, 1);
+  assert.equal(plan.clearThrough, 6);
+  assert.equal(plan.takeWorkColumn, 17, "the 'Взяли в работу' header remains in Q when the template already has extension F");
+  assert.equal(verified.rows, 2);
+  const created = google.sheets.get(plan.sheetId);
+  assert.equal(created.properties.gridProperties.rowCount, 6, "the copied sheet ends immediately after its two supply rows");
+  for (const rowNumber of [5, 6]) {
+    const row = created.data[0].rowData[rowNumber - 1].values;
+    assert.equal(row[16].userEnteredValue.boolValue, false, "Q is unchecked until a worker starts this article");
+    assert.equal(row[17].userEnteredValue.boolValue, false, "R starts unprinted");
+    assert.equal(row[18].userEnteredValue.boolValue, false, "S starts uncut");
+  }
+  assert.ok(google.requests[0].some((request) => request.deleteDimension?.range?.startIndex === 6));
 });
 
 test("new roll supply writes and verifies the catalog extension in column F", async () => {
@@ -1148,7 +1182,7 @@ test("new box has extension F, shifted calculations and neutral appearance; orig
   assert.equal(row[5].userEnteredValue.stringValue, "U3");
   assert.equal(row[15].userEnteredValue.numberValue, 12);
   assert.match(row[10].userEnteredValue.formulaValue, /G5\*I5\*J5\*P5/);
-  assert.match(row[17].userEnteredValue.formulaValue, /IF\(S5;0;P5\)/);
+  assert.equal(row[17].userEnteredValue.boolValue, false, "the shifted work checkbox remains unchecked");
   assert.equal(row[18].userEnteredValue.boolValue, false);
   assert.equal(row[19].userEnteredValue.boolValue, false);
   const batch = google.requests[0];

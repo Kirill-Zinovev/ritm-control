@@ -299,6 +299,20 @@ function lastLiteralDataRow(grid, layout = ROLL_LAYOUT) {
   return last;
 }
 
+function normalizeHeader(value) {
+  return fold(value).replace(/\s+/g, " ");
+}
+
+function findHeaderColumn(grid, labels, layout = ROLL_LAYOUT) {
+  const wanted = new Set((Array.isArray(labels) ? labels : [labels]).map(normalizeHeader));
+  for (let column = 1; column <= layout.maxColumn; column++) {
+    const value = entered(gridCell(grid, HEADER_ROW, column));
+    if (typeof value === "string" && wanted.has(normalizeHeader(value)))
+      return column;
+  }
+  return null;
+}
+
 function clearCopiedData(grid, sheetId, throughRow, formulaRepairs = [], layout = ROLL_LAYOUT) {
   const repairedFormulas = new Map(
     formulaRepairs.map((repair) => [`${repair.row}:${repair.column}`, repair.formula]),
@@ -502,7 +516,7 @@ function cellsForColumn(values, valueKey, kind) {
   };
 }
 
-function boxDimensionFormulaRepairs(startRow, count, layout = BOX_LAYOUT) {
+function boxDimensionFormulaRepairs(startRow, count, layout = BOX_LAYOUT, excludedColumns = []) {
   const repairs = [];
   const widthPattern = String.raw`^\s*([0-9]+[,.]?[0-9]*)\s*[xх×]\s*[0-9]+[,.]?[0-9]*\s*$`;
   const heightPattern = String.raw`^\s*[0-9]+[,.]?[0-9]*\s*[xх×]\s*([0-9]+[,.]?[0-9]*)\s*$`;
@@ -535,14 +549,14 @@ function boxDimensionFormulaRepairs(startRow, count, layout = BOX_LAYOUT) {
       },
     );
   }
-  if (layout.extension) return repairs.map(repair => {
+  const mapped = layout.extension ? repairs.map(repair => {
     const fake = { data: [{ rowData: Array.from({ length: HEADER_ROW }, () => ({ values: [] })) }] };
     fake.data[0].rowData[0].values[repair.column - 1] = { userEnteredValue: { formulaValue: repair.formula } };
     const upgraded = boxTemplateWithExtension(fake);
     const column = repair.column >= 6 ? repair.column + 1 : repair.column;
     return { ...repair, column, cell: `${columnName(column)}${repair.row}`, formula: upgraded.data[0].rowData[0].values[column - 1].userEnteredValue.formulaValue };
-  });
-  return repairs;
+  }) : repairs;
+  return mapped.filter(repair => !excludedColumns.includes(repair.column));
 }
 
 function rollDimensionFormulaRepairs(startRow, count) {
@@ -724,6 +738,19 @@ export class RollSupplySheetsWriter {
     this.formulaColumns = extended ? [7, 11] : [6, 10];
   }
 
+  configureBoxHeaders(grid) {
+    if (!this.box) return;
+    const layout = { ...this.layout };
+    const takeWork = findHeaderColumn(grid, ["Взяли в работу", "Взят в работу"], layout);
+    const printReady = findHeaderColumn(grid, ["Завершил печать", "Готовность печати"], layout);
+    const cutReady = findHeaderColumn(grid, ["Завершил порезку", "Готовность порезки"], layout);
+    if (takeWork) layout.takeWorkColumn = takeWork;
+    if (printReady) layout.printReady = printReady;
+    if (cutReady) layout.cutReady = cutReady;
+    layout.statusHeadersConfirmed = !!(takeWork && printReady && cutReady);
+    this.layout = Object.freeze(layout);
+  }
+
   async verifyEditAccess() {
     const value = await this.request(
       `https://www.googleapis.com/drive/v3/files/${this.documentId}?fields=id,capabilities(canEdit)`,
@@ -776,7 +803,10 @@ export class RollSupplySheetsWriter {
         "Google не подтвердил выбранный лист.",
         409,
       );
-    if (this.box) this.configureLayout(fold(entered(gridCell(result, HEADER_ROW, 6))) === "расширения");
+    if (this.box) {
+      this.configureLayout(normalizeHeader(entered(gridCell(result, HEADER_ROW, 6))) === "расширения");
+      this.configureBoxHeaders(result);
+    }
     return result;
   }
 
@@ -811,6 +841,7 @@ export class RollSupplySheetsWriter {
     );
     const insertExtension = this.box && !this.layout.extension;
     if (insertExtension) { sourceGrid = boxTemplateWithExtension(sourceGrid); this.configureLayout(true); }
+    if (this.box) this.configureBoxHeaders(sourceGrid);
     validateTemplate(sourceGrid, this.box, this.layout, true);
     if (gridCell(sourceGrid, 1, 1).userEnteredValue?.formulaValue)
       fail(
@@ -829,15 +860,25 @@ export class RollSupplySheetsWriter {
     );
     formulaRepairs.push(...catalogRepairs);
     const sourceRows = inputRows(sourceGrid, this.layout);
-    const clearThrough = Math.max(
-      lastLiteralDataRow(sourceGrid, this.layout),
-      DATA_START_ROW + lines.length - 1,
-    );
+    const clearThrough = this.box
+      ? DATA_START_ROW + lines.length - 1
+      : Math.max(
+          lastLiteralDataRow(sourceGrid, this.layout),
+          DATA_START_ROW + lines.length - 1,
+        );
+    const takeWorkColumn = this.box ? this.layout.takeWorkColumn : null;
+    if (this.box && !this.layout.statusHeadersConfirmed)
+      fail(
+        "box_status_headers_missing",
+        "В шаблоне бокса не подтверждены колонки «Взяли в работу», «Завершил печать» и «Завершил порезку». Создание остановлено без изменений.",
+        409,
+      );
     if (this.box)
       formulaRepairs.push(
         ...boxDimensionFormulaRepairs(
           DATA_START_ROW,
           clearThrough - DATA_START_ROW + 1, this.layout,
+          [takeWorkColumn, this.layout.printReady, this.layout.cutReady].filter(Boolean),
         ),
       );
     else formulaRepairs.push(...rollDimensionFormulaRepairs(DATA_START_ROW, lines.length));
@@ -849,8 +890,8 @@ export class RollSupplySheetsWriter {
       this.layout,
     );
     validateTemplateInputRange(sourceGrid, clearThrough, this.layout);
-    if (this.box && lines.some((_, i) => [this.layout.printReady, this.layout.cutReady].some(column => gridCell(sourceGrid, DATA_START_ROW + i, column).userEnteredValue?.formulaValue)))
-      fail("box_status_formula", "В полях готовности бокса найдена формула. Запись остановлена.");
+    if (this.box && lines.some((_, i) => [takeWorkColumn, this.layout.printReady, this.layout.cutReady].some(column => gridCell(sourceGrid, DATA_START_ROW + i, column).userEnteredValue?.formulaValue)))
+      fail("box_status_formula", "В полях отметок бокса найдена формула. Запись остановлена.");
     if (
       sourceRows
         .filter((row) => row.row <= clearThrough)
@@ -877,6 +918,9 @@ export class RollSupplySheetsWriter {
       sourceSheetId: template.sheetId,
       startRow: DATA_START_ROW,
       clearThrough,
+      ...(this.box ? { trimToRowCount: clearThrough, takeWorkColumn } : {}),
+      ...(this.box ? { printReadyColumn: this.layout.printReady, cutReadyColumn: this.layout.cutReady } : {}),
+      templateRowCount: sourceGrid.properties.gridProperties.rowCount,
       formulaSignature: formulas,
       formulaRepairs,
       lines,
@@ -968,7 +1012,7 @@ export class RollSupplySheetsWriter {
         `Нельзя добавить артикул в начало: в строке ${templateRow} отсутствуют формулы ${missingFormulaColumns.map(columnName).join(", ")}. Данные не записаны.`,
         409,
       );
-    if ([this.layout.article, this.layout.extension, this.layout.quantity, this.layout.remainingPrint, this.layout.uid, ...(this.box ? [this.layout.printReady, this.layout.cutReady] : [])].filter(Boolean).some((column) =>
+    if ([this.layout.article, this.layout.extension, this.layout.quantity, this.layout.remainingPrint, this.layout.uid, ...(this.box ? [this.layout.takeWorkColumn, this.layout.printReady, this.layout.cutReady] : [])].filter(Boolean).some((column) =>
       gridCell(grid, templateRow, column).userEnteredValue?.formulaValue,
     ))
       fail(
@@ -1002,6 +1046,11 @@ export class RollSupplySheetsWriter {
     return {
       action: "append",
       extendedBox: this.box && !!this.layout.extension,
+      ...(this.box && this.layout.takeWorkColumn ? {
+        takeWorkColumn: this.layout.takeWorkColumn,
+        printReadyColumn: this.layout.printReady,
+        cutReadyColumn: this.layout.cutReady,
+      } : {}),
       name,
       sheetId,
       startRow,
@@ -1012,7 +1061,7 @@ export class RollSupplySheetsWriter {
       copyFormulaColumns: Array.from({ length: this.layout.maxColumn }, (_, i) => i + 1).filter(column => gridCell(grid, DATA_START_ROW, column).userEnteredValue?.formulaValue),
       formulaSourceRow: DATA_START_ROW + lines.length,
       formulaRepairs: [...catalogRepairs, ...(this.box
-        ? boxDimensionFormulaRepairs(startRow, lines.length, this.layout)
+        ? boxDimensionFormulaRepairs(startRow, lines.length, this.layout, [this.layout.takeWorkColumn, this.layout.printReady, this.layout.cutReady].filter(Boolean))
         : rollDimensionFormulaRepairs(startRow, lines.length))],
       verifyThrough: Math.max(scanRows, DATA_START_ROW + MAX_ORDERS - 1) + lines.length,
     };
@@ -1118,6 +1167,13 @@ export class RollSupplySheetsWriter {
 
   async execute(plan) {
     if (this.box && ["create", "append"].includes(plan.action) && plan.extendedBox !== undefined) this.configureLayout(plan.extendedBox === true);
+    if (this.box && plan.takeWorkColumn)
+      this.layout = Object.freeze({
+        ...this.layout,
+        takeWorkColumn: plan.takeWorkColumn,
+        printReady: plan.printReadyColumn,
+        cutReady: plan.cutReadyColumn,
+      });
     if (plan.action === "updateItem" || plan.action === "removeItem") {
       const values = plan.action === "updateItem"
         ? { article: plan.article, quantity: plan.quantity, remainingPrint: plan.remainingPrint, uid: plan.uid }
@@ -1225,6 +1281,23 @@ export class RollSupplySheetsWriter {
       for (let index = (sourceGrid.conditionalFormats || []).length - 1; index >= 0; index--)
         requests.push({ deleteConditionalFormatRule: { sheetId, index } });
       requests.push({ repeatCell: { range: { sheetId }, cell: { userEnteredFormat: { backgroundColorStyle: { rgbColor: { red: 1, green: 1, blue: 1 } }, textFormat: { foregroundColorStyle: { rgbColor: { red: 0, green: 0, blue: 0 } } } } }, fields: "userEnteredFormat.backgroundColor,userEnteredFormat.backgroundColorStyle,userEnteredFormat.textFormat.foregroundColor,userEnteredFormat.textFormat.foregroundColorStyle" } });
+      const paleGreen = { red: 0.89, green: 0.96, blue: 0.89 };
+      const paleOrange = { red: 1, green: 0.94, blue: 0.86 };
+      const highlightColumn = (columnIndex, rgbColor) => requests.push({ repeatCell: {
+        range: {
+          sheetId,
+          startRowIndex: HEADER_ROW - 1,
+          startColumnIndex: columnIndex,
+          endColumnIndex: columnIndex + 1,
+        },
+        cell: { userEnteredFormat: { backgroundColor: rgbColor, backgroundColorStyle: { rgbColor } } },
+        fields: "userEnteredFormat.backgroundColor,userEnteredFormat.backgroundColorStyle",
+      } });
+      // Column P is the per-article quantity in the current roll and box layouts.
+      highlightColumn(15, paleGreen);
+      // In box sheets, tint the work checkbox column (Q in the current schema).
+      if (this.box && Number.isSafeInteger(plan.takeWorkColumn))
+        highlightColumn(plan.takeWorkColumn - 1, paleOrange);
       requests.push({ updateDimensionProperties: { range: { sheetId, dimension: "ROWS", startIndex: 0, endIndex: sourceGrid.properties.gridProperties.rowCount }, properties: { hiddenByUser: false }, fields: "hiddenByUser" } });
       if (plan.insertExtension) requests.push(cellsForColumn({ sheetId, startRow: HEADER_ROW, columnIndex: 5, items: [{ extension: "расширения" }] }, "extension", "string"));
       requests.push(
@@ -1308,7 +1381,14 @@ export class RollSupplySheetsWriter {
     if (this.box && plan.action === "create") requests.push(cellsForColumn({ sheetId, startRow: 1, columnIndex: this.layout.uid - 1, items: [{ uid: "UID" }] }, "uid", "string"));
     if (this.box) requests.push({ updateCells: { start: { sheetId, rowIndex: plan.startRow - 1, columnIndex: this.layout.printReady - 1 },
       rows: plan.lines.map(() => ({ values: [{ userEnteredValue: { boolValue: false } }, { userEnteredValue: { boolValue: false } }] })), fields: "userEnteredValue" } });
+    if (this.box && plan.takeWorkColumn && ["create", "append"].includes(plan.action)) requests.push({ updateCells: {
+      start: { sheetId, rowIndex: plan.startRow - 1, columnIndex: plan.takeWorkColumn - 1 },
+      rows: plan.lines.map(() => ({ values: [{ userEnteredValue: { boolValue: false } }] })),
+      fields: "userEnteredValue",
+    } });
     if (plan.manifest) requests.push(...supplyManifestRequests(sheetId, plan.manifest));
+    if (plan.action === "create" && Number.isSafeInteger(plan.trimToRowCount) && plan.trimToRowCount < plan.templateRowCount)
+      requests.push({ deleteDimension: { range: { sheetId, dimension: "ROWS", startIndex: plan.trimToRowCount, endIndex: plan.templateRowCount } } });
     const result = await this.request(
       `https://sheets.googleapis.com/v4/spreadsheets/${this.documentId}:batchUpdate`,
       { method: "POST", body: { requests }, write: true },
@@ -1353,6 +1433,8 @@ export class RollSupplySheetsWriter {
         "Лист после записи не найден по точному ID и названию.",
         503,
       );
+    if (plan.action === "create" && Number.isSafeInteger(plan.trimToRowCount) && target.gridProperties?.rowCount !== plan.trimToRowCount)
+      fail("box_trailing_rows_readback_failed", "Лист бокса создан, но лишние пустые строки после поставки не удалены. Проверьте лист перед повторной операцией.", 503);
     const grid = await this.grid(
       plan.name,
       Math.max(
@@ -1408,7 +1490,7 @@ export class RollSupplySheetsWriter {
       )
         fail(
           "roll_supply_formula_readback_failed",
-          "Лист создан, но набор формул отличается от шаблона. Повторная запись заблокирована.",
+          `Лист создан, но набор формул отличается от шаблона (${plan.formulaSignature.count} ожидалось, ${actualFormulas.count} прочитано). Повторная запись заблокирована.`,
           503,
         );
       const expected = new Map();
@@ -1418,7 +1500,11 @@ export class RollSupplySheetsWriter {
         expected.set(`${columnName(this.layout.quantity)}${row}`, line.quantity);
         if (this.layout.extension) expected.set(`${columnName(this.layout.extension)}${row}`, line.extension || "");
         if (!this.box) expected.set(`${columnName(this.layout.remainingPrint)}${row}`, line.quantity);
-        if (this.box) { expected.set(`${columnName(this.layout.printReady)}${row}`, false); expected.set(`${columnName(this.layout.cutReady)}${row}`, false); }
+        if (this.box) {
+          expected.set(`${columnName(this.layout.printReady)}${row}`, false);
+          expected.set(`${columnName(this.layout.cutReady)}${row}`, false);
+          expected.set(`${columnName(plan.takeWorkColumn)}${row}`, false);
+        }
         expected.set(`${columnName(this.layout.uid)}${row}`, plan.uids[index].uid);
       });
       for (let row = DATA_START_ROW; row <= plan.clearThrough; row++) {
@@ -1430,7 +1516,7 @@ export class RollSupplySheetsWriter {
             if (entered(cell) !== expected.get(address))
               fail(
                 "roll_supply_input_readback_failed",
-                `Лист создан, но значение ${address} не совпадает с подтверждённой поставкой. Повторная запись заблокирована.`,
+                `Лист создан, но значение ${address} не совпадает с подтверждённой поставкой (${JSON.stringify(entered(cell))} вместо ${JSON.stringify(expected.get(address))}). Повторная запись заблокирована.`,
                 503,
               );
           } else if (isLiteralValue(cell)) {
@@ -1453,6 +1539,8 @@ export class RollSupplySheetsWriter {
     const calculations = [];
     for (let index = 0; index < plan.lines.length; index++) {
       const row = plan.startRow + index;
+      if (this.box && plan.takeWorkColumn && ["create", "append"].includes(plan.action) && entered(gridCell(grid, row, plan.takeWorkColumn)) !== false)
+        fail("box_take_work_readback_failed", `Не подтверждена пустая отметка «Взяли в работу» для строки ${row}. Повторная запись заблокирована.`, 503);
       if (this.box && [this.layout.printReady, this.layout.cutReady].some(column => entered(gridCell(grid, row, column)) !== false))
         fail("box_status_readback_failed", "Исходная готовность новых товаров бокса не подтверждена.", 503);
       const article = entered(gridCell(grid, row, this.layout.article));

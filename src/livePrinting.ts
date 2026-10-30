@@ -251,7 +251,16 @@ export function useLivePrinting(enabled = true) {
                 ? 15000
                 : 60000,
           );
-        } else setError("");
+        } else {
+          setError("");
+          if (j.refreshInProgress === true) {
+            scheduleRetry(
+              Number.isFinite(j.refreshRetryAfterMs)
+                ? Math.max(5000, Math.min(120000, j.refreshRetryAfterMs))
+                : 15000,
+            );
+          }
+        }
       }
     } catch (cause) {
       if (!controller.signal.aborted) {

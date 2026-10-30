@@ -53,6 +53,10 @@ export async function createServices(bindings, scope, { fetcher = fetch, refresh
   const legacy = new RollSupplyManagementService(scope, { writer: writers?.roll || null, recoverInterrupted: !!scope.lease, refresh: refreshPrinting, getPrintingSnapshot: () => latestPrinting });
   const production = new ProductionSupplyService(scope, {
     writers, legacy, recoverInterrupted: !!scope.lease, refresh: refreshPrinting,
+    // The two department writes are already read back and committed before
+    // the response. A full source scan must not hold the production write
+    // lease or keep the manager's create button disabled.
+    refreshAfterWrite: false,
     beforeCreateWrite: async (operation) => {
       const shipmentIds = (operation.steps || []).map((step) => {
         const sheetId = Number(step?.plan?.sheetId);
