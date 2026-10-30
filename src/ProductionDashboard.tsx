@@ -276,7 +276,7 @@ export function ProductionDashboard({
   const [store, setStore] = useState("all");
   const [supply, setSupply] = useState(initialSupply);
   const [search, setSearch] = useState("");
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const groups = useMemo(() => buildGroups(live), [live]);
   const stores = useMemo(
     () =>
@@ -572,7 +572,7 @@ export function ProductionDashboard({
         </div>
         <div className="production-supply-list">
           {visibleGroups.map((group) => {
-            const isCollapsed = collapsed.has(group.key);
+            const isExpanded = expanded.has(group.key);
             const remainingForGroup =
               group.packed.complete && group.packed.value !== null
                 ? group.plan - group.packed.value
@@ -588,10 +588,10 @@ export function ProductionDashboard({
                 <div className="production-supply-card-header">
                   <button
                     className="production-supply-toggle"
-                    aria-label={`${isCollapsed ? "Развернуть" : "Свернуть"} ${group.name}`}
-                    aria-expanded={!isCollapsed}
+                    aria-label={`${isExpanded ? "Свернуть" : "Развернуть"} ${group.name}`}
+                    aria-expanded={isExpanded}
                     onClick={() =>
-                      setCollapsed((previous) => {
+                      setExpanded((previous) => {
                         const next = new Set(previous);
                         if (next.has(group.key)) next.delete(group.key);
                         else next.add(group.key);
@@ -599,10 +599,10 @@ export function ProductionDashboard({
                       })
                     }
                   >
-                    {isCollapsed ? (
-                      <CaretRight size={17} />
-                    ) : (
+                    {isExpanded ? (
                       <CaretDown size={17} />
+                    ) : (
+                      <CaretRight size={17} />
                     )}
                   </button>
                   <MarketplaceMark market={group.market} />
@@ -644,7 +644,7 @@ export function ProductionDashboard({
                     </span>
                   )}
                 </div>
-                {!isCollapsed && (
+                {isExpanded && (
                   <div className="production-supply-card-body">
                     <div className="production-department-grid">
                       {group.departments.map((department) => (

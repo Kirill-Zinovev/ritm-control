@@ -375,7 +375,7 @@ export function MachineWorkload({
         (key) => parameter(key, "all") !== "all",
       ) || !!parameter("q", ""),
   );
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const all = useMemo(() => buildMachineWorkload(live), [live]);
   useEffect(() => {
     if (live && supply !== "all" && !all.some((item) => item.key === supply))
@@ -682,7 +682,9 @@ export function MachineWorkload({
             </section>
           )}
           {view === "supplies"
-            ? filtered.map((item) => (
+            ? filtered.map((item) => {
+                const isExpanded = expanded.has(item.key);
+                return (
                 <article className="mw-supply" key={item.key}>
                   <header className="mw-supply-header">
                     <span
@@ -725,25 +727,23 @@ export function MachineWorkload({
                       className="mw-collapse"
                       type="button"
                       onClick={() =>
-                        setCollapsed((old) => {
+                        setExpanded((old) => {
                           const next = new Set(old);
-                          next.has(item.key)
-                            ? next.delete(item.key)
-                            : next.add(item.key);
+                          next.has(item.key) ? next.delete(item.key) : next.add(item.key);
                           return next;
                         })
                       }
-                      aria-expanded={!collapsed.has(item.key)}
-                      aria-label={`${collapsed.has(item.key) ? "Развернуть" : "Свернуть"} ${item.name}`}
+                      aria-expanded={isExpanded}
+                      aria-label={`${isExpanded ? "Свернуть" : "Развернуть"} ${item.name}`}
                     >
-                      {collapsed.has(item.key) ? (
-                        <CaretRight size={20} />
-                      ) : (
+                      {isExpanded ? (
                         <CaretDown size={20} />
+                      ) : (
+                        <CaretRight size={20} />
                       )}
                     </button>
                   </header>
-                  {!collapsed.has(item.key) && (
+                  {isExpanded && (
                     <>
                       <div className="mw-lanes">
                         {(["roll", "box"] as const)
@@ -776,7 +776,8 @@ export function MachineWorkload({
                     </>
                   )}
                 </article>
-              ))
+                );
+              })
             : machines.map((m) => (
                 <article className="mw-station-panel" key={m.key}>
                   <header>
