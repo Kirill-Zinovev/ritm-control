@@ -436,6 +436,36 @@ test("box progress uses confirmed R/S flags and preserves unknown manual print a
   assert.equal(order.areaKnown, false);
 });
 
+test("box sheets read extension F and production completion flags by their real headers", () => {
+  const rows = Array.from({ length: 5 }, () => Array(29).fill(""));
+  rows[0][28] = "UID";
+  rows[3][4] = "Артикул";
+  rows[3][5] = "Расширения";
+  rows[3][15] = "Кол-во";
+  rows[3][17] = "Завершил печать";
+  rows[3][18] = "Завершил порезку";
+  rows[4][4] = "BOX-SKU";
+  rows[4][5] = "U3";
+  rows[4][15] = 40;
+  rows[4][17] = true;
+  rows[4][18] = false;
+  rows[4][28] = "box-header-uid";
+
+  const order = indexOrders([{
+    gid: 703,
+    name: "OZON Бокс",
+    sourceId: "box-printing",
+    headerRow: 4,
+    dataStartRow: 5,
+    rows,
+  }]).orders[0];
+
+  assert.equal(order.extension, "U3");
+  assert.equal(order.printProgress, 40);
+  assert.equal(order.cutProgress, 0);
+  assert.equal(order.remainingPrint, 0);
+});
+
 test("inserted supply columns preserve quantities, area and roll/box progress", () => {
   const headers = ["Дата скидывания", "Фото", "Наличие макета", "Станок", "Артикул", "расширения", "Кол-во листов", "Размер", "Ширина", "Высота", "Объем на все кол-во скинули", "Объем на все кол-во осталось", "Папка печати", "Кратность", "Время печати 1 кол-ва на листе (мин)", "Кол-во", "округление", "Кол-во осталось", "Готовность печати", "Готовность порезки", "Прогресс печати", "Прогресс порезки", "Дата готовности печати", "Дата готовности порезки", "остаток по печати:"];
   const rows = Array.from({length: 4}, () => Array(30).fill(""));

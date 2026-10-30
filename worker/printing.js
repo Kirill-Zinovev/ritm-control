@@ -349,8 +349,8 @@ export function indexOrders(sheets) {
     };
     const articleColumn = findColumn("Артикул");
     const quantityColumn = findColumn("Кол-во");
-    const extensionColumn = sourceId === "roll-printing"
-      ? findColumn("Расширения", "Расширение печати")
+    const extensionColumn = ["roll-printing", "box-printing"].includes(sourceId)
+      ? findColumn("Расширения", "Расширение печати", "Расширение")
       : -1;
     if (articleColumn < 0 || quantityColumn < 0)
       throw Object.assign(new Error("Order schema changed"), {
@@ -376,8 +376,20 @@ export function indexOrders(sheets) {
     const rollPrintColumn = fieldColumn(19, "Прогресс печати");
     const rollCutColumn = fieldColumn(20, "Прогресс порезки");
     const rollRemainingColumn = fieldColumn(23, "Остаток по печати:", "Остаток по печати");
-    const boxPrintColumn = fieldColumn(17, "Готовность печати");
-    const boxCutColumn = fieldColumn(18, "Готовность порезки");
+    const boxPrintColumn = fieldColumn(
+      17,
+      "Готовность печати",
+      "Завершил печать",
+      "Печать завершена",
+      "Завершена печать",
+    );
+    const boxCutColumn = fieldColumn(
+      18,
+      "Готовность порезки",
+      "Завершил порезку",
+      "Порезка завершена",
+      "Завершена порезка",
+    );
     const uidHeaderCol = (rows[uidHeaderRow - 1] || []).indexOf("UID");
     const uidCol = uidHeaderCol >= 0
       ? uidHeaderCol
