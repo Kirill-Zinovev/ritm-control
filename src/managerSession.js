@@ -34,6 +34,8 @@ export function installManagerSessionFetch() {
       || path === "/api/warehouse"
       || path === "/api/warehouse/dispatch"
       || path === "/api/cloud/registry"
+      || path === "/api/production-controls"
+      || path === "/api/shipment-locks"
       || path === "/api/roll-supplies"
       || path === "/api/assembly-transfers"
       || path.startsWith("/api/roll-supplies/")
