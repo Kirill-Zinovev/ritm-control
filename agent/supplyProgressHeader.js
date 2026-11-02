@@ -25,7 +25,7 @@ export function supplyProgressHeaderRequests(sheet, {box=false,newSupply=false,n
   for(const [i,label,color] of [[0,'ПЕЧАТЬ','#2688FF'],[1,'ПОРЕЗКА','#19AF9A']]){
     const start=i?mid:0,finish=i?end:mid;
     for(const row of [1,2])requests.push({mergeCells:{range:{sheetId:id,startRowIndex:row,endRowIndex:row+1,startColumnIndex:start,endColumnIndex:finish},mergeType:'MERGE_ALL'}});
-    write(1,start,{formulaValue:`=IFERROR(IF(${plan}>0;"${label}  "&TEXT(${amounts[i]}/${plan};"0%")&CHAR(10)&TEXT(${amounts[i]};"0.##")&" из "&TEXT(${plan};"0.##")&" шт.";"${label} · нет плана");"${label} · данные не подтверждены")`});
+    write(1,start,{formulaValue:`=IFERROR(IF(${plan}>0;"${label}  "&TEXT(ROUNDDOWN(${amounts[i]}/${plan}*100;1)/100;"0.0%")&CHAR(10)&TO_TEXT(ROUND(${amounts[i]};2))&" из "&TO_TEXT(ROUND(${plan};2))&" шт.";"${label} · нет плана");"${label} · данные не подтверждены")`});
     write(2,start,{formulaValue:`=IFERROR(SPARKLINE(MIN(1;${amounts[i]}/${plan});{"charttype"\\"bar";"max"\\1;"color1"\\"${color}"});"")`});
     requests.push({repeatCell:{range:{sheetId:id,startRowIndex:1,endRowIndex:3,startColumnIndex:start,endColumnIndex:finish},cell:{userEnteredFormat:{backgroundColor:i?{red:.91,green:.98,blue:.96}:{red:.91,green:.95,blue:1},textFormat:{bold:true,fontSize:16}}},fields:'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat'}});
   }
