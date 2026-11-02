@@ -86,7 +86,12 @@ function boxIdentity_(sh,row){
   var found=range.getDeveloperMetadata().filter(function(m){return m.getKey()==='RITM_BOX_POSITION';});
   if(found.length>1)throw new Error('Неоднозначный идентификатор строки.');
   if(found.length)return found[0].getValue();
-  var id=Utilities.getUuid();range.addDeveloperMetadata('RITM_BOX_POSITION',id);return id;
+  return boxLocked_(function(){
+    var current=range.getDeveloperMetadata().filter(function(m){return m.getKey()==='RITM_BOX_POSITION';});
+    if(current.length>1)throw new Error('Неоднозначный идентификатор строки.');
+    if(current.length)return current[0].getValue();
+    var id=Utilities.getUuid();range.addDeveloperMetadata('RITM_BOX_POSITION',id);return id;
+  });
 }
 function boxRow_(sh,id){
   var matches=sh.createDeveloperMetadataFinder().withKey('RITM_BOX_POSITION').withValue(id).find();
@@ -110,10 +115,10 @@ function boxPosition_(sh,row){
 }
 function boxHash_(data){return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,JSON.stringify(data),Utilities.Charset.UTF_8).map(function(b){return ('0'+((b+256)%256).toString(16)).slice(-2);}).join('');}
 function boxEmployees_(journal){var sh=journal.getSheetByName('Сотрудники');if(!sh||sh.getLastRow()<2)return [];var seen={},names={},result=[];sh.getRange(2,1,sh.getLastRow()-1,3).getValues().forEach(function(r,i){var name=String(r[0]||'').trim();if(!name||r[1]===false||String(r[1]).toUpperCase()==='FALSE')return;var id=String(r[2]||'').trim();if(!id){id=Utilities.getUuid();sh.getRange(i+2,3).setValue(id);}if(seen[id]||names[boxFold_(name)])throw new Error('Повторный сотрудник в списке бокса.');seen[id]=true;names[boxFold_(name)]=true;result.push({id:id,name:name});});return result;}
-function boxBaseline_(books,p,id){
+function boxBaseline_(books,p,id,create){
   var sh=books.journal.getSheetByName('_Позиции'), hit=boxFind_(sh,1,id);
   if(hit){var v=sh.getRange(hit.getRow(),1,1,BOXW.positionHeaders.length).getValues()[0];if(v[1]!==books.source.getId()||Number(v[2])!==p.sheetId||v[3]!==p.article)throw new Error('Изменилась связь позиции с журналом.');return {taken:Number(v[4]),printed:Number(v[5]),cut:Number(v[6]),defect:Number(v[7]),surplus:Number(v[8]),takenAt:v[10]||'',printedAt:v[11]||'',cutAt:v[12]||'',positionId:id};}
-  sh.appendRow([id,books.source.getId(),p.sheetId,p.article,p.legacy.taken,p.legacy.printed,p.legacy.cut,0,0,new Date().toISOString(),p.legacyDates.takenAt,p.legacyDates.printedAt,p.legacyDates.cutAt]);return Object.assign({taken:p.legacy.taken,printed:p.legacy.printed,cut:p.legacy.cut,defect:0,surplus:0,positionId:id},p.legacyDates);
+  if(create!==false)sh.appendRow([id,books.source.getId(),p.sheetId,p.article,p.legacy.taken,p.legacy.printed,p.legacy.cut,0,0,new Date().toISOString(),p.legacyDates.takenAt,p.legacyDates.printedAt,p.legacyDates.cutAt]);return Object.assign({taken:p.legacy.taken,printed:p.legacy.printed,cut:p.legacy.cut,defect:0,surplus:0,positionId:id},p.legacyDates);
 }
 function boxEvents_(journal,id){var sh=journal.getSheetByName('Журнал');if(sh.getLastRow()<2)return [];return sh.getRange(2,4,sh.getLastRow()-1,1).createTextFinder(id).matchEntireCell(true).useRegularExpression(false).findAll().map(function(cell){var v=sh.getRange(cell.getRow(),1,1,BOXW.eventHeaders.length).getValues()[0],e={};BOXW.eventHeaders.forEach(function(k,i){e[k]=v[i];});Object.keys(BOXW.actions).forEach(function(k){if(e.action===BOXW.actions[k])e.action=k;});return e;});}
 function boxTotals_(base,events){var totals=Object.assign({},base),cancelled={};events.forEach(function(e){if(e.action==='cancel')cancelled[e.reverses]=true;});['take','print','cut'].forEach(function(action){var key={take:'taken',print:'printed',cut:'cut'}[action];if(cancelled['baseline:'+action+':'+base.positionId]){totals[key]=0;totals[key+'At']='';}});events.forEach(function(e){if(e.action!=='cancel'&&!cancelled[e.eventId]){var key={take:'taken',print:'printed',cut:'cut',defect:'defect',surplus:'surplus'}[e.action];if(!key)throw new Error('Неизвестная операция в журнале.');totals[key]+=Number(e.sheets);if(['taken','printed','cut'].indexOf(key)>=0)totals[key+'At']=e.at;}});return {totals:totals,cancelled:cancelled};}
@@ -133,14 +138,22 @@ function boxProject_(books,sh,p,id,totals){
 }
 function getBoxPanelSelection(){var book=SpreadsheetApp.getActiveSpreadsheet(),range=book.getActiveRange(),sh=range&&range.getSheet();return {eligible:boxEligible_(sh),signature:sh?[sh.getSheetId(),range.getRow(),PropertiesService.getScriptProperties().getProperty('BOX_REVISION')||''].join(':'):''};}
 function getBoxPanelContext(lastKey){
-  return boxLocked_(function(){var books=boxBooks_(),range=books.source.getActiveRange(),sh=range.getSheet();
-    var p=boxPosition_(sh,range.getRow()),id=boxIdentity_(sh,p.row),key=p.sheetId+':'+id+':'+p.fingerprint+':'+(PropertiesService.getScriptProperties().getProperty('BOX_REVISION')||'');
-    if(lastKey===key)return {unchanged:true,key:key};
-    var base=boxBaseline_(books,p,id),events=boxEvents_(books.journal,id),state=boxTotals_(base,events);
-    boxProject_(books,sh,p,id,state.totals);
+  var source=SpreadsheetApp.getActiveSpreadsheet(),range=source.getActiveRange(),sh=range&&range.getSheet(),props=PropertiesService.getScriptProperties();
+  if(!boxEligible_(sh)||range.getRow()<5)throw new Error('Выберите артикул на рабочем листе OZON или WB.');
+  if(props.getProperty('BOX_SOURCE_ID')!==source.getId())throw new Error('Учёт ещё не подключён.');
+  var key=[sh.getSheetId(),range.getRow(),boxHash_(sh.getRange(range.getRow(),5,1,12).getValues()[0]),props.getProperty('BOX_REVISION')||''].join(':');
+  // Unchanged selections never open the journal, wait for a writer or rewrite cells.
+  if(lastKey===key)return {unchanged:true,key:key};
+  var cache=null,cacheKey='boxcard:'+boxHash_([source.getId(),props.getProperty('BOX_JOURNAL_ID'),key]);
+  try{cache=CacheService.getScriptCache();var cached=lastKey&&cache.get(cacheKey);if(cached){var card=JSON.parse(cached);if(card.key===key)return card;}}catch(ignore){}
+  var result=(function(){var books=boxBooks_();
+    var p=boxPosition_(sh,range.getRow()),id=boxIdentity_(sh,p.row);
+    var base=boxBaseline_(books,p,id,false),events=boxEvents_(books.journal,id),state=boxTotals_(base,events);
     return {key:key,positionId:id,sheetId:p.sheetId,shipment:p.shipment,article:p.article,fingerprint:p.fingerprint,planKits:p.planKits,sheetsPerKit:p.sheetsPerKit,planSheets:p.planSheets,totals:state.totals,employees:boxEmployees_(books.journal),
       journalUrl:books.journal.getUrl(),history:boxHistory_(base,events,state.cancelled)};
-  });
+  })();
+  try{if(cache)cache.put(cacheKey,JSON.stringify(result),60);}catch(ignore){}
+  return result;
 }
 function boxHistory_(base,events,cancelled){var history=[];['take','print','cut'].forEach(function(action){var key={take:'taken',print:'printed',cut:'cut'}[action];if(base[key]>0)history.push({eventId:'baseline:'+action+':'+base.positionId,at:base[key+'At']||'',employee:'До подключения учёта',action:action,sheets:base[key]});});return history.concat(events.filter(function(e){return e.action!=='cancel';})).slice(-12).reverse().map(function(e){return {id:e.eventId,at:e.at,employee:e.employee,action:e.action,sheets:e.sheets,cancelled:!!cancelled[e.eventId]};});}
 function saveBoxWork(request){var outcome={written:false,confirmedAbsent:false};try{return boxSaveCore_(request,outcome);}catch(e){throw new Error((outcome.confirmedAbsent&&!outcome.written?'NOT_SAVED: ':'')+(e.message||String(e)));}}

@@ -18,7 +18,7 @@ function fixture(){
  const c=vm.createContext({console,Date,Number,Object,JSON,Utilities:{getUuid:randomUUID,DigestAlgorithm:{SHA_256:'sha256'},Charset:{UTF_8:'utf8'},computeDigest:(_,text)=>[...createHash('sha256').update(text).digest()]},
    LockService:{getScriptLock:()=>({tryLock:()=>{if(locked)return false;hasLock=true;return true;},releaseLock:()=>{hasLock=false;}})},PropertiesService:{getScriptProperties:()=>({setProperty(){}})}});
  vm.runInContext(code,c);
- c.boxBooks_=()=>({source:{getId:()=>sourceId,getSheetById:id=>Number(id)===7?{}:null},journal:{getSheetByName:()=>journal}});
+ c.boxBooks_=()=>({source:{getId:()=>sourceId,getSheetById:id=>Number(id)===7?{}:null},journal:{getSheetByName:()=>journal,getUrl:()=>'https://example.invalid/test-journal'}});
  c.boxEmployees_=()=>[{id:'employee-1',name:'Тестовый сотрудник'}];c.boxRow_=(_,id)=>{assert.equal(id,'position-1');return 5;};c.boxPosition_=()=>({...p});c.boxBaseline_=()=>({...base});
  c.boxProject_=(_books,_sh,pos,id,totals)=>{assert.ok(hasLock);if(failProjection){failProjection=false;throw new Error('projection unavailable');}projections.push(JSON.parse(JSON.stringify(totals)));};
  const req=(overrides={})=>({requestId:randomUUID(),positionId:'position-1',sheetId:7,fingerprint:p.fingerprint,employeeId:'employee-1',action:'print',unit:'sheets',quantity:12,stage:'',reason:'',reverses:'',...overrides});
@@ -43,3 +43,27 @@ test('baseline completion can be cancelled with an attributed audit event',()=>{
 test('changed source plan, another source position or occupied writer never writes',()=>{const f=fixture();assert.throws(()=>f.c.saveBoxWork(f.req({fingerprint:'stale'})),/изменились/);assert.throws(()=>f.c.saveBoxWork(f.req({positionId:'another'})));f.lock();assert.throws(()=>f.c.saveBoxWork(f.req()),/другая запись/);assert.equal(f.data.length,0);});
 test('scope accepts shipment prefixes and excludes hidden/cache/bare marketplace tabs',()=>{const f=fixture();for(const name of ['OZON МОСКВА','wb test','  OZON СПБ '])assert.equal(f.c.boxEligible_({getName:()=>name,isSheetHidden:()=>false}),true);for(const name of ['OZON','WB','Cache FBO','_SYSTEM','OZONISH test','Журнал OZON'])assert.equal(f.c.boxEligible_({getName:()=>name,isSheetHidden:()=>false}),false);assert.equal(f.c.boxEligible_({getName:()=>'OZON Old',isSheetHidden:()=>true}),false);});
 test('cancellation never affects another article and surplus does not increase readiness',()=>{const f=fixture();f.c.saveBoxWork(f.req({action:'surplus',quantity:45}));assert.throws(()=>f.c.saveBoxWork(f.req({action:'cancel',reverses:'unrelated-article-event',reason:'Ошибка'})),/не найдена/);assert.equal(f.projections.at(-1).printed,0);});
+test('card selection never projects or rewrites totals; unchanged polling avoids journal and writer lock',()=>{
+ const f=fixture();let journalReads=0;
+ const sheet={getName:()=>'OZON TEST',isSheetHidden:()=>false,getSheetId:()=>7,getRange:()=>({getValues:()=>[['NC0005.A5121',2,20]]})};
+ f.c.SpreadsheetApp={getActiveSpreadsheet:()=>({getId:()=>'TEST-BOX-ONLY',getActiveRange:()=>({getSheet:()=>sheet,getRow:()=>5})})};
+ f.c.PropertiesService={getScriptProperties:()=>({getProperty:key=>key==='BOX_SOURCE_ID'?'TEST-BOX-ONLY':''})};
+ f.c.boxIdentity_=()=>'position-1';f.c.boxBaseline_=(_books,_p,_id,create)=>{assert.equal(create,false);journalReads++;return {...f.base};};
+ f.c.boxProject_=()=>{throw new Error('read must not rewrite source');};
+ const first=f.c.getBoxPanelContext('');assert.equal(first.article,'NC0005.A5121');assert.equal(journalReads,1);
+ const books=f.c.boxBooks_;f.lock();f.c.boxBooks_=()=>{throw new Error('unchanged read must not open journal');};
+ assert.equal(f.c.getBoxPanelContext(first.key).unchanged,true);assert.equal(journalReads,1);assert.equal(f.data.length,0);
+ f.c.boxBooks_=books;assert.equal(f.c.getBoxPanelContext('').article,'NC0005.A5121');assert.equal(journalReads,2);
+});
+test('card cache speeds revisits; a saved-event revision and manual refresh always invalidate it',()=>{
+ const f=fixture(),cache=new Map();let revision='',reads=0;
+ const sheet={getName:()=>'OZON TEST',isSheetHidden:()=>false,getSheetId:()=>7,getRange:()=>({getValues:()=>[['NC0005.A5121',2,20]]})};
+ f.c.SpreadsheetApp={getActiveSpreadsheet:()=>({getId:()=>'TEST-BOX-ONLY',getActiveRange:()=>({getSheet:()=>sheet,getRow:()=>5})})};
+ f.c.PropertiesService={getScriptProperties:()=>({getProperty:key=>key==='BOX_SOURCE_ID'?'TEST-BOX-ONLY':key==='BOX_REVISION'?revision:'TEST-JOURNAL'})};
+ f.c.CacheService={getScriptCache:()=>({get:key=>cache.get(key),put:(key,value)=>cache.set(key,value)})};
+ f.c.boxIdentity_=()=>'position-1';f.c.boxBaseline_=()=>{reads++;return {...f.base};};
+ const first=f.c.getBoxPanelContext('');assert.equal(reads,1);
+ assert.equal(f.c.getBoxPanelContext('previous-other-row').totals.printed,0);assert.equal(reads,1);
+ f.base.printed=12;revision='new-confirmed-event';assert.equal(f.c.getBoxPanelContext(first.key).totals.printed,12);assert.equal(reads,2);
+ f.c.getBoxPanelContext('');assert.equal(reads,3);
+});

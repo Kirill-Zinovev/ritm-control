@@ -414,21 +414,11 @@
         if (loading || busy || pending) return;
         loading = true;
         try {
-          const selection = await call("getBoxPanelSelection");
-          if (!selection.eligible) {
-            context = null;
-            lastSelection = selection.signature;
-            $("content").classList.add("hidden");
-            msg("Выберите артикул на рабочем листе OZON или WB.");
-            return;
-          }
-          if (!force && context && selection.signature === lastSelection) return;
-          $("save").disabled = true;
-          msg("Загружаем выбранный артикул…", "success");
           const r = await call(
             "getBoxPanelContext",
-            "",
+            force ? "" : lastSelection,
           );
+          if (r.unchanged) return;
           if (context?.positionId !== r.positionId) {
             $("quantity").value = "";
             $("reason").value = "";
@@ -436,7 +426,7 @@
             action = "print";
           }
           context = r;
-          lastSelection = selection.signature;
+          lastSelection = r.key;
           if (action === "cancel") action = "print";
           choose(action);
           render();
@@ -708,7 +698,7 @@
       boot();
       setInterval(() => {
         if (!document.hidden) load();
-      }, 2500);
+      }, 1500);
     </script>
   </body>
 </html>

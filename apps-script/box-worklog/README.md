@@ -11,6 +11,8 @@ Bound Apps Script for the existing box workbook. This replaces the old bound scr
 - Every employee operation and cancellation requires an enabled employee. Cancellation is a new event referencing the original, with a reason. No journal rows are deleted.
 - Script lock + immutable request ID protect repeated submissions. Journal append precedes projections; retry with the same ID repairs projection only. Existing checkmarks are baselines without an invented employee.
 - Opening the sidebar follows the current selection. Ordinary direct checkbox/summary edits are restored from a local projection guard and do not create work events. This is accidental-edit protection, not a security boundary against spreadsheet owners/editors.
+- Selection changes use one RPC. Unchanged polling reads only the selected source range and revision, without opening the external journal or taking a writer lock. Card reads never rewrite source totals, dates or formatting; baseline persistence and projection occur on saving.
+- Previously visited cards are cached for 60 seconds using source ID, journal ID, selected row contents and the event revision. Work writes invalidate cached cards through a new revision; manual refresh bypasses the cache. Save validation always rereads live data.
 - Newly generated/copied supplies are initialized lazily when first opened in the panel, while generator initialization clears inherited AE:AH results.
 
 Google's native spreadsheet sidebar is approximately 300px wide. The design uses one column and readable controls at this actual width.
