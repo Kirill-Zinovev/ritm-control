@@ -16,7 +16,7 @@ function fixture(){
  })};
  const p={sheetId:7,row:5,shipment:'OZON Test',article:'NC0005.A5121',planKits:20,sheetsPerKit:2,planSheets:40,widthM:.21,heightM:.297,fingerprint:'known-plan'};
  const c=vm.createContext({console,Date,Number,Object,JSON,Utilities:{getUuid:randomUUID,DigestAlgorithm:{SHA_256:'sha256'},Charset:{UTF_8:'utf8'},computeDigest:(_,text)=>[...createHash('sha256').update(text).digest()]},
-   LockService:{getScriptLock:()=>({tryLock:()=>{if(locked)return false;hasLock=true;return true;},releaseLock:()=>{hasLock=false;}})},PropertiesService:{getScriptProperties:()=>({setProperty(){}})}});
+   LockService:{getScriptLock:()=>({tryLock:()=>{if(locked)return false;hasLock=true;return true;},releaseLock:()=>{hasLock=false;}})},PropertiesService:{getScriptProperties:()=>({setProperty(){},getProperty(){return null;}})}});
  vm.runInContext(code,c);
  c.boxBooks_=()=>({source:{getId:()=>sourceId,getSheetById:id=>Number(id)===7?{}:null},journal:{getSheetByName:()=>journal,getUrl:()=>'https://example.invalid/test-journal'}});
  c.boxEmployees_=()=>[{id:'employee-1',name:'Тестовый сотрудник'}];c.boxRow_=(_,id)=>{assert.equal(id,'position-1');return 5;};c.boxPosition_=()=>({...p});c.boxBaseline_=()=>({...base});
@@ -67,3 +67,6 @@ test('card cache speeds revisits; a saved-event revision and manual refresh alwa
  f.base.printed=12;revision='new-confirmed-event';assert.equal(f.c.getBoxPanelContext(first.key).totals.printed,12);assert.equal(reads,2);
  f.c.getBoxPanelContext('');assert.equal(reads,3);
 });
+
+test('completion dates stay empty for partial work and first take time is retained',()=>{const f=fixture();const base={...f.base};const state=f.c.boxTotals_(base,[{action:'take',eventId:'a',sheets:2,at:'2026-11-02T08:00:00Z'},{action:'take',eventId:'b',sheets:3,at:'2026-11-02T09:00:00Z'},{action:'print',eventId:'c',sheets:20,at:'2026-11-02T10:00:00Z'}]);assert.equal(state.totals.takenAt,'2026-11-02T08:00:00Z');assert.equal(f.c.boxDates_(state.totals,40)[1],'');state.totals.printed=40;assert.equal(f.c.boxDates_(state.totals,40)[1].toISOString(),'2026-11-02T10:00:00.000Z');});
+test('progress references physical-sheet plan and independent good print/cut totals',()=>{const f=fixture(),formula=f.c.boxProgressFormula_(5);assert.match(formula,/G5\*P5/);assert.match(formula,/AB5/);assert.match(formula,/AC5/);assert.match(formula,/CHAR\(10\)/);});

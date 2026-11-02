@@ -1,5 +1,5 @@
 /* RITM Box: physical-sheet work journal. No production spreadsheet ID in source. */
-var BOXW = Object.freeze({ header: 4, first: 5, version: 1,
+var BOXW = Object.freeze({ header: 4, first: 5, version: 2,
   actions: {take:'Взяли в работу',print:'Печать',cut:'Порезка',defect:'Брак',surplus:'Излишек',cancel:'Отмена'},
   totals: ['Брак, листы', 'Излишек, листы', 'Напечатано годных, листы', 'Порезано годных, листы'],
   eventHeaders: ['eventId','requestHash','at','positionId','sourceId','sheetId','shipment','article','employeeId','employee','action','unit','enteredQuantity','sheets','kits','areaM2','planKits','sheetsPerKit','planSheets','widthM','heightM','stage','reason','reverses'],
@@ -62,17 +62,23 @@ function boxSchema_(sh){
   return {article:find(['артикул'],true),plan:find(['кол-во','количество'],true),factor:find(['кол-во листов','количество листов'],true),
     width:find(['ширина']),height:find(['высота']),taken:find(['взяли в работу','взяли в рабоу','взят в работу']),
     printed:find(['завершил печать','завершили печать','готовность печати'],true),cut:find(['завершил порезку','завершили порезку','готовность порезки'],true),
-    printedAt:find(['дата готовности печати']),cutAt:find(['дата готовности порезки'])};
+    printedAt:find(['дата готовности печати','дата завершения печати']),cutAt:find(['дата готовности порезки','дата завершения порезки'])};
 }
+function boxCompact_(sh){return boxFold_(sh.getRange(4,24).getValue())==='прогресс печати / порезки';}
 function boxEnsureColumns_(sh){
-  boxSchema_(sh);
-  if(sh.getMaxColumns()<35)sh.insertColumnsAfter(sh.getMaxColumns(),35-sh.getMaxColumns());
-  var range=sh.getRange(4,31,1,4), existing=range.getValues()[0];
-  existing.forEach(function(v,i){if(v!=='' && v!==BOXW.totals[i])throw new Error('Колонка '+(31+i)+' занята другими данными.');});
-  range.setValues([BOXW.totals]).setFontWeight('bold').setBackground('#eaf2ff').setWrap(true);
-  var dateHeader=sh.getRange(4,35);if(dateHeader.getValue()!==''&&dateHeader.getValue()!=='Дата взятия в работу')throw new Error('Колонка AI занята.');
-  dateHeader.setValue('Дата взятия в работу').setFontWeight('bold').setBackground('#eaf2ff').setWrap(true);
-  var schema=boxSchema_(sh);[schema.taken,schema.printed,schema.cut].filter(Boolean).forEach(function(c){sh.hideColumns(c);});
+  var schema=boxSchema_(sh);
+  if(sh.getMaxColumns()<30)sh.insertColumnsAfter(sh.getMaxColumns(),30-sh.getMaxColumns());
+  if(!boxCompact_(sh))throw new Error('Владелец должен завершить перенос колонок учёта.');
+  [schema.taken,schema.printed,schema.cut].filter(Boolean).forEach(function(c){sh.hideColumns(c);});
+}
+function boxProgressFormula_(row){
+  var plan='G'+row+'*P'+row;
+  function line(label,col){var ratio=col+row+'/('+plan+')';return '"'+label+' "&REPT("■";ROUND(MIN(1;'+ratio+')*8;0))&REPT("□";8-ROUND(MIN(1;'+ratio+')*8;0))&" "&TEXT('+ratio+';"0%")';}
+  return '=IFERROR(IF('+plan+'>0;'+line('Печать','AB')+'&CHAR(10)&'+line('Порезка','AC')+';"План не определён");"План не определён")';
+}
+function boxDates_(totals,plan){
+  function date(value){var d=value?new Date(value):null;return d&&!isNaN(d.getTime())?d:'';}
+  return [date(totals.takenAt),totals.printed>=plan?date(totals.printedAt):'',totals.cut>=plan?date(totals.cutAt):''];
 }
 function boxBooks_(){
   var p=PropertiesService.getScriptProperties(), source=SpreadsheetApp.getActiveSpreadsheet();
@@ -108,7 +114,7 @@ function boxPosition_(sh,row){
   var width=schema.width?boxNumber_(values[schema.width-1]):null,height=schema.height?boxNumber_(values[schema.height-1]):null;
   var position={sheetId:sh.getSheetId(),row:row,shipment:sh.getName(),article:article,planKits:kits,sheetsPerKit:factor,planSheets:kits*factor,widthM:width>0?width:null,heightM:height>0?height:null,schema:schema};
   function dateAt(col){var v=col?values[col-1]:null;return v instanceof Date&&!isNaN(v.getTime())?v.toISOString():'';}
-  position.legacyDates={takenAt:dateAt(35),printedAt:dateAt(schema.printedAt),cutAt:dateAt(schema.cutAt)};
+  position.legacyDates={takenAt:dateAt(boxCompact_(sh)?21:35),printedAt:dateAt(schema.printedAt),cutAt:dateAt(schema.cutAt)};
   position.fingerprint=boxHash_([position.sheetId,article,kits,factor,position.widthM,position.heightM]);
   position.legacy={taken:schema.taken&&values[schema.taken-1]===true?position.planSheets:0,printed:values[schema.printed-1]===true?position.planSheets:0,cut:values[schema.cut-1]===true?position.planSheets:0};
   return position;
@@ -121,20 +127,19 @@ function boxBaseline_(books,p,id,create){
   if(create!==false)sh.appendRow([id,books.source.getId(),p.sheetId,p.article,p.legacy.taken,p.legacy.printed,p.legacy.cut,0,0,new Date().toISOString(),p.legacyDates.takenAt,p.legacyDates.printedAt,p.legacyDates.cutAt]);return Object.assign({taken:p.legacy.taken,printed:p.legacy.printed,cut:p.legacy.cut,defect:0,surplus:0,positionId:id},p.legacyDates);
 }
 function boxEvents_(journal,id){var sh=journal.getSheetByName('Журнал');if(sh.getLastRow()<2)return [];return sh.getRange(2,4,sh.getLastRow()-1,1).createTextFinder(id).matchEntireCell(true).useRegularExpression(false).findAll().map(function(cell){var v=sh.getRange(cell.getRow(),1,1,BOXW.eventHeaders.length).getValues()[0],e={};BOXW.eventHeaders.forEach(function(k,i){e[k]=v[i];});Object.keys(BOXW.actions).forEach(function(k){if(e.action===BOXW.actions[k])e.action=k;});return e;});}
-function boxTotals_(base,events){var totals=Object.assign({},base),cancelled={};events.forEach(function(e){if(e.action==='cancel')cancelled[e.reverses]=true;});['take','print','cut'].forEach(function(action){var key={take:'taken',print:'printed',cut:'cut'}[action];if(cancelled['baseline:'+action+':'+base.positionId]){totals[key]=0;totals[key+'At']='';}});events.forEach(function(e){if(e.action!=='cancel'&&!cancelled[e.eventId]){var key={take:'taken',print:'printed',cut:'cut',defect:'defect',surplus:'surplus'}[e.action];if(!key)throw new Error('Неизвестная операция в журнале.');totals[key]+=Number(e.sheets);if(['taken','printed','cut'].indexOf(key)>=0)totals[key+'At']=e.at;}});return {totals:totals,cancelled:cancelled};}
+function boxTotals_(base,events){var totals=Object.assign({},base),cancelled={};events.forEach(function(e){if(e.action==='cancel')cancelled[e.reverses]=true;});['take','print','cut'].forEach(function(action){var key={take:'taken',print:'printed',cut:'cut'}[action];if(cancelled['baseline:'+action+':'+base.positionId]){totals[key]=0;totals[key+'At']='';}});events.forEach(function(e){if(e.action!=='cancel'&&!cancelled[e.eventId]){var key={take:'taken',print:'printed',cut:'cut',defect:'defect',surplus:'surplus'}[e.action];if(!key)throw new Error('Неизвестная операция в журнале.');totals[key]+=Number(e.sheets);if(['taken','printed','cut'].indexOf(key)>=0){if(key!=='taken'||!totals.takenAt)totals[key+'At']=e.at;}}});return {totals:totals,cancelled:cancelled};}
 function boxProject_(books,sh,p,id,totals){
   boxEnsureColumns_(sh);
   var guard=books.source.getSheetByName(BOXW.guard),hit=boxFind_(guard,1,id),value=[id,p.sheetId,totals.taken,totals.printed,totals.cut,totals.defect,totals.surplus,totals.takenAt||'',totals.printedAt||'',totals.cutAt||''];
   if(hit)guard.getRange(hit.getRow(),1,1,10).setValues([value]);else guard.appendRow(value);
-  sh.getRange(p.row,31,1,4).setValues([[totals.defect,totals.surplus,totals.printed,totals.cut]]);
+  var dates=boxDates_(totals,p.planSheets);
+  sh.getRange(p.row,21,1,3).setValues([dates]).setNumberFormat('dd.MM.yyyy HH:mm');
+  sh.getRange(p.row,24).setFormula(boxProgressFormula_(p.row));
+  sh.getRange(p.row,25,1,2).setValues([[totals.defect,totals.surplus]]).setNumberFormat('0');
+  sh.getRange(p.row,28,1,2).setValues([[totals.printed,totals.cut]]).setNumberFormat('0');
   if(p.schema.taken)sh.getRange(p.row,p.schema.taken).setValue(totals.taken>0);
   sh.getRange(p.row,p.schema.printed).setValue(totals.printed>=p.planSheets);
   sh.getRange(p.row,p.schema.cut).setValue(totals.cut>=p.planSheets);
-  if(p.schema.printedAt&&totals.printedAt)sh.getRange(p.row,p.schema.printedAt).setValue(new Date(totals.printedAt)).setNumberFormat('dd.MM.yyyy HH:mm');
-  else if(p.schema.printedAt)sh.getRange(p.row,p.schema.printedAt).clearContent();
-  if(p.schema.cutAt&&totals.cutAt)sh.getRange(p.row,p.schema.cutAt).setValue(new Date(totals.cutAt)).setNumberFormat('dd.MM.yyyy HH:mm');
-  else if(p.schema.cutAt)sh.getRange(p.row,p.schema.cutAt).clearContent();
-  sh.getRange(p.row,35).setValue(totals.takenAt?new Date(totals.takenAt):'').setNumberFormat('dd.MM.yyyy HH:mm');
 }
 function getBoxPanelSelection(){var book=SpreadsheetApp.getActiveSpreadsheet(),range=book.getActiveRange(),sh=range&&range.getSheet();return {eligible:boxEligible_(sh),signature:sh?[sh.getSheetId(),range.getRow(),PropertiesService.getScriptProperties().getProperty('BOX_REVISION')||''].join(':'):''};}
 function getBoxPanelContext(lastKey){
@@ -166,6 +171,7 @@ function boxSaveCore_(request,outcome){
     var hash=boxHash_([request.positionId,request.sheetId,request.fingerprint,request.action,request.employeeId,request.unit,request.quantity,request.stage||'',request.reason||'',request.reverses||'']);
     var journal=books.journal.getSheetByName('Журнал'),prior=boxFind_(journal,1,request.requestId);
     outcome.confirmedAbsent=!prior;
+    if(PropertiesService.getScriptProperties().getProperty('BOX_LAYOUT_V2_MIGRATING'))throw new Error('Перенос колонок выполняется. Подождите и повторите тот же запрос.');
     if(!prior&&!employee)throw new Error('Выберите сотрудника из отдельного списка бокса. Без имени запись и отмена запрещены.');
     if(prior){outcome.written=true;var v=journal.getRange(prior.getRow(),1,1,BOXW.eventHeaders.length).getValues()[0];if(v[1]!==hash)throw new Error('Этот ID уже относится к другой записи.');}
     var sh=books.source.getSheetById(Number(request.sheetId));if(!sh)throw new Error('Поставка удалена.');
@@ -207,7 +213,7 @@ function onEdit(e){
   if(!e||!e.range||!boxEligible_(e.range.getSheet()))return;
   var sh=e.range.getSheet(),schema;
   try{schema=boxSchema_(sh);}catch(ignore){return;}
-  var cols=[schema.taken,schema.printed,schema.cut,schema.printedAt,schema.cutAt,31,32,33,34,35].filter(Boolean);
+  var cols=[schema.taken,schema.printed,schema.cut,schema.printedAt,schema.cutAt,21,22,23,24,25,26,28,29].filter(Boolean);
   if(!cols.some(function(c){return c>=e.range.getColumn()&&c<=e.range.getLastColumn();}))return;
   var lock=LockService.getScriptLock();
   if(!lock.tryLock(10000)){if(e.range.getNumRows()===1&&e.range.getNumColumns()===1)e.range.setValue(e.oldValue===undefined?'':e.oldValue==='TRUE'?true:e.oldValue==='FALSE'?false:e.oldValue);return;}
@@ -220,4 +226,71 @@ function onEdit(e){
     }
     e.source.toast('Запишите действие через меню RITM · Бокс → Записать работу. Имя обязательно.','Учёт через панель',5);
   }finally{lock.releaseLock();}
+}
+
+// Owner-run, resumable layout migration. No event is appended, removed or rewritten.
+function migrateBoxWorklogLayout(){
+  return boxLocked_(function(){
+    var books=boxBooks_(),props=PropertiesService.getScriptProperties(),report=[];
+    props.setProperty('BOX_LAYOUT_V2_MIGRATING','1');
+    var archive=books.journal.getSheetByName('_Колонки_резерв')||books.journal.insertSheet('_Колонки_резерв');
+    if(!archive.getLastRow())archive.appendRow(['sheetId','part','snapshot']);archive.hideSheet();
+    books.source.getSheets().forEach(function(sh){
+      if(!boxEligible_(sh))return;
+      var key='BOX_LAYOUT_V2_'+sh.getSheetId();if(props.getProperty(key)==='done'){report.push({sheetId:sh.getSheetId(),unchanged:true});return;}
+      var saved=archive.getLastRow()>1?archive.getRange(2,1,archive.getLastRow()-1,3).getValues().filter(function(r){return Number(r[0])===sh.getSheetId();}).sort(function(a,b){return a[1]-b[1];}):[];
+      var snapshot;
+      if(saved.length){snapshot=JSON.parse(saved.map(function(r){return r[2];}).join(''));}
+      else{
+        if(boxCompact_(sh))throw new Error('Компактный лист без резервной записи: '+sh.getName());
+        var schema=boxSchema_(sh),last=sh.getLastRow(),values=sh.getRange(5,1,Math.max(1,last-4),35).getValues(),formulas=sh.getRange(5,1,Math.max(1,last-4),35).getFormulas();
+        snapshot={schema:schema,values:values,formulas:formulas};
+        var json=JSON.stringify(snapshot),parts=[];for(var offset=0;offset<json.length;offset+=40000)parts.push([sh.getSheetId(),parts.length,json.slice(offset,offset+40000)]);
+        archive.getRange(archive.getLastRow()+1,1,parts.length,3).setValues(parts);
+        SpreadsheetApp.flush();
+      }
+      // Reject occupied destination cells instead of silently replacing user data.
+      snapshot.values.forEach(function(r){[24,25,27,28].forEach(function(c){if(r[c]!==''&&r[c]!==undefined)throw new Error('Занята колонка назначения '+(c+1)+' в '+sh.getName());});});
+      var byRow={};sh.createDeveloperMetadataFinder().withKey('RITM_BOX_POSITION').find().forEach(function(m){var location=m.getLocation().getRow();if(location)byRow[location.getRow()]=m.getValue();});
+      var output=[],positions=0,sums=[0,0,0,0];
+      snapshot.values.forEach(function(v,i){
+        var row=i+5,article=String(v[snapshot.schema.article-1]||'').trim(),store=snapshot.formulas[i][26]||v[26]||'';
+        if(!article){output.push(['','','','','','',store,'','']);return;}
+        positions++;
+        var plan=Number(v[snapshot.schema.plan-1])*Number(v[snapshot.schema.factor-1]),totals={taken:0,printed:0,cut:0,defect:0,surplus:0,takenAt:'',printedAt:'',cutAt:''};
+        if(Number.isSafeInteger(plan)&&plan>0){
+          totals.taken=snapshot.schema.taken&&v[snapshot.schema.taken-1]===true?plan:0;
+          totals.printed=v[snapshot.schema.printed-1]===true?plan:0;totals.cut=v[snapshot.schema.cut-1]===true?plan:0;
+          totals.takenAt=v[34]||'';totals.printedAt=v[snapshot.schema.printedAt-1]||'';totals.cutAt=v[snapshot.schema.cutAt-1]||'';
+          if(byRow[row]){
+            var p={sheetId:sh.getSheetId(),article:article,legacy:{taken:totals.taken,printed:totals.printed,cut:totals.cut},legacyDates:{takenAt:totals.takenAt,printedAt:totals.printedAt,cutAt:totals.cutAt}};
+            totals=boxTotals_(boxBaseline_(books,p,byRow[row],false),boxEvents_(books.journal,byRow[row])).totals;
+          }
+        }
+        [totals.defect,totals.surplus,totals.printed,totals.cut].forEach(function(n,j){if(Number(v[30+j])>0&&Number(v[30+j])!==n)throw new Error('Итоги журнала не совпали: '+article);sums[j]+=n;});
+        var dates=boxDates_(totals,plan);
+        output.push([dates[0],dates[1],dates[2],boxProgressFormula_(row),totals.defect,totals.surplus,store,totals.printed,totals.cut]);
+      });
+      sh.getRange(4,21,1,6).setValues([['Дата взятия в работу','Дата завершения печати','Дата завершения порезки','Прогресс печати / порезки','Брак, листы','Излишек, листы']]);
+      sh.getRange(4,28,1,2).setValues([['Напечатано годных, листы','Порезано годных, листы']]);
+      sh.getRange(5,25,output.length,2).setNumberFormat('0');sh.getRange(5,28,output.length,2).setNumberFormat('0');
+      sh.getRange(5,21,output.length,9).clearDataValidations().setValues(output);
+      sh.getRange(5,24,output.length,1).setNumberFormat('General').setFormulas(output.map(function(r){return [r[3]];}));
+      sh.getRange(5,21,output.length,3).setNumberFormat('dd.MM.yyyy HH:mm');
+      sh.getRange(5,25,output.length,2).setNumberFormat('0');sh.getRange(5,28,output.length,2).setNumberFormat('0');
+      sh.getRange(4,21,output.length+1,9).setWrap(true).setVerticalAlignment('middle').setBorder(true,true,true,true,true,true,'#b8c7d6',SpreadsheetApp.BorderStyle.SOLID);
+      sh.getRange(4,21,1,9).setBackground('#edf3fa').setFontWeight('bold').setFontSize(10);
+      sh.getRange(5,21,output.length,9).setFontSize(10);
+      sh.getRange(5,24,output.length,1).setFontColor('#2563a6');
+      sh.getRange(5,25,output.length,1).setBackground('#fff1e9');sh.getRange(5,26,output.length,1).setBackground('#e8f5ef');
+      sh.setColumnWidths(21,3,145);sh.setColumnWidth(24,235);sh.setColumnWidths(25,2,95);sh.setColumnWidths(28,2,120);
+      sh.showColumns(21,9);sh.hideColumns(30,6);
+      SpreadsheetApp.flush();
+      var check=sh.getRange(5,25,output.length,5).getDisplayValues(),actual=[0,0,0,0];check.forEach(function(r){[r[0],r[1],r[3],r[4]].forEach(function(v,j){actual[j]+=Number(v)||0;});});
+      if(JSON.stringify(actual)!==JSON.stringify(sums))throw new Error('Проверка переноса не прошла: '+sh.getName()+' expected='+JSON.stringify(sums)+' actual='+JSON.stringify(actual));
+      props.setProperty(key,'done');report.push({sheetId:sh.getSheetId(),positions:positions,totals:sums});
+    });
+    props.deleteProperty('BOX_LAYOUT_V2_MIGRATING');props.setProperty('BOX_REVISION','layout-v2-'+Date.now());
+    console.log(JSON.stringify({ok:true,sheets:report}));return {ok:true,sheets:report};
+  });
 }

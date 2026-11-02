@@ -42,19 +42,43 @@ const BOX_LAYOUT = Object.freeze({
 // Box work events live in a separate journal. A new copy must never inherit
 // another shipment's totals, timestamps or row metadata identities.
 export function boxWorklogInitializationRequests(plan, sourceColumnCount) {
-  const sheetId = plan.sheetId;
-  const columns = sourceColumnCount + (plan.insertExtension ? 1 : 0);
-  const requests = [];
-  if (columns < 35) requests.push({ appendDimension: { sheetId, dimension: "COLUMNS", length: 35 - columns } });
+  const sheetId = plan.sheetId, columns = sourceColumnCount + (plan.insertExtension ? 1 : 0), requests = [];
+  if (columns < 30) requests.push({ appendDimension: { sheetId, dimension: "COLUMNS", length: 30 - columns } });
   requests.push({ deleteDeveloperMetadata: { dataFilter: { developerMetadataLookup: {
     metadataKey: "RITM_BOX_POSITION", metadataLocation: { sheetId }, locationMatchingStrategy: "INTERSECTING_LOCATION",
   } } } });
-  requests.push({ updateCells: { start: { sheetId, rowIndex: DATA_START_ROW - 1, columnIndex: 30 }, rows: Array.from({ length: Math.max(0,plan.clearThrough-DATA_START_ROW+1) }, () => ({ values: Array.from({ length: 5 }, () => ({})) })), fields: "userEnteredValue" } });
-  requests.push({ updateCells: { start: { sheetId, rowIndex: HEADER_ROW - 1, columnIndex: 30 }, rows: [{ values: [
-    "Брак, листы", "Излишек, листы", "Напечатано годных, листы", "Порезано годных, листы", "Дата взятия в работу",
-  ].map(stringValue => ({ userEnteredValue: { stringValue } })) }], fields: "userEnteredValue" } });
-  requests.push({ updateCells: { start: { sheetId, rowIndex: plan.startRow - 1, columnIndex: 30 }, rows: plan.lines.map(() => ({ values: [0,0,0,0].map(numberValue => ({ userEnteredValue: { numberValue } })) })), fields: "userEnteredValue" } });
+  const write = (rowIndex, columnIndex, rows) => requests.push({ updateCells: { start: { sheetId, rowIndex, columnIndex }, rows, fields: "userEnteredValue" } });
+  const text = stringValue => ({ userEnteredValue: { stringValue } });
+  write(3,20,[{values:["Дата взятия в работу","Дата завершения печати","Дата завершения порезки","Прогресс печати / порезки","Брак, листы","Излишек, листы"].map(text)}]);
+  write(3,27,[{values:["Напечатано годных, листы","Порезано годных, листы"].map(text)}]);
+  for (const [start,end] of [[20,26],[27,29],[30,columns]]) {
+    if(end>start)write(4,start,Array.from({length:Math.max(0,plan.clearThrough-4)},()=>({values:Array.from({length:end-start},()=>({}))})));
+  }
+  const zero = () => ({userEnteredValue:{numberValue:0}});
+  for (const columnIndex of [24,27])write(plan.startRow-1,columnIndex,plan.lines.map(()=>({values:[zero(),zero()]})));
+  write(plan.startRow-1,23,plan.lines.map((_,i)=>{
+    const row=plan.startRow+i,den=`G${row}*P${row}`;
+    const line=(label,col)=>`"${label} "&REPT("■";ROUND(MIN(1;${col}${row}/(${den}))*8;0))&REPT("□";8-ROUND(MIN(1;${col}${row}/(${den}))*8;0))&" "&TEXT(${col}${row}/(${den});"0%")`;
+    return {values:[{userEnteredValue:{formulaValue:`=IFERROR(IF(${den}>0;${line("Печать","AB")}&CHAR(10)&${line("Порезка","AC")};"План не определён");"План не определён")`}}]};
+  }));
+  requests.push({repeatCell:{range:{sheetId,startRowIndex:3,startColumnIndex:20,endColumnIndex:29},cell:{userEnteredFormat:{wrapStrategy:"WRAP",verticalAlignment:"MIDDLE"}},fields:"userEnteredFormat.wrapStrategy,userEnteredFormat.verticalAlignment"}});
+  requests.push({repeatCell:{range:{sheetId,startRowIndex:4,startColumnIndex:20,endColumnIndex:23},cell:{userEnteredFormat:{numberFormat:{type:"DATE_TIME",pattern:"dd.MM.yyyy HH:mm"}}},fields:"userEnteredFormat.numberFormat"}});
+  for(const [startColumnIndex,endColumnIndex] of [[24,26],[27,29]])requests.push({repeatCell:{range:{sheetId,startRowIndex:4,startColumnIndex,endColumnIndex},cell:{userEnteredFormat:{numberFormat:{type:"NUMBER",pattern:"0"}}},fields:"userEnteredFormat.numberFormat"}});
+  requests.push({updateDimensionProperties:{range:{sheetId,dimension:"COLUMNS",startIndex:20,endIndex:29},properties:{hiddenByUser:false},fields:"hiddenByUser"}});
+  if(columns>30)requests.push({updateDimensionProperties:{range:{sheetId,dimension:"COLUMNS",startIndex:30,endIndex:columns},properties:{hiddenByUser:true},fields:"hiddenByUser"}});
   return requests;
+}
+function boxWorklogFormulaGrid(grid,lines,clearThrough){
+  const copy=structuredClone(grid);
+  const rows=copy.data[0].rowData;
+  for(let row=DATA_START_ROW;row<=clearThrough;row++){
+    const values=(rows[row-1]||= {values:[]}).values;
+    for(const col of [21,22,23,24,25,26,28,29])values[col-1]={};
+  }
+  const requests=boxWorklogInitializationRequests({sheetId:0,startRow:DATA_START_ROW,clearThrough,lines},35);
+  const progress=requests.find(r=>r.updateCells?.start?.columnIndex===23).updateCells;
+  progress.rows.forEach((r,i)=>{rows[DATA_START_ROW-1+i].values[23]=structuredClone(r.values[0]);});
+  return copy;
 }
 // Add F only in a new box copy; old worksheets keep their original schema.
 export function boxTemplateWithExtension(grid) {
@@ -765,7 +789,7 @@ export class RollSupplySheetsWriter {
     if (takeWork) layout.takeWorkColumn = takeWork;
     if (printReady) layout.printReady = printReady;
     if (cutReady) layout.cutReady = cutReady;
-    // Work-start is now an attributed panel event (AI timestamp); old Q may
+    // Work-start is now an attributed panel event (U timestamp); old Q may
     // legitimately contain rounding formulas rather than a work checkbox.
     layout.statusHeadersConfirmed = !!(printReady && cutReady);
     this.layout = Object.freeze(layout);
@@ -903,10 +927,10 @@ export class RollSupplySheetsWriter {
       );
     else formulaRepairs.push(...rollDimensionFormulaRepairs(DATA_START_ROW, lines.length));
     const formulas = formulaSignature(
-      sourceGrid,
+      this.box ? boxWorklogFormulaGrid(sourceGrid,lines,clearThrough) : sourceGrid,
       DATA_START_ROW,
       clearThrough,
-      formulaRepairs,
+      this.box ? formulaRepairs.filter(r=>![21,22,23,24,25,26,28,29].includes(r.column)) : formulaRepairs,
       this.layout,
     );
     validateTemplateInputRange(sourceGrid, clearThrough, this.layout);
@@ -1297,7 +1321,7 @@ export class RollSupplySheetsWriter {
           409,
         );
       this.preparedTemplates.delete(plan.operationId);
-      if (this.box) requests.push(...boxWorklogInitializationRequests(plan, sourceGrid.properties.gridProperties.columnCount || (plan.insertExtension ? 29 : 30)));
+
       requests.push({ clearBasicFilter: { sheetId } });
       for (let index = (sourceGrid.conditionalFormats || []).length - 1; index >= 0; index--)
         requests.push({ deleteConditionalFormatRule: { sheetId, index } });
@@ -1330,6 +1354,7 @@ export class RollSupplySheetsWriter {
           this.layout,
         ),
       );
+      if (this.box) requests.push(...boxWorklogInitializationRequests(plan, sourceGrid.properties.gridProperties.columnCount || (plan.insertExtension ? 29 : 30)));
       const titleCell = {
         userEnteredValue: { stringValue: plan.name },
       };
@@ -1522,6 +1547,7 @@ export class RollSupplySheetsWriter {
         if (this.layout.extension) expected.set(`${columnName(this.layout.extension)}${row}`, line.extension || "");
         if (!this.box) expected.set(`${columnName(this.layout.remainingPrint)}${row}`, line.quantity);
         if (this.box) {
+          for (const col of [25,26,28,29]) expected.set(`${columnName(col)}${row}`,0);
           expected.set(`${columnName(this.layout.printReady)}${row}`, false);
           expected.set(`${columnName(this.layout.cutReady)}${row}`, false);
           expected.set(`${columnName(plan.takeWorkColumn)}${row}`, false);

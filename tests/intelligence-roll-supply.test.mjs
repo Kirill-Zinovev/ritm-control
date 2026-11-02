@@ -23,15 +23,15 @@ const payload = (operationId, overrides = {}) => ({
   ...overrides,
 });
 
-test("new box journal initialization clears only the copied sheet's totals and row identities", () => {
+test("new box journal initialization uses compact columns without touching store or service UID", () => {
   const plan={sheetId:123,insertExtension:false,startRow:5,clearThrough:6,lines:[{article:"A",quantity:20}]};
   const requests=boxWorklogInitializationRequests(plan,35);
   assert.equal(requests.some(r=>r.appendDimension),false);
-  for(const request of requests){const target=request.updateCells?.start.sheetId??request.deleteDeveloperMetadata?.dataFilter.developerMetadataLookup.metadataLocation.sheetId;assert.equal(target,123);}
-  const clear=requests.find(r=>r.updateCells?.start.rowIndex===4&&r.updateCells.rows.length===2).updateCells;
-  assert.equal(clear.start.columnIndex,30);assert.ok(clear.rows.every(r=>r.values.length===5&&r.values.every(c=>!c.userEnteredValue)));
   assert.equal(requests.find(r=>r.deleteDeveloperMetadata).deleteDeveloperMetadata.dataFilter.developerMetadataLookup.metadataKey,"RITM_BOX_POSITION");
-  assert.equal(boxWorklogInitializationRequests({...plan,insertExtension:true},29)[0].appendDimension.length,5);
+  const writes=requests.filter(r=>r.updateCells).map(r=>r.updateCells);
+  assert.ok(writes.some(r=>r.start?.columnIndex===23&&r.rows[0].values[0].userEnteredValue.formulaValue.includes('AB5')));
+  for(const write of writes){if(write.range){assert.ok(!(write.range.startColumnIndex<=26&&write.range.endColumnIndex>26));assert.ok(!(write.range.startColumnIndex<=29&&write.range.endColumnIndex>29));}}
+  assert.equal(boxWorklogInitializationRequests({...plan,insertExtension:true},29).some(r=>r.appendDimension),false);
 });
 
 const deletePayload = (operationId, name, sheetId, overrides = {}) => ({
@@ -383,7 +383,7 @@ test("box destination copies its own template, initializes checkbox facts and ne
   const target = google.sheets.get(plan.sheetId);
   assert.equal(source.data[0].rowData[0].values[28].userEnteredValue, undefined, "source template UID header must remain untouched");
   assert.equal(target.data[0].rowData[0].values[29].userEnteredValue.stringValue, "UID");
-  assert.equal(target.data[0].rowData[4].values[24].userEnteredValue, undefined, "X is an extras column in box, never a print remainder");
+  assert.equal(target.data[0].rowData[4].values[24].userEnteredValue.numberValue, 0, "Y initializes defects, never roll print remainder");
   assert.equal(target.data[0].rowData[4].values[18].userEnteredValue.boolValue, false);
   assert.equal(target.data[0].rowData[4].values[19].userEnteredValue.boolValue, false);
   assert.equal((await writer.manifest(plan.sheetId)).ready, false);
@@ -1201,10 +1201,10 @@ test("new box has extension F, shifted calculations and neutral appearance; orig
   assert.equal(row[17].userEnteredValue.boolValue, false, "the shifted work checkbox remains unchecked");
   assert.equal(row[18].userEnteredValue.boolValue, false);
   assert.equal(row[19].userEnteredValue.boolValue, false);
-  assert.equal(target.properties.gridProperties.columnCount,35);
-  assert.deepEqual(row.slice(30,34).map(c=>c.userEnteredValue?.numberValue),[0,0,0,0]);
-  assert.equal(target.data[0].rowData[3].values[30].userEnteredValue.stringValue,"Брак, листы");
-  assert.equal(target.data[0].rowData[3].values[34].userEnteredValue.stringValue,"Дата взятия в работу");
+  assert.equal(target.properties.gridProperties.columnCount,30);
+  assert.deepEqual([24,25,27,28].map(i=>row[i].userEnteredValue?.numberValue),[0,0,0,0]);
+  assert.equal(target.data[0].rowData[3].values[24].userEnteredValue.stringValue,"Брак, листы");
+  assert.equal(target.data[0].rowData[3].values[20].userEnteredValue.stringValue,"Дата взятия в работу");
   assert.ok(google.requests[0].some(r=>r.deleteDeveloperMetadata?.dataFilter.developerMetadataLookup.metadataKey==="RITM_BOX_POSITION"));
   const batch = google.requests[0];
   assert.deepEqual(batch.filter(r => r.deleteConditionalFormatRule).map(r => r.deleteConditionalFormatRule), [{ sheetId: plan.sheetId, index: 1 }, { sheetId: plan.sheetId, index: 0 }]);
