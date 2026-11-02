@@ -38,6 +38,24 @@ const BOX_LAYOUT = Object.freeze({
   printReady: 18,
   cutReady: 19,
 });
+
+// Box work events live in a separate journal. A new copy must never inherit
+// another shipment's totals, timestamps or row metadata identities.
+export function boxWorklogInitializationRequests(plan, sourceColumnCount) {
+  const sheetId = plan.sheetId;
+  const columns = sourceColumnCount + (plan.insertExtension ? 1 : 0);
+  const requests = [];
+  if (columns < 35) requests.push({ appendDimension: { sheetId, dimension: "COLUMNS", length: 35 - columns } });
+  requests.push({ deleteDeveloperMetadata: { dataFilter: { developerMetadataLookup: {
+    metadataKey: "RITM_BOX_POSITION", metadataLocation: { sheetId }, locationMatchingStrategy: "INTERSECTING_LOCATION",
+  } } } });
+  requests.push({ updateCells: { start: { sheetId, rowIndex: DATA_START_ROW - 1, columnIndex: 30 }, rows: Array.from({ length: Math.max(0,plan.clearThrough-DATA_START_ROW+1) }, () => ({ values: Array.from({ length: 5 }, () => ({})) })), fields: "userEnteredValue" } });
+  requests.push({ updateCells: { start: { sheetId, rowIndex: HEADER_ROW - 1, columnIndex: 30 }, rows: [{ values: [
+    "Брак, листы", "Излишек, листы", "Напечатано годных, листы", "Порезано годных, листы", "Дата взятия в работу",
+  ].map(stringValue => ({ userEnteredValue: { stringValue } })) }], fields: "userEnteredValue" } });
+  requests.push({ updateCells: { start: { sheetId, rowIndex: plan.startRow - 1, columnIndex: 30 }, rows: plan.lines.map(() => ({ values: [0,0,0,0].map(numberValue => ({ userEnteredValue: { numberValue } })) })), fields: "userEnteredValue" } });
+  return requests;
+}
 // Add F only in a new box copy; old worksheets keep their original schema.
 export function boxTemplateWithExtension(grid) {
   const result = structuredClone(grid);
@@ -741,13 +759,15 @@ export class RollSupplySheetsWriter {
   configureBoxHeaders(grid) {
     if (!this.box) return;
     const layout = { ...this.layout };
-    const takeWork = findHeaderColumn(grid, ["Взяли в работу", "Взят в работу"], layout);
+    const takeWork = findHeaderColumn(grid, ["Взяли в работу", "Взяли в рабоу", "Взят в работу"], layout);
     const printReady = findHeaderColumn(grid, ["Завершил печать", "Готовность печати"], layout);
     const cutReady = findHeaderColumn(grid, ["Завершил порезку", "Готовность порезки"], layout);
     if (takeWork) layout.takeWorkColumn = takeWork;
     if (printReady) layout.printReady = printReady;
     if (cutReady) layout.cutReady = cutReady;
-    layout.statusHeadersConfirmed = !!(takeWork && printReady && cutReady);
+    // Work-start is now an attributed panel event (AI timestamp); old Q may
+    // legitimately contain rounding formulas rather than a work checkbox.
+    layout.statusHeadersConfirmed = !!(printReady && cutReady);
     this.layout = Object.freeze(layout);
   }
 
@@ -789,7 +809,7 @@ export class RollSupplySheetsWriter {
       includeGridData: "true",
       ranges: range,
       fields:
-        "spreadsheetId,sheets(properties(sheetId,title,gridProperties(rowCount)),conditionalFormats,basicFilter,data(startRow,startColumn,rowData(values(userEnteredValue,effectiveValue))))",
+        "spreadsheetId,sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)),conditionalFormats,basicFilter,data(startRow,startColumn,rowData(values(userEnteredValue,effectiveValue))))",
     });
     const data = await this.request(
       `https://sheets.googleapis.com/v4/spreadsheets/${this.documentId}?${params}`,
@@ -870,7 +890,7 @@ export class RollSupplySheetsWriter {
     if (this.box && !this.layout.statusHeadersConfirmed)
       fail(
         "box_status_headers_missing",
-        "В шаблоне бокса не подтверждены колонки «Взяли в работу», «Завершил печать» и «Завершил порезку». Создание остановлено без изменений.",
+        "В шаблоне бокса не подтверждены колонки готовности печати и порезки. Создание остановлено без изменений.",
         409,
       );
     if (this.box)
@@ -1277,6 +1297,7 @@ export class RollSupplySheetsWriter {
           409,
         );
       this.preparedTemplates.delete(plan.operationId);
+      if (this.box) requests.push(...boxWorklogInitializationRequests(plan, sourceGrid.properties.gridProperties.columnCount || (plan.insertExtension ? 29 : 30)));
       requests.push({ clearBasicFilter: { sheetId } });
       for (let index = (sourceGrid.conditionalFormats || []).length - 1; index >= 0; index--)
         requests.push({ deleteConditionalFormatRule: { sheetId, index } });

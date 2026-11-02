@@ -1,0 +1,714 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <style>
+      :root {
+        font:
+          14px/1.45 Arial,
+          sans-serif;
+        color: #18304d;
+        background: #f4f7fc;
+        --blue: #1765ed;
+        --line: #dae5f3;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 14px;
+      }
+      button,
+      input,
+      select,
+      textarea {
+        font: inherit;
+      }
+      button {
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      h1 {
+        font-size: 20px;
+        margin: 0 0 4px;
+      }
+      h2 {
+        font-size: 14px;
+        margin: 0 0 10px;
+      }
+      p {
+        margin: 5px 0;
+      }
+      .muted {
+        color: #526781;
+        font-size: 12px;
+      }
+      .card {
+        background: white;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 13px;
+        margin: 12px 0;
+      }
+      .article {
+        font-size: 17px;
+        font-weight: 700;
+        user-select: text;
+      }
+      .shipment {
+        color: #526781;
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+      .factor {
+        color: #1765ed;
+        margin-top: 8px;
+        font-size: 12px;
+      }
+      label {
+        display: block;
+        font-weight: 600;
+        margin: 14px 0 6px;
+      }
+      input,
+      select,
+      textarea {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid #cbdbee;
+        border-radius: 8px;
+        background: white;
+        color: #18304d;
+      }
+      input[type="number"] {
+        font-size: 25px;
+        font-weight: 600;
+      }
+      textarea {
+        min-height: 65px;
+        resize: vertical;
+      }
+      .tabs {
+        display: flex;
+        gap: 4px;
+        flex-wrap: wrap;
+        margin: 12px 0;
+      }
+      .tabs button {
+        flex: 1;
+        min-width: 72px;
+        background: white;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px 5px;
+        color: #344c6a;
+        font-size: 12px;
+      }
+      .tabs button.active {
+        background: #1765ed;
+        color: white;
+        border-color: #1765ed;
+      }
+      .units {
+        display: flex;
+        gap: 4px;
+      }
+      .units button {
+        flex: 1;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        padding: 7px;
+        background: white;
+      }
+      .units .active {
+        background: #eaf2ff;
+        border-color: #1765ed;
+        color: #1765ed;
+      }
+      .summary {
+        background: #f5f8ff;
+        border-radius: 10px;
+        padding: 12px;
+        margin-top: 14px;
+      }
+      .metric {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        margin: 6px 0;
+      }
+      .metric strong {
+        text-align: right;
+      }
+      .track {
+        height: 7px;
+        border-radius: 8px;
+        background: #e2eaf5;
+        margin: 10px 0;
+        overflow: hidden;
+      }
+      .fill {
+        height: 100%;
+        background: #1765ed;
+      }
+      .primary {
+        display: block;
+        width: 100%;
+        padding: 12px;
+        background: #1765ed;
+        color: #fff;
+        font-weight: 700;
+        border: 0;
+        border-radius: 8px;
+        margin-top: 14px;
+      }
+      .secondary {
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: #fff;
+        color: #1765ed;
+        padding: 7px 10px;
+      }
+      .message {
+        font-size: 12px;
+        padding: 10px;
+        border-radius: 8px;
+        margin: 10px 0;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .error {
+        background: #fff3e4;
+        color: #8a4f04;
+      }
+      .success {
+        background: #e7f7ef;
+        color: #087d57;
+      }
+      .badges {
+        display: flex;
+        gap: 6px;
+      }
+      .badge {
+        flex: 1;
+        text-align: center;
+        padding: 7px 3px;
+        border-radius: 7px;
+        font-size: 11px;
+      }
+      .defect {
+        background: #fff0e6;
+        color: #b14d14;
+      }
+      .surplus {
+        background: #e6f6f0;
+        color: #087c6d;
+      }
+      .event {
+        padding: 10px 0;
+        border-bottom: 1px solid #e8eef6;
+        font-size: 12px;
+      }
+      .event-line {
+        display: flex;
+        justify-content: space-between;
+        gap: 5px;
+      }
+      .event button {
+        font-size: 11px;
+        padding: 4px 7px;
+        margin-top: 6px;
+      }
+      .cancelled {
+        color: #526781;
+        background: #f5f7fa;
+      }
+      .footer {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        margin: 15px 0;
+        font-size: 12px;
+      }
+      .footer a {
+        color: #1765ed;
+      }
+      .hidden {
+        display: none !important;
+      }
+      .empty {
+        padding: 20px 5px;
+        color: #526781;
+      }
+      button:focus-visible,
+      a:focus-visible {
+        outline: 3px solid #8ebaff;
+        outline-offset: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Учёт бокса</h1>
+    <p class="muted">
+      Выберите артикул в таблице. Все действия сохраняются с именем и временем.
+    </p>
+    <div id="message" role="status" aria-live="polite"></div>
+    <div class="footer">
+      <button class="secondary" id="refresh">Обновить</button
+      ><a id="journal" target="_blank" rel="noopener" class="hidden"
+        >Журнал и сотрудники ↗</a
+      >
+    </div>
+    <div id="content" class="hidden">
+      <div class="card">
+        <div class="shipment" id="shipment"></div>
+        <div class="article" id="article"></div>
+        <p id="plan" class="muted"></p>
+        <div class="factor" id="factor"></div>
+      </div>
+      <div class="tabs" id="actions">
+        <button data-action="take">▷ В работу</button
+        ><button data-action="print" class="active">▤ Печать</button
+        ><button data-action="cut">✂ Порезка</button
+        ><button data-action="defect">△ Брак</button
+        ><button data-action="surplus">＋ Излишек</button>
+      </div>
+      <label for="employee">Сотрудник</label
+      ><select id="employee">
+        <option value="">Выберите имя</option>
+      </select>
+      <p class="muted" id="noEmployees"></p>
+      <div id="entry">
+        <label>Единица</label>
+        <div class="units">
+          <button id="sheets" class="active">Листы</button
+          ><button id="kits">Комплекты / шт.</button>
+        </div>
+        <label for="quantity">Количество</label
+        ><input
+          id="quantity"
+          type="number"
+          min="1"
+          step="1"
+          inputmode="numeric"
+          placeholder="Например, 12"
+        />
+        <p class="muted" id="conversion"></p>
+      </div>
+      <div id="stageField" class="hidden">
+        <label for="stage">Где возник брак</label
+        ><select id="stage">
+          <option value="print">Печать</option>
+          <option value="cut">Порезка</option>
+        </select>
+      </div>
+      <label for="reason" id="reasonLabel">Комментарий · необязательно</label
+      ><textarea
+        id="reason"
+        maxlength="500"
+        placeholder="При необходимости уточните"
+      ></textarea>
+      <div class="summary">
+        <h2 id="summaryTitle">После сохранения</h2>
+        <div class="metric">
+          <span id="metricLabel">Напечатано</span
+          ><strong id="metricValue"></strong>
+        </div>
+        <div class="track"><div class="fill" id="progress"></div></div>
+        <p class="muted" id="remaining"></p>
+      </div>
+      <button class="primary" id="save">Сохранить запись</button
+      ><button class="secondary hidden" id="cancelUndo" style="margin-top: 8px">
+        Вернуться к записи работы
+      </button>
+      <div class="badges" style="margin-top: 12px">
+        <span id="defectBadge" class="badge defect"></span
+        ><span id="surplusBadge" class="badge surplus"></span>
+      </div>
+      <div class="card">
+        <h2>Последние записи</h2>
+        <div id="history"></div>
+      </div>
+    </div>
+    <script>
+      let lastSelection = "";
+      let context = null,
+        action = "print",
+        unit = "sheets",
+        busy = false,
+        pending = null,
+        undoTarget = null,
+        loading = false;
+      const $ = (id) => document.getElementById(id),
+        names = {
+          take: "Взяли в работу",
+          print: "Печать",
+          cut: "Порезка",
+          defect: "Брак",
+          surplus: "Излишек",
+          cancel: "Отмена",
+        },
+        keys = {
+          take: "taken",
+          print: "printed",
+          cut: "cut",
+          defect: "defect",
+          surplus: "surplus",
+        };
+      function msg(text, kind = "error") {
+        $("message").textContent = text;
+        $("message").className = text ? "message " + kind : "";
+      }
+      function remembered(key) {
+        try {
+          return sessionStorage.getItem("box:" + key);
+        } catch {
+          return null;
+        }
+      }
+      function remember(key, value) {
+        try {
+          sessionStorage.setItem("box:" + key, value);
+        } catch {}
+      }
+      function requestId() {
+        return (
+          "box-" +
+          Date.now().toString(36) +
+          "-" +
+          Array.from(crypto.getRandomValues(new Uint32Array(4)))
+            .map((n) => n.toString(36))
+            .join("-")
+        );
+      }
+      function call(name, ...args) {
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(
+            () =>
+              reject(
+                new Error("Ответ задерживается. Проверьте сохранённый запрос."),
+              ),
+            60000,
+          );
+          google.script.run
+            .withSuccessHandler((r) => {
+              clearTimeout(timer);
+              resolve(r);
+            })
+            .withFailureHandler((e) => {
+              clearTimeout(timer);
+              reject(e);
+            })
+            [name](...args);
+        });
+      }
+      function fmt(n) {
+        return Number(n).toLocaleString("ru-RU", { maximumFractionDigits: 3 });
+      }
+      async function load(force = false) {
+        if (loading || busy || pending) return;
+        loading = true;
+        try {
+          const selection = await call("getBoxPanelSelection");
+          if (!selection.eligible) {
+            context = null;
+            lastSelection = selection.signature;
+            $("content").classList.add("hidden");
+            msg("Выберите артикул на рабочем листе OZON или WB.");
+            return;
+          }
+          if (!force && context && selection.signature === lastSelection) return;
+          $("save").disabled = true;
+          msg("Загружаем выбранный артикул…", "success");
+          const r = await call(
+            "getBoxPanelContext",
+            "",
+          );
+          if (context?.positionId !== r.positionId) {
+            $("quantity").value = "";
+            $("reason").value = "";
+            undoTarget = null;
+            action = "print";
+          }
+          context = r;
+          lastSelection = selection.signature;
+          if (action === "cancel") action = "print";
+          choose(action);
+          render();
+          msg("");
+        } catch (e) {
+          context = null;
+          $("content").classList.add("hidden");
+          msg(e.message || String(e));
+        } finally {
+          loading = false;
+        }
+      }
+      function render() {
+        $("content").classList.remove("hidden");
+        $("shipment").textContent = context.shipment;
+        $("article").textContent = context.article;
+        $("plan").textContent =
+          "План: " +
+          fmt(context.planKits) +
+          " комплектов · " +
+          fmt(context.planSheets) +
+          " листов";
+        $("factor").textContent =
+          "1 комплект = " + fmt(context.sheetsPerKit) + " физических листа";
+        const select = $("employee"),
+          prior = select.value || remembered("employee") || "";
+        select.replaceChildren(new Option("Выберите имя", ""));
+        context.employees.forEach((e) => select.add(new Option(e.name, e.id)));
+        select.value = prior;
+        $("noEmployees").textContent = context.employees.length
+          ? ""
+          : "Список сотрудников пока пуст. Добавьте имена в журнале на листе «Сотрудники».";
+        $("journal").href = context.journalUrl;
+        $("journal").classList.remove("hidden");
+        $("defectBadge").textContent =
+          "Брак: " + fmt(context.totals.defect) + " листов";
+        $("surplusBadge").textContent =
+          "Излишек: " + fmt(context.totals.surplus) + " листов";
+        const history = $("history");
+        history.replaceChildren();
+        context.history.forEach((e) => {
+          const el = document.createElement("div");
+          el.className = "event" + (e.cancelled ? " cancelled" : "");
+          const line = document.createElement("div");
+          line.className = "event-line";
+          const who = document.createElement("span");
+          who.textContent = e.employee + " · " + names[e.action];
+          const qty = document.createElement("strong");
+          qty.textContent = fmt(e.sheets) + " листов";
+          line.append(who, qty);
+          const time = document.createElement("p");
+          time.className = "muted";
+          time.textContent =
+            (e.at
+              ? new Date(e.at).toLocaleString("ru-RU")
+              : "Исходная отметка") + (e.cancelled ? " · Отменено" : "");
+          el.append(line, time);
+          if (!e.cancelled) {
+            const b = document.createElement("button");
+            b.className = "secondary";
+            b.textContent = "Отменить запись";
+            b.onclick = () => startUndo(e);
+            el.append(b);
+          }
+          history.append(el);
+        });
+        if (!context.history.length)
+          history.textContent =
+            "Новых записей пока нет. Старые отметки сохранены как исходное состояние.";
+        update();
+      }
+      function choose(next) {
+        if (busy || pending) return;
+        action = next;
+        undoTarget = null;
+        $("entry").classList.remove("hidden");
+        $("cancelUndo").classList.add("hidden");
+        $("reasonLabel").textContent = "Комментарий · необязательно";
+        $("actions")
+          .querySelectorAll("button")
+          .forEach((b) =>
+            b.classList.toggle("active", b.dataset.action === action),
+          );
+        if (["defect", "surplus"].includes(action)) setUnit("sheets");
+        $("stageField").classList.toggle("hidden", action !== "defect");
+        update();
+      }
+      function setUnit(next) {
+        if (busy || pending) return;
+        unit = next;
+        $("sheets").classList.toggle("active", unit === "sheets");
+        $("kits").classList.toggle("active", unit === "kits");
+        update();
+      }
+      function startUndo(e) {
+        if (busy || pending) return;
+        action = "cancel";
+        undoTarget = e;
+        $("entry").classList.add("hidden");
+        $("stageField").classList.add("hidden");
+        $("cancelUndo").classList.remove("hidden");
+        $("reasonLabel").textContent = "Причина отмены · обязательно";
+        $("reason").value = "";
+        update();
+        $("reason").focus();
+      }
+      function update() {
+        if (!context) return;
+        const n = Number($("quantity").value),
+          sheets = n * (unit === "kits" ? context.sheetsPerKit : 1),
+          total = context.totals[keys[action]] || 0;
+        const value =
+          action === "cancel"
+            ? Math.max(
+                0,
+                context.totals[keys[undoTarget.action]] - undoTarget.sheets,
+              )
+            : total + (Number.isSafeInteger(n) && n > 0 ? sheets : 0);
+        $("conversion").textContent =
+          n > 0
+            ? fmt(sheets) +
+              " листов = " +
+              fmt(sheets / context.sheetsPerKit) +
+              " комплектов"
+            : "";
+        $("metricLabel").textContent =
+          action === "cancel"
+            ? "После отмены · " + names[undoTarget.action]
+            : names[action];
+        $("metricValue").textContent =
+          fmt(value) + " / " + fmt(context.planSheets) + " листов";
+        $("progress").style.width =
+          Math.max(0, Math.min(100, (value / context.planSheets) * 100)) + "%";
+        $("remaining").textContent = ["defect", "surplus"].includes(action)
+          ? "Учитывается отдельно от годного выполнения плана."
+          : "До плана: " +
+            fmt(Math.max(0, context.planSheets - value)) +
+            " листов";
+        $("save").textContent = pending
+          ? "Проверить и завершить сохранение"
+          : busy
+            ? "Сохраняем…"
+            : action === "cancel"
+              ? "Отменить запись с указанием имени"
+              : "Сохранить запись";
+        $("save").disabled =
+          busy ||
+          !$("employee").value ||
+          (!pending &&
+            (action === "cancel"
+              ? !$("reason").value.trim()
+              : !Number.isSafeInteger(n) || n <= 0));
+        $("kits").disabled =
+          ["defect", "surplus"].includes(action) || busy || !!pending;
+        ["quantity", "employee", "reason", "stage", "sheets"].forEach(
+          (id) => ($(id).disabled = busy || !!pending),
+        );
+        $("actions")
+          .querySelectorAll("button")
+          .forEach((b) => (b.disabled = busy || !!pending));
+        $("cancelUndo").disabled = busy || !!pending;
+      }
+      async function save() {
+        if (busy || !context) return;
+        const payload = pending || {
+          requestId: requestId(),
+          positionId: context.positionId,
+          sheetId: context.sheetId,
+          fingerprint: context.fingerprint,
+          employeeId: $("employee").value,
+          action,
+          unit,
+          quantity: Number($("quantity").value),
+          stage: $("stage").value,
+          reason: $("reason").value.trim(),
+          reverses: undoTarget?.id || "",
+        };
+        pending = payload;
+        remember("pending", JSON.stringify(payload));
+        remember("employee", payload.employeeId);
+        busy = true;
+        update();
+        msg("Сохраняем. Дождитесь подтверждения.", "success");
+        try {
+          const r = await call("saveBoxWork", payload);
+          if (!r.ok || r.eventId !== payload.requestId)
+            throw new Error("Подтверждение ещё не получено.");
+          pending = null;
+          remember("pending", "");
+          $("quantity").value = "";
+          $("reason").value = "";
+          busy = false;
+          choose("print");
+          await load(true);
+          msg(
+            "Сохранено · " + new Date().toLocaleTimeString("ru-RU"),
+            "success",
+          );
+        } catch (e) {
+          busy = false;
+          if ((e.message || String(e)).includes("NOT_SAVED: ")) {
+            pending = null;
+            remember("pending", "");
+            msg((e.message || String(e)).replace("NOT_SAVED: ", ""));
+          } else
+            msg(
+              (e.message || String(e)) +
+                "\nЗапрос сохранён. Повторная проверка использует тот же ID и не создаст дубль.",
+            );
+        } finally {
+          busy = false;
+          update();
+        }
+      }
+      $("actions").onclick = (e) => {
+        const b = e.target.closest("[data-action]");
+        if (b) choose(b.dataset.action);
+      };
+      $("sheets").onclick = () => setUnit("sheets");
+      $("kits").onclick = () => setUnit("kits");
+      $("quantity").oninput = update;
+      $("employee").onchange = update;
+      $("reason").oninput = update;
+      $("save").onclick = save;
+      $("cancelUndo").onclick = () => choose("print");
+      $("refresh").onclick = () => load(true);
+      // Lost responses keep their original payload. Recover before allowing another operation.
+      async function boot() {
+        const saved = remembered("pending");
+        if (saved) {
+          try {
+            pending = JSON.parse(saved);
+            busy = true;
+            msg("Проверяем сохранённую операцию…", "success");
+            const r = await call("saveBoxWork", pending);
+            if (r.ok && r.eventId === pending.requestId) {
+              pending = null;
+              remember("pending", "");
+              msg("Предыдущая запись подтверждена.", "success");
+            }
+          } catch (e) {
+            if ((e.message || String(e)).includes("NOT_SAVED: ")) {
+              pending = null;
+              remember("pending", "");
+              msg((e.message || String(e)).replace("NOT_SAVED: ", ""));
+            } else
+              msg(
+                (e.message || String(e)) +
+                  "\nСохранённый запрос требует проверки.",
+              );
+          } finally {
+            busy = false;
+          }
+        }
+        if (pending) {
+          $("content").classList.add("hidden");
+          const b = document.createElement("button");
+          b.className = "primary";
+          b.textContent = "Проверить прежнюю запись";
+          b.onclick = () => {
+            b.disabled = true;
+            boot().finally(() => b.remove());
+          };
+          $("message").append(b);
+          return;
+        }
+        await load(true);
+      }
+      boot();
+      setInterval(() => {
+        if (!document.hidden) load();
+      }, 2500);
+    </script>
+  </body>
+</html>

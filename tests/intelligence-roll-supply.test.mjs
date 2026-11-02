@@ -5,6 +5,7 @@ import {
   RollSupplyManagementService,
   RollSupplySheetsWriter,
   boxTemplateWithExtension,
+  boxWorklogInitializationRequests,
 } from "../agent/rollSupply.js";
 import {
   ROLL_PRINTING_SHEET,
@@ -20,6 +21,17 @@ const payload = (operationId, overrides = {}) => ({
   name: "OZON ТЕСТОВАЯ ПОСТАВКА",
   lines: [{ article: "TEST-001", quantity: 12 }],
   ...overrides,
+});
+
+test("new box journal initialization clears only the copied sheet's totals and row identities", () => {
+  const plan={sheetId:123,insertExtension:false,startRow:5,clearThrough:6,lines:[{article:"A",quantity:20}]};
+  const requests=boxWorklogInitializationRequests(plan,35);
+  assert.equal(requests.some(r=>r.appendDimension),false);
+  for(const request of requests){const target=request.updateCells?.start.sheetId??request.deleteDeveloperMetadata?.dataFilter.developerMetadataLookup.metadataLocation.sheetId;assert.equal(target,123);}
+  const clear=requests.find(r=>r.updateCells?.start.rowIndex===4&&r.updateCells.rows.length===2).updateCells;
+  assert.equal(clear.start.columnIndex,30);assert.ok(clear.rows.every(r=>r.values.length===5&&r.values.every(c=>!c.userEnteredValue)));
+  assert.equal(requests.find(r=>r.deleteDeveloperMetadata).deleteDeveloperMetadata.dataFilter.developerMetadataLookup.metadataKey,"RITM_BOX_POSITION");
+  assert.equal(boxWorklogInitializationRequests({...plan,insertExtension:true},29)[0].appendDimension.length,5);
 });
 
 const deletePayload = (operationId, name, sheetId, overrides = {}) => ({
@@ -59,7 +71,7 @@ function googleHarness({
     properties: {
       sheetId: descriptor.gid,
       title: descriptor.name,
-      gridProperties: { rowCount: templateRows },
+      gridProperties: { rowCount: templateRows, columnCount: box ? 29 : 30 },
     },
     data: [{ startRow: 0, startColumn: 0, rowData: [] }],
   };
@@ -204,6 +216,7 @@ function googleHarness({
             assert.equal(range.startIndex, 5);
             const upgraded = boxTemplateWithExtension(sheet);
             sheet.data = upgraded.data;
+            sheet.properties.gridProperties.columnCount += count;
             replies.push({});
             continue;
           }
@@ -214,6 +227,9 @@ function googleHarness({
           );
           sheet.properties.gridProperties.rowCount += count;
           replies.push({});
+        } else if (request.appendDimension) {
+          const { sheetId,dimension,length }=request.appendDimension;
+          assert.equal(dimension,"COLUMNS");sheets.get(sheetId).properties.gridProperties.columnCount+=length;replies.push({});
         } else if (request.copyPaste) {
           const { source, destination } = request.copyPaste;
           const sheet = sheets.get(source.sheetId);
@@ -1185,6 +1201,11 @@ test("new box has extension F, shifted calculations and neutral appearance; orig
   assert.equal(row[17].userEnteredValue.boolValue, false, "the shifted work checkbox remains unchecked");
   assert.equal(row[18].userEnteredValue.boolValue, false);
   assert.equal(row[19].userEnteredValue.boolValue, false);
+  assert.equal(target.properties.gridProperties.columnCount,35);
+  assert.deepEqual(row.slice(30,34).map(c=>c.userEnteredValue?.numberValue),[0,0,0,0]);
+  assert.equal(target.data[0].rowData[3].values[30].userEnteredValue.stringValue,"Брак, листы");
+  assert.equal(target.data[0].rowData[3].values[34].userEnteredValue.stringValue,"Дата взятия в работу");
+  assert.ok(google.requests[0].some(r=>r.deleteDeveloperMetadata?.dataFilter.developerMetadataLookup.metadataKey==="RITM_BOX_POSITION"));
   const batch = google.requests[0];
   assert.deepEqual(batch.filter(r => r.deleteConditionalFormatRule).map(r => r.deleteConditionalFormatRule), [{ sheetId: plan.sheetId, index: 1 }, { sheetId: plan.sheetId, index: 0 }]);
   assert.ok(batch.some(r => r.clearBasicFilter?.sheetId === plan.sheetId));
