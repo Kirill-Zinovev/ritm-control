@@ -30,3 +30,5 @@ apps-script/assembly/Code.js
 .tmp-*/
 artifacts/
 debug.log
+
+.tmp-*

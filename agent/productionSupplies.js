@@ -99,6 +99,10 @@ export function routeSupplyLines(lines, marketplace, catalog) {
     );
     if (machineColumn < 0)
       fail("catalog_schema_changed", "В базе не найдена колонка станка.");
+    const storeColumns = headers.flatMap((h, index) => String(h).trim().toLocaleLowerCase("ru-RU") === "магазин" ? [index] : []);
+    if (storeColumns.length > 1)
+      fail("catalog_schema_changed", `Во вкладке ${sheetName} найдено несколько колонок «Магазин».`);
+    const storeColumn = storeColumns[0] ?? -1;
     const map = new Map();
     for (const row of rows.slice(1)) {
       const aliases = market === "OZON" ? [row[0], row[1]] : [row[0]];
@@ -106,10 +110,16 @@ export function routeSupplyLines(lines, marketplace, catalog) {
         if (!alias || String(alias).startsWith("#")) continue;
         const key = articleKey(alias);
         const machine = String(row[machineColumn] || "").trim();
+        const storeValue = storeColumn < 0 ? "" : String(row[storeColumn] || "").trim();
         const prior = map.get(key);
-        if (!prior) map.set(key, { machine });
-        else if (prior.machine.toUpperCase() !== machine.toUpperCase())
-          prior.conflict = true;
+        if (!prior) map.set(key, { machine, store: /^\d+$/.test(storeValue) ? storeValue : "", storeConflict: false });
+        else {
+          if (prior.machine.toUpperCase() !== machine.toUpperCase()) prior.conflict = true;
+          if (/^\d+$/.test(storeValue)) {
+            if (prior.store && prior.store !== storeValue) { prior.storeConflict = true; prior.store = ""; }
+            else prior.store = storeValue;
+          }
+        }
       }
     }
     return map;
@@ -130,7 +140,8 @@ export function routeSupplyLines(lines, marketplace, catalog) {
         issue: "Артикул повторяется после нормализации",
       };
     seen.add(key);
-    let record = (marketplace === "OZON" ? ozon : wb).get(key);
+    const selectedMarketRecord = (marketplace === "OZON" ? ozon : wb).get(key);
+    let record = selectedMarketRecord;
     if (record?.conflict)
       return {
         ...line,
@@ -167,6 +178,8 @@ export function routeSupplyLines(lines, marketplace, catalog) {
       ...line,
       machine,
       department,
+      store: selectedMarketRecord?.storeConflict ? "" : selectedMarketRecord?.store || "",
+      storeIssue: selectedMarketRecord?.storeConflict ? "В базе указаны разные магазины" : selectedMarketRecord?.store ? null : "Магазин не подтверждён в базе выбранного маркетплейса",
       extension: extension && !extension.conflict ? extension.value : null,
       issue: department
         ? null

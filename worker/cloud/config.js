@@ -8,7 +8,7 @@ export function sourceId(bindings, key) {
 }
 
 export function sourceIds(bindings) {
-  return [...new Set([...keys, "photosId"].map((key) => sourceId(bindings, key)).filter(Boolean))];
+  return [...new Set([...keys, "photosId", "boxJournalId"].map((key) => sourceId(bindings, key)).filter(Boolean))];
 }
 
 export function cloudConfig(bindings) {

@@ -14,7 +14,7 @@ function fixture(){
    getValues:()=>data.slice(row-2,row-2+n).map(v=>v.slice(col-1,col-1+width)),
    createTextFinder:value=>({matchEntireCell(){return this;},useRegularExpression(){return this;},findAll:()=>data.flatMap((v,i)=>String(v[col-1])===String(value)?[{getRow:()=>i+2}]:[])})
  })};
- const p={sheetId:7,row:5,shipment:'OZON Test',article:'NC0005.A5121',planKits:20,sheetsPerKit:2,planSheets:40,widthM:.21,heightM:.297,fingerprint:'known-plan'};
+ const p={sheetId:7,row:5,shipment:'OZON Test',article:'NC0005.A5121',xerox:true,multiplicity:1,planKits:20,sheetsPerKit:2,planSheets:40,widthM:.21,heightM:.297,fingerprint:'known-plan'};
  const c=vm.createContext({console,Date,Number,Object,JSON,Utilities:{getUuid:randomUUID,DigestAlgorithm:{SHA_256:'sha256'},Charset:{UTF_8:'utf8'},computeDigest:(_,text)=>[...createHash('sha256').update(text).digest()]},
    LockService:{getScriptLock:()=>({tryLock:()=>{if(locked)return false;hasLock=true;return true;},releaseLock:()=>{hasLock=false;}})},PropertiesService:{getScriptProperties:()=>({setProperty(){},getProperty(){return null;}})}});
  vm.runInContext(code,c);
@@ -48,7 +48,7 @@ test('card selection never projects or rewrites totals; unchanged polling avoids
  const sheet={getName:()=>'OZON TEST',isSheetHidden:()=>false,getSheetId:()=>7,getRange:()=>({getValues:()=>[['NC0005.A5121',2,20]]})};
  f.c.SpreadsheetApp={getActiveSpreadsheet:()=>({getId:()=>'TEST-BOX-ONLY',getActiveRange:()=>({getSheet:()=>sheet,getRow:()=>5})})};
  f.c.PropertiesService={getScriptProperties:()=>({getProperty:key=>key==='BOX_SOURCE_ID'?'TEST-BOX-ONLY':''})};
- f.c.boxIdentity_=()=>'position-1';f.c.boxBaseline_=(_books,_p,_id,create)=>{assert.equal(create,false);journalReads++;return {...f.base};};
+ f.c.boxSelection_=()=>({sheet,rows:[5]});f.c.boxIdentity_=()=>'position-1';f.c.boxBaseline_=(_books,_p,_id,create)=>{assert.equal(create,false);journalReads++;return {...f.base};};
  f.c.boxProject_=()=>{throw new Error('read must not rewrite source');};
  const first=f.c.getBoxPanelContext('');assert.equal(first.article,'NC0005.A5121');assert.equal(journalReads,1);
  const books=f.c.boxBooks_;f.lock();f.c.boxBooks_=()=>{throw new Error('unchanged read must not open journal');};
@@ -61,7 +61,7 @@ test('card cache speeds revisits; a saved-event revision and manual refresh alwa
  f.c.SpreadsheetApp={getActiveSpreadsheet:()=>({getId:()=>'TEST-BOX-ONLY',getActiveRange:()=>({getSheet:()=>sheet,getRow:()=>5})})};
  f.c.PropertiesService={getScriptProperties:()=>({getProperty:key=>key==='BOX_SOURCE_ID'?'TEST-BOX-ONLY':key==='BOX_REVISION'?revision:'TEST-JOURNAL'})};
  f.c.CacheService={getScriptCache:()=>({get:key=>cache.get(key),put:(key,value)=>cache.set(key,value)})};
- f.c.boxIdentity_=()=>'position-1';f.c.boxBaseline_=()=>{reads++;return {...f.base};};
+ f.c.boxSelection_=()=>({sheet,rows:[5]});f.c.boxIdentity_=()=>'position-1';f.c.boxBaseline_=()=>{reads++;return {...f.base};};
  const first=f.c.getBoxPanelContext('');assert.equal(reads,1);
  assert.equal(f.c.getBoxPanelContext('previous-other-row').totals.printed,0);assert.equal(reads,1);
  f.base.printed=12;revision='new-confirmed-event';assert.equal(f.c.getBoxPanelContext(first.key).totals.printed,12);assert.equal(reads,2);
@@ -69,4 +69,11 @@ test('card cache speeds revisits; a saved-event revision and manual refresh alwa
 });
 
 test('completion dates stay empty for partial work and first take time is retained',()=>{const f=fixture();const base={...f.base};const state=f.c.boxTotals_(base,[{action:'take',eventId:'a',sheets:2,at:'2026-11-02T08:00:00Z'},{action:'take',eventId:'b',sheets:3,at:'2026-11-02T09:00:00Z'},{action:'print',eventId:'c',sheets:20,at:'2026-11-02T10:00:00Z'}]);assert.equal(state.totals.takenAt,'2026-11-02T08:00:00Z');assert.equal(f.c.boxDates_(state.totals,40)[1],'');state.totals.printed=40;assert.equal(f.c.boxDates_(state.totals,40)[1].toISOString(),'2026-11-02T10:00:00.000Z');});
-test('progress references physical-sheet plan and independent good print/cut totals',()=>{const f=fixture(),formula=f.c.boxProgressFormula_(5);assert.match(formula,/G5\*P5/);assert.match(formula,/AB5/);assert.match(formula,/AC5/);assert.match(formula,/CHAR\(10\)/);});
+test('progress references physical-sheet plan and independent good print/cut totals',()=>{const f=fixture(),formula=f.c.boxProgressFormula_(5);assert.match(formula,/P5\/N5\*G5/);assert.match(formula,/REGEXMATCH/);assert.match(formula,/AB5/);assert.match(formula,/AC5/);assert.match(formula,/CHAR\(10\)/);});
+
+ test('non Xerox records pieces without sheet quantities and preserves retry and cancellation',()=>{const f=fixture();Object.assign(f.p,{xerox:false,sheetsPerKit:1,multiplicity:1,planSheets:20});const q=f.req({unit:'pieces',quantity:8});assert.equal(f.c.saveBoxWork(q).totals.printed,8);assert.equal(f.data[0][13],'');assert.equal(f.data[0][14],8);assert.equal(f.c.saveBoxWork(q).totals.printed,8);assert.equal(f.data.length,1);assert.equal(f.c.saveBoxWork(f.req({unit:'pieces',action:'defect',quantity:2,stage:'print'})).totals.defect,2);assert.equal(f.c.saveBoxWork(f.req({unit:'pieces',action:'cancel',reverses:q.requestId,reason:'Ошибка'})).totals.printed,0);});
+ test('non Xerox rejects stale sheet-mode requests',()=>{const f=fixture();f.p.xerox=false;assert.throws(()=>f.c.saveBoxWork(f.req()),/штуки товара/);assert.equal(f.data.length,0);});
+ test('historical non Xerox events use stored product quantity, not old physical sheets',()=>{const f=fixture();const state=f.c.boxTotals_(f.base,[{eventId:'old',action:'print',sheets:40,kits:20,at:'2026-11-01'}],{xerox:false});assert.equal(state.totals.printed,20);});
+
+test('live position rules: non Xerox needs no multiplicity, Xerox still validates conversion',()=>{const f=fixture();vm.runInContext(code,f.c);let machine='УФ планшет';const values=Array(35).fill('');values[4]='ND0126.A4679';values[6]=2;values[15]=20;f.c.boxSchema_=()=>({article:5,plan:16,factor:7,multiplicity:14,machine:4,printed:19,cut:20});f.c.boxCompact_=()=>true;const sh={getMaxColumns:()=>35,getSheetId:()=>7,getName:()=>'OZON Test',getRange:()=>({getValues:()=>{values[3]=machine;return [values];}})};let p=f.c.boxPosition_(sh,5);assert.equal(p.planKits,20);assert.equal(p.planSheets,20);assert.equal(p.xerox,false);machine='XEROX';assert.throws(()=>f.c.boxPosition_(sh,5),/кратность/);values[13]=4;p=f.c.boxPosition_(sh,5);assert.equal(p.planKits,20);assert.equal(p.planSheets,10);assert.equal(p.xerox,true);});
+test('Xerox quantity uses multiplicity and rejects fractional physical sheets',()=>{const f=fixture();f.p.multiplicity=4;f.p.planSheets=10;assert.equal(f.c.saveBoxWork(f.req({unit:'kits',quantity:6})).totals.printed,3);assert.throws(()=>f.c.saveBoxWork(f.req({unit:'kits',quantity:1})),/целое число/);assert.equal(f.data.length,1);});

@@ -1,3 +1,4 @@
+import { loadBoxPrinting } from './boxPrintingJournal.js';
 import { loadAssembly } from "../worker/assembly.js";
 import {
   loadPrinting,
@@ -229,13 +230,14 @@ export async function loadSource(
         catch (error) { if (options.signal?.aborted) throw error; }
       }
     }
-    const printing = await loadPrinting(authenticatedFetcher, {
+    let printing = await loadPrinting(authenticatedFetcher, {
       additionalSheets: options.printingAdditionalSheets || [],
       productionSupplies: options.productionSupplies || [],
       assemblyBoxLinks: options.assemblyBoxLinks || [],
       shopCatalogRows,
       photoCatalogRows,
     });
+    printing = await loadBoxPrinting(options.googleReader, printing, {journalId: options.boxJournalId || source.boxJournalId || (typeof process !== "undefined" ? process.env.RITM_BOX_JOURNAL_ID : ""), signal: options.signal});
     const checkedAt = now instanceof Date ? now.toISOString() : new Date().toISOString();
     return options.googleReader
       ? loadAssemblyPacking(options.googleReader, printing, {

@@ -6222,3 +6222,34 @@ td small {
   .production-control-form-footer > div { width: 100%; }
   .production-control-form-footer > div .button:last-child { margin-left: auto; }
 }
+
+/* Existing printing page: department views and employee journal drilldown. */
+.printing-department-tabs{display:inline-flex;border:1px solid var(--border);border-radius:10px;overflow:hidden;margin:0 0 22px;background:#fff}
+.printing-department-tabs button{border:0;border-radius:0;padding:12px 24px;background:transparent;color:var(--text);font-size:15px;font-weight:600}
+.printing-department-tabs button[aria-pressed=true]{background:var(--primary);color:white}
+.printing-roll-title{display:flex;align-items:center;gap:12px;margin-bottom:18px}
+.printing-roll-title svg{color:var(--primary)}
+.printing-department{margin-top:24px;padding:22px}
+.printing-department-heading{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-bottom:20px}
+.printing-department-title{display:flex;align-items:center;gap:14px}
+.printing-department-title h2{font-size:26px;margin:0 0 4px}
+.printing-department-title p{margin:0;color:var(--muted);font-size:13px}
+.printing-department-icon{display:grid;place-items:center;width:52px;height:52px;border-radius:14px;background:#fff4e5;color:#b98746;flex-shrink:0}
+.printing-kpis{display:grid;grid-template-columns:repeat(4,minmax(100px,1fr));gap:10px;flex:1;max-width:760px}
+.printing-kpis>div{padding:13px 16px;border:1px solid var(--border);border-radius:9px;background:#fbfdff}
+.printing-kpis span{display:block;color:var(--muted);font-size:12px;margin-bottom:6px}
+.printing-kpis strong{font-size:23px;white-space:nowrap}
+.printing-employee-table{border:1px solid var(--border);border-radius:10px}
+.printing-employee-table table{width:100%;font-size:15px;border-collapse:collapse}
+.printing-employee-table th,.printing-employee-table td{padding:14px 18px;text-align:left;border-bottom:1px solid var(--border)}
+.printing-employee-table thead{background:#f3f7fc;color:var(--muted)}
+.printing-employee-table tr.selected{background:#eaf4ff}
+.printing-employee-toggle{display:flex;align-items:center;gap:14px;background:transparent;border:0;padding:0;color:inherit;font:inherit;font-weight:700;text-align:left}
+.printing-employee-toggle svg{color:var(--primary)}
+.printing-mini-track{display:inline-block;width:100px;height:7px;background:#e2ebf5;border-radius:9px;margin-left:14px;vertical-align:middle}
+.printing-mini-track>span{display:block;height:100%;background:#2789ff;border-radius:inherit}
+.printing-work-detail{padding:16px;background:#f7faff;border:1px solid var(--border);border-radius:10px}
+.printing-work-detail h3{margin:0 0 12px;font-size:16px}
+.printing-area-warning{color:#895b13;background:#fff7e8;border-radius:8px;padding:12px}
+@media(max-width:1100px){.printing-department-heading{align-items:stretch;flex-direction:column}.printing-kpis{max-width:none}}
+@media(max-width:620px){.printing-department{padding:14px}.printing-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.printing-department-tabs{display:flex}.printing-department-tabs button{padding:10px;font-size:13px;flex:1}.printing-kpis strong{font-size:20px}.printing-employee-table table{min-width:690px}}

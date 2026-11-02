@@ -1,3 +1,4 @@
+import { BoxPrintingStats } from "./BoxPrintingStats";
 import { AICenter } from "./AICenter";
 import { TelegramMiniApp } from "./TelegramMiniApp";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
@@ -170,6 +171,7 @@ function AppShell() {
   const [period, setPeriod] = useState<Period>("day");
   const [query, setQuery] = useState("");
   const [site, setSite] = useState("Все участки");
+  const [printingDepartment, setPrintingDepartment] = useState("all");
   const [mode, setMode] = useState<"demo" | "imported">("imported");
   const [stockView, setStockView] = useState<WarehouseView>("cartons");
   const warehouse = useLiveWarehouse(page === "stock" && mode === "imported" && stockView !== "stock");
@@ -1277,6 +1279,9 @@ function AppShell() {
                     </select>
                   </div>
                 )}
+                <div className="printing-department-tabs" role="group" aria-label="Участок печати">{[["all","Все участки"],["roll","Рулонная печать"],["box","Бокс"]].map(([id,label])=><button key={id} aria-pressed={printingDepartment===id} onClick={()=>setPrintingDepartment(id)}>{label}</button>)}</div>
+                <div hidden={printingDepartment==='box'}>
+                <h2 className="printing-roll-title"><Printer size={28}/> Рулонная и сезонная печать</h2>
                 <div className="metrics three">
                   {metric(
                     "Учтено за период",
@@ -1373,6 +1378,8 @@ function AppShell() {
                     </div>
                   </section>
                 </div>
+                </div>
+                {printingDepartment!=='roll'&&<BoxPrintingStats value={live.value} date={date} period={period} supplyFilter={supplyFilter} />}
                 {mode === "imported" && live.value && (
                   <section className="panel">
                     <div className="panel-heading">

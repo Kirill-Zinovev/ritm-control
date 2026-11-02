@@ -59,8 +59,8 @@ function boxSchema_(sh){
   if(!boxEligible_(sh)) throw new Error('Выберите рабочий лист, начинающийся с OZON или WB.');
   var h=sh.getRange(BOXW.header,1,1,Math.min(sh.getMaxColumns(),34)).getDisplayValues()[0].map(boxFold_);
   function find(names,required){var hits=[];h.forEach(function(v,i){if(names.indexOf(v)>=0)hits.push(i+1);});if(hits.length>1 || (required && !hits.length)) throw new Error('Не подтверждена колонка «'+names[0]+'».');return hits[0]||0;}
-  return {article:find(['артикул'],true),plan:find(['кол-во','количество'],true),factor:find(['кол-во листов','количество листов'],true),
-    width:find(['ширина']),height:find(['высота']),taken:find(['взяли в работу','взяли в рабоу','взят в работу']),
+  return {article:find(['артикул'],true),plan:find(['кол-во','количество'],true),factor:find(['кол-во листов','количество листов'],true),multiplicity:find(['кратность'],true),
+    machine:find(['станок'],true),width:find(['ширина']),height:find(['высота']),taken:find(['взяли в работу','взяли в рабоу','взят в работу']),
     printed:find(['завершил печать','завершили печать','готовность печати'],true),cut:find(['завершил порезку','завершили порезку','готовность порезки'],true),
     printedAt:find(['дата готовности печати','дата завершения печати']),cutAt:find(['дата готовности порезки','дата завершения порезки'])};
 }
@@ -72,7 +72,7 @@ function boxEnsureColumns_(sh){
   [schema.taken,schema.printed,schema.cut].filter(Boolean).forEach(function(c){sh.hideColumns(c);});
 }
 function boxProgressFormula_(row){
-  var plan='G'+row+'*P'+row;
+  var plan='IF(REGEXMATCH(LOWER(TRIM(D'+row+'));"^(xerox|ксерокс|x|х)$");IFERROR(P'+row+'/N'+row+'*G'+row+';0);P'+row+')';
   function line(label,col){var ratio=col+row+'/('+plan+')';return '"'+label+' "&REPT("■";ROUND(MIN(1;'+ratio+')*8;0))&REPT("□";8-ROUND(MIN(1;'+ratio+')*8;0))&" "&TEXT('+ratio+';"0%")';}
   return '=IFERROR(IF('+plan+'>0;'+line('Печать','AB')+'&CHAR(10)&'+line('Порезка','AC')+';"План не определён");"План не определён")';
 }
@@ -109,13 +109,17 @@ function boxPosition_(sh,row){
   var schema=boxSchema_(sh);if(row<5)throw new Error('Выберите строку с артикулом.');
   var values=sh.getRange(row,1,1,Math.min(35,sh.getMaxColumns())).getValues()[0], article=String(values[schema.article-1]||'').trim();
   if(!article || article[0]==='#')throw new Error('В выбранной строке нет подтверждённого артикула.');
-  var kits=boxNumber_(values[schema.plan-1]),factor=boxNumber_(values[schema.factor-1]);
-  if(!Number.isSafeInteger(kits)||kits<=0||!Number.isSafeInteger(factor)||factor<=0)throw new Error('Не подтверждены план и количество физических листов в комплекте.');
+  var kits=boxNumber_(values[schema.plan-1]),factor=boxNumber_(values[schema.factor-1]),multiplicity=boxNumber_(values[schema.multiplicity-1]);
+  var machine=boxFold_(values[schema.machine-1]),xerox=/^(xerox|ксерокс|x|х)$/.test(machine);
+  if(!machine)throw new Error('У артикула не указан станок. Заполните колонку «Станок».');
+  if(!Number.isSafeInteger(kits)||kits<=0)throw new Error('Не подтверждён план в штуках в колонке P.');
+  if(xerox&&(!Number.isSafeInteger(factor)||factor<=0||!Number.isSafeInteger(multiplicity)||multiplicity<=0))throw new Error('Для Xerox заполните кратность и количество листов на товар.');
+  if(!xerox){factor=1;multiplicity=1;}
   var width=schema.width?boxNumber_(values[schema.width-1]):null,height=schema.height?boxNumber_(values[schema.height-1]):null;
-  var position={sheetId:sh.getSheetId(),row:row,shipment:sh.getName(),article:article,planKits:kits,sheetsPerKit:factor,planSheets:kits*factor,widthM:width>0?width:null,heightM:height>0?height:null,schema:schema};
+  var position={sheetId:sh.getSheetId(),row:row,shipment:sh.getName(),article:article,xerox:xerox,machine:machine,planKits:kits,sheetsPerKit:factor,multiplicity:multiplicity,planSheets:kits/multiplicity*factor,widthM:width>0?width:null,heightM:height>0?height:null,schema:schema};
   function dateAt(col){var v=col?values[col-1]:null;return v instanceof Date&&!isNaN(v.getTime())?v.toISOString():'';}
   position.legacyDates={takenAt:dateAt(boxCompact_(sh)?21:35),printedAt:dateAt(schema.printedAt),cutAt:dateAt(schema.cutAt)};
-  position.fingerprint=boxHash_([position.sheetId,article,kits,factor,position.widthM,position.heightM]);
+  position.fingerprint=boxHash_([position.sheetId,article,kits,factor,multiplicity,position.widthM,position.heightM,machine]);
   position.legacy={taken:schema.taken&&values[schema.taken-1]===true?position.planSheets:0,printed:values[schema.printed-1]===true?position.planSheets:0,cut:values[schema.cut-1]===true?position.planSheets:0};
   return position;
 }
@@ -123,13 +127,21 @@ function boxHash_(data){return Utilities.computeDigest(Utilities.DigestAlgorithm
 function boxEmployees_(journal){var sh=journal.getSheetByName('Сотрудники');if(!sh||sh.getLastRow()<2)return [];var seen={},names={},result=[];sh.getRange(2,1,sh.getLastRow()-1,3).getValues().forEach(function(r,i){var name=String(r[0]||'').trim();if(!name||r[1]===false||String(r[1]).toUpperCase()==='FALSE')return;var id=String(r[2]||'').trim();if(!id){id=Utilities.getUuid();sh.getRange(i+2,3).setValue(id);}if(seen[id]||names[boxFold_(name)])throw new Error('Повторный сотрудник в списке бокса.');seen[id]=true;names[boxFold_(name)]=true;result.push({id:id,name:name});});return result;}
 function boxBaseline_(books,p,id,create){
   var sh=books.journal.getSheetByName('_Позиции'), hit=boxFind_(sh,1,id);
-  if(hit){var v=sh.getRange(hit.getRow(),1,1,BOXW.positionHeaders.length).getValues()[0];if(v[1]!==books.source.getId()||Number(v[2])!==p.sheetId||v[3]!==p.article)throw new Error('Изменилась связь позиции с журналом.');return {taken:Number(v[4]),printed:Number(v[5]),cut:Number(v[6]),defect:Number(v[7]),surplus:Number(v[8]),takenAt:v[10]||'',printedAt:v[11]||'',cutAt:v[12]||'',positionId:id};}
+  if(hit){var v=sh.getRange(hit.getRow(),1,1,BOXW.positionHeaders.length).getValues()[0];if(v[1]!==books.source.getId()||Number(v[2])!==p.sheetId||v[3]!==p.article)throw new Error('Изменилась связь позиции с журналом.');return {taken:p.xerox?Number(v[4]):(Number(v[4])>0?p.planKits:0),printed:p.xerox?Number(v[5]):(Number(v[5])>0?p.planKits:0),cut:p.xerox?Number(v[6]):(Number(v[6])>0?p.planKits:0),defect:Number(v[7]),surplus:Number(v[8]),takenAt:v[10]||'',printedAt:v[11]||'',cutAt:v[12]||'',positionId:id};}
   if(create!==false)sh.appendRow([id,books.source.getId(),p.sheetId,p.article,p.legacy.taken,p.legacy.printed,p.legacy.cut,0,0,new Date().toISOString(),p.legacyDates.takenAt,p.legacyDates.printedAt,p.legacyDates.cutAt]);return Object.assign({taken:p.legacy.taken,printed:p.legacy.printed,cut:p.legacy.cut,defect:0,surplus:0,positionId:id},p.legacyDates);
 }
 function boxEvents_(journal,id){var sh=journal.getSheetByName('Журнал');if(sh.getLastRow()<2)return [];return sh.getRange(2,4,sh.getLastRow()-1,1).createTextFinder(id).matchEntireCell(true).useRegularExpression(false).findAll().map(function(cell){var v=sh.getRange(cell.getRow(),1,1,BOXW.eventHeaders.length).getValues()[0],e={};BOXW.eventHeaders.forEach(function(k,i){e[k]=v[i];});Object.keys(BOXW.actions).forEach(function(k){if(e.action===BOXW.actions[k])e.action=k;});return e;});}
-function boxTotals_(base,events){var totals=Object.assign({},base),cancelled={};events.forEach(function(e){if(e.action==='cancel')cancelled[e.reverses]=true;});['take','print','cut'].forEach(function(action){var key={take:'taken',print:'printed',cut:'cut'}[action];if(cancelled['baseline:'+action+':'+base.positionId]){totals[key]=0;totals[key+'At']='';}});events.forEach(function(e){if(e.action!=='cancel'&&!cancelled[e.eventId]){var key={take:'taken',print:'printed',cut:'cut',defect:'defect',surplus:'surplus'}[e.action];if(!key)throw new Error('Неизвестная операция в журнале.');totals[key]+=Number(e.sheets);if(['taken','printed','cut'].indexOf(key)>=0){if(key!=='taken'||!totals.takenAt)totals[key+'At']=e.at;}}});return {totals:totals,cancelled:cancelled};}
+function boxEventsMany_(journal,ids){
+  var wanted={};ids.forEach(function(id){wanted[id]=true;});var result={};ids.forEach(function(id){result[id]=[];});
+  var sh=journal.getSheetByName('Журнал'),last=sh.getLastRow();if(last<2)return result;
+  sh.getRange(2,1,last-1,BOXW.eventHeaders.length).getValues().forEach(function(v){var id=String(v[3]||'');if(!wanted[id])return;var e={};BOXW.eventHeaders.forEach(function(k,i){e[k]=v[i];});Object.keys(BOXW.actions).forEach(function(k){if(e.action===BOXW.actions[k])e.action=k;});result[id].push(e);});
+  return result;
+}
+function boxTotals_(base,events,p){var totals=Object.assign({},base),cancelled={};events.forEach(function(e){if(e.action==='cancel')cancelled[e.reverses]=true;});['take','print','cut'].forEach(function(action){var key={take:'taken',print:'printed',cut:'cut'}[action];if(cancelled['baseline:'+action+':'+base.positionId]){totals[key]=0;totals[key+'At']='';}});events.forEach(function(e){if(e.action!=='cancel'&&!cancelled[e.eventId]){var key={take:'taken',print:'printed',cut:'cut',defect:'defect',surplus:'surplus'}[e.action];if(!key)throw new Error('Неизвестная операция в журнале.');var amount=p&&!p.xerox?Number(e.kits):Number(e.sheets);if(p&&!p.xerox&&(e.kits===''||e.kits===undefined||e.kits===null)||!isFinite(amount)||amount<0)throw new Error('Не подтверждена единица исторической записи '+e.eventId);totals[key]+=amount;if(['taken','printed','cut'].indexOf(key)>=0){if(key!=='taken'||!totals.takenAt)totals[key+'At']=e.at;}}});return {totals:totals,cancelled:cancelled};}
 function boxProject_(books,sh,p,id,totals){
   boxEnsureColumns_(sh);
+  sh.getRange(4,25,1,2).setValues([['Брак (Xerox — листы, остальные — шт.)','Излишек (Xerox — листы, остальные — шт.)']]);
+  sh.getRange(4,28,1,2).setValues([['Напечатано годных (Xerox — листы, остальные — шт.)','Порезано годных (Xerox — листы, остальные — шт.)']]);
   var guard=books.source.getSheetByName(BOXW.guard),hit=boxFind_(guard,1,id),value=[id,p.sheetId,totals.taken,totals.printed,totals.cut,totals.defect,totals.surplus,totals.takenAt||'',totals.printedAt||'',totals.cutAt||''];
   if(hit)guard.getRange(hit.getRow(),1,1,10).setValues([value]);else guard.appendRow(value);
   var dates=boxDates_(totals,p.planSheets);
@@ -141,33 +153,52 @@ function boxProject_(books,sh,p,id,totals){
   sh.getRange(p.row,p.schema.printed).setValue(totals.printed>=p.planSheets);
   sh.getRange(p.row,p.schema.cut).setValue(totals.cut>=p.planSheets);
 }
-function getBoxPanelSelection(){var book=SpreadsheetApp.getActiveSpreadsheet(),range=book.getActiveRange(),sh=range&&range.getSheet();return {eligible:boxEligible_(sh),signature:sh?[sh.getSheetId(),range.getRow(),PropertiesService.getScriptProperties().getProperty('BOX_REVISION')||''].join(':'):''};}
+function boxSelection_(){
+  var book=SpreadsheetApp.getActiveSpreadsheet(),active=book.getActiveRange(),list=book.getActiveRangeList(),ranges=list?list.getRanges():[];
+  if(!ranges.length&&active)ranges=[active];
+  var sh=active&&active.getSheet();if(!sh||!boxEligible_(sh))return {sheet:sh,rows:[]};
+  var schema=boxSchema_(sh),seen={},rows=[];
+  ranges.forEach(function(range){if(range.getSheet().getSheetId()!==sh.getSheetId())throw new Error('Выберите артикулы на одном листе поставки.');for(var row=range.getRow();row<=range.getLastRow();row++){if(row>=5&&!seen[row]){seen[row]=true;rows.push(row);}}});
+  rows.sort(function(a,b){return a-b;});
+  if(rows.length){var first=rows[0],last=rows[rows.length-1],articles=sh.getRange(first,schema.article,last-first+1,1).getDisplayValues();rows=rows.filter(function(row){return String(articles[row-first][0]||'').trim()!=='';});}
+  if(rows.length>20)throw new Error('За один раз выберите не больше 20 артикулов.');
+  return {sheet:sh,rows:rows};
+}
+function getBoxPanelSelection(){var selection=boxSelection_(),sh=selection.sheet,props=PropertiesService.getScriptProperties();return {eligible:boxEligible_(sh),signature:sh?[sh.getSheetId(),selection.rows.join(','),props.getProperty('BOX_REVISION')||''].join(':'):''};}
 function getBoxPanelContext(lastKey){
-  var source=SpreadsheetApp.getActiveSpreadsheet(),range=source.getActiveRange(),sh=range&&range.getSheet(),props=PropertiesService.getScriptProperties();
-  if(!boxEligible_(sh)||range.getRow()<5)throw new Error('Выберите артикул на рабочем листе OZON или WB.');
+  var source=SpreadsheetApp.getActiveSpreadsheet(),selection=boxSelection_(),sh=selection.sheet,rows=selection.rows,props=PropertiesService.getScriptProperties();
+  if(!boxEligible_(sh)||!rows.length)throw new Error('Выберите одну или несколько строк с артикулами на рабочем листе OZON или WB.');
   if(props.getProperty('BOX_SOURCE_ID')!==source.getId())throw new Error('Учёт ещё не подключён.');
-  var key=[sh.getSheetId(),range.getRow(),boxHash_(sh.getRange(range.getRow(),5,1,12).getValues()[0]),props.getProperty('BOX_REVISION')||''].join(':');
+  var rowKeys=rows.map(function(row){return row+':'+boxHash_(sh.getRange(row,4,1,13).getValues()[0]);}),key=['units-v3',sh.getSheetId(),rowKeys.join('|'),props.getProperty('BOX_REVISION')||''].join(':');
   // Unchanged selections never open the journal, wait for a writer or rewrite cells.
   if(lastKey===key)return {unchanged:true,key:key};
   var cache=null,cacheKey='boxcard:'+boxHash_([source.getId(),props.getProperty('BOX_JOURNAL_ID'),key]);
   try{cache=CacheService.getScriptCache();var cached=lastKey&&cache.get(cacheKey);if(cached){var card=JSON.parse(cached);if(card.key===key)return card;}}catch(ignore){}
-  var result=(function(){var books=boxBooks_();
-    var p=boxPosition_(sh,range.getRow()),id=boxIdentity_(sh,p.row);
-    var base=boxBaseline_(books,p,id,false),events=boxEvents_(books.journal,id),state=boxTotals_(base,events);
-    return {key:key,positionId:id,sheetId:p.sheetId,shipment:p.shipment,article:p.article,fingerprint:p.fingerprint,planKits:p.planKits,sheetsPerKit:p.sheetsPerKit,planSheets:p.planSheets,totals:state.totals,employees:boxEmployees_(books.journal),
-      journalUrl:books.journal.getUrl(),history:boxHistory_(base,events,state.cancelled)};
+  var result=(function(){var books=boxBooks_(),employees=boxEmployees_(books.journal),positions=rows.map(function(row){var p=boxPosition_(sh,row);return {p:p,id:boxIdentity_(sh,p.row)};}),eventMap=rows.length>1?boxEventsMany_(books.journal,positions.map(function(x){return x.id;})):null,items=positions.map(function(entry){
+    var p=entry.p,id=entry.id,base=boxBaseline_(books,p,id,false),events=eventMap?eventMap[id]:boxEvents_(books.journal,id),state=boxTotals_(base,events,p);
+    return {positionId:id,row:p.row,sheetId:p.sheetId,shipment:p.shipment,article:p.article,fingerprint:p.fingerprint,planKits:p.planKits,sheetsPerKit:p.sheetsPerKit,multiplicity:p.multiplicity,planSheets:p.planSheets,xerox:p.xerox,machine:p.machine,totals:state.totals,history:boxHistory_(base,events,state.cancelled,p)};
+  });
+    var common={key:key,shipment:sh.getName(),sheetId:sh.getSheetId(),employees:employees,journalUrl:books.journal.getUrl()};
+    return items.length===1?Object.assign(common,items[0]):Object.assign(common,{batch:true,items:items});
   })();
   try{if(cache)cache.put(cacheKey,JSON.stringify(result),60);}catch(ignore){}
   return result;
 }
-function boxHistory_(base,events,cancelled){var history=[];['take','print','cut'].forEach(function(action){var key={take:'taken',print:'printed',cut:'cut'}[action];if(base[key]>0)history.push({eventId:'baseline:'+action+':'+base.positionId,at:base[key+'At']||'',employee:'До подключения учёта',action:action,sheets:base[key]});});return history.concat(events.filter(function(e){return e.action!=='cancel';})).slice(-12).reverse().map(function(e){return {id:e.eventId,at:e.at,employee:e.employee,action:e.action,sheets:e.sheets,cancelled:!!cancelled[e.eventId]};});}
+function boxHistory_(base,events,cancelled,p){var history=[];['take','print','cut'].forEach(function(action){var key={take:'taken',print:'printed',cut:'cut'}[action];if(base[key]>0)history.push({eventId:'baseline:'+action+':'+base.positionId,at:base[key+'At']||'',employee:'До подключения учёта',action:action,sheets:base[key]});});return history.concat(events.filter(function(e){return e.action!=='cancel';})).slice(-12).reverse().map(function(e){return {id:e.eventId,at:e.at,employee:e.employee,action:e.action,sheets:p&&!p.xerox&&e.kits!==undefined?e.kits:e.sheets,cancelled:!!cancelled[e.eventId]};});}
 function saveBoxWork(request){var outcome={written:false,confirmedAbsent:false};try{return boxSaveCore_(request,outcome);}catch(e){throw new Error((outcome.confirmedAbsent&&!outcome.written?'NOT_SAVED: ':'')+(e.message||String(e)));}}
-function boxSaveCore_(request,outcome){
-  return boxLocked_(function(){
-    var books=boxBooks_();
+function saveBoxWorkBatch(requests){
+  if(!Array.isArray(requests)||!requests.length||requests.length>20)throw new Error('Пакет должен содержать от 1 до 20 артикулов.');
+  return boxLocked_(function(){var books=boxBooks_(),employees=boxEmployees_(books.journal),eventMap=boxEventsMany_(books.journal,requests.map(function(request){return request&&request.positionId||'';})),results=[];
+    requests.forEach(function(request,index){var outcome={written:false,confirmedAbsent:false};try{var result=boxSaveCore_(request,outcome,books,employees,eventMap);results.push({index:index,ok:true,eventId:result.eventId,repeated:result.repeated,totals:result.totals});}catch(e){var message=e.message||String(e),notSaved=outcome.confirmedAbsent&&!outcome.written;if(notSaved)message='NOT_SAVED: '+message;results.push({index:index,ok:false,notSaved:notSaved,error:message.replace(/^NOT_SAVED: /,'')});}});
+    return {ok:results.every(function(result){return result.ok;}),results:results};
+  });
+}
+function boxSaveCore_(request,outcome,sharedBooks,sharedEmployees,sharedEvents){
+  var run=function(){
+    var books=sharedBooks||boxBooks_();
     if(!request||!/^[-a-zA-Z0-9]{16,80}$/.test(request.requestId||''))throw new Error('Не подтверждён ID записи.');
     var allowed=['take','print','cut','defect','surplus','cancel'];if(allowed.indexOf(request.action)<0)throw new Error('Выберите действие.');
-    var employee=boxEmployees_(books.journal).filter(function(e){return e.id===request.employeeId;})[0];
+    var employee=(sharedEmployees||boxEmployees_(books.journal)).filter(function(e){return e.id===request.employeeId;})[0];
     var hash=boxHash_([request.positionId,request.sheetId,request.fingerprint,request.action,request.employeeId,request.unit,request.quantity,request.stage||'',request.reason||'',request.reverses||'']);
     var journal=books.journal.getSheetByName('Журнал'),prior=boxFind_(journal,1,request.requestId);
     outcome.confirmedAbsent=!prior;
@@ -175,7 +206,7 @@ function boxSaveCore_(request,outcome){
     if(!prior&&!employee)throw new Error('Выберите сотрудника из отдельного списка бокса. Без имени запись и отмена запрещены.');
     if(prior){outcome.written=true;var v=journal.getRange(prior.getRow(),1,1,BOXW.eventHeaders.length).getValues()[0];if(v[1]!==hash)throw new Error('Этот ID уже относится к другой записи.');}
     var sh=books.source.getSheetById(Number(request.sheetId));if(!sh)throw new Error('Поставка удалена.');
-    var row=boxRow_(sh,request.positionId),p=boxPosition_(sh,row),base=boxBaseline_(books,p,request.positionId),events=boxEvents_(books.journal,request.positionId),state=boxTotals_(base,events);
+    var row=boxRow_(sh,request.positionId),p=boxPosition_(sh,row),base=boxBaseline_(books,p,request.positionId),events=sharedEvents?sharedEvents[request.positionId]||[]:boxEvents_(books.journal,request.positionId),state=boxTotals_(base,events,p);
     if(!prior){
       if(request.fingerprint!==p.fingerprint)throw new Error('План или размеры изменились. Обновите панель перед записью.');
       var sheets=0,quantity=Number(request.quantity),unit=request.unit,reason=String(request.reason||'').trim(),stage=String(request.stage||'');
@@ -185,29 +216,36 @@ function boxSaveCore_(request,outcome){
         if(!target){['take','print','cut'].forEach(function(a){var k={take:'taken',print:'printed',cut:'cut'}[a];if(request.reverses==='baseline:'+a+':'+request.positionId&&base[k]>0)target={eventId:request.reverses,action:a,sheets:base[k]};});}
         if(!target||state.cancelled[target.eventId])throw new Error('Запись не найдена или уже отменена.');
         if(!reason)throw new Error('Укажите причину отмены.');
-        sheets=Number(target.sheets);quantity=0;unit='sheets';
+        sheets=Number(!p.xerox&&target.kits!==undefined?target.kits:target.sheets);quantity=0;unit=p.xerox?'sheets':'pieces';
         var check=Object.assign({},state.totals),key={take:'taken',print:'printed',cut:'cut',defect:'defect',surplus:'surplus'}[target.action];check[key]-=sheets;
         if(check[key]<0||(target.action==='print'&&check.printed<check.cut))throw new Error('Сначала отмените связанную порезку: она превышает остаток годной печати.');
       } else {
-        if(!Number.isSafeInteger(quantity)||quantity<=0||quantity>1000000||['sheets','kits'].indexOf(unit)<0)throw new Error('Введите целое количество больше нуля.');
-        if((request.action==='defect'||request.action==='surplus')&&unit!=='sheets')throw new Error('Брак и излишек записываются целыми физическими листами.');
+        if(!Number.isSafeInteger(quantity)||quantity<=0||quantity>1000000||['sheets','kits','pieces'].indexOf(unit)<0)throw new Error('Введите целое количество больше нуля.');
+        if(!p.xerox&&unit!=='pieces')throw new Error('Для этого станка вводите штуки товара. Обновите панель.');
+        if(p.xerox&&unit==='pieces')throw new Error('Для Xerox выберите листы или штуки товара.');
+        if(p.xerox&&(request.action==='defect'||request.action==='surplus')&&unit!=='sheets')throw new Error('Брак и излишек записываются целыми физическими листами.');
         if(request.action==='defect'&&['print','cut'].indexOf(stage)<0)throw new Error('Выберите этап возникновения брака.');
-        sheets=quantity*(unit==='kits'?p.sheetsPerKit:1);
+        if(unit==='kits'){
+          var conversionNumerator=quantity*p.sheetsPerKit;
+          if(!Number.isSafeInteger(conversionNumerator)||conversionNumerator%p.multiplicity!==0)throw new Error('Это количество товара не даёт целое число физических листов по кратности. Введите фактическое количество листов.');
+          sheets=conversionNumerator/p.multiplicity;
+        }else sheets=quantity;
         if(request.action==='take'&&state.totals.taken+sheets>p.planSheets)throw new Error('Взятое в работу количество превышает план.');
         if(request.action==='print'&&state.totals.printed+sheets>p.planSheets)throw new Error('Годная печать превысит план. Листы сверх плана добавьте как излишек.');
         if(request.action==='cut'&&state.totals.cut+sheets>state.totals.printed)throw new Error('Порезка превышает подтверждённое количество годных напечатанных листов.');
       }
-      var area=p.widthM&&p.heightM?sheets*p.widthM*p.heightM:'';
-      var event={eventId:request.requestId,requestHash:hash,at:new Date().toISOString(),positionId:request.positionId,sourceId:books.source.getId(),sheetId:p.sheetId,shipment:p.shipment,article:p.article,employeeId:employee.id,employee:employee.name,action:request.action,unit:unit,enteredQuantity:quantity,sheets:sheets,kits:sheets/p.sheetsPerKit,areaM2:area,planKits:p.planKits,sheetsPerKit:p.sheetsPerKit,planSheets:p.planSheets,widthM:p.widthM||'',heightM:p.heightM||'',stage:stage,reason:reason,reverses:request.reverses||''};
+      var area=p.xerox&&p.widthM&&p.heightM?sheets*p.widthM*p.heightM:'';
+      var event={eventId:request.requestId,requestHash:hash,at:new Date().toISOString(),positionId:request.positionId,sourceId:books.source.getId(),sheetId:p.sheetId,shipment:p.shipment,article:p.article,employeeId:employee.id,employee:employee.name,action:request.action,unit:unit,enteredQuantity:quantity,sheets:p.xerox?sheets:'',kits:p.xerox?sheets/p.sheetsPerKit*p.multiplicity:sheets,areaM2:area,planKits:p.planKits,sheetsPerKit:p.sheetsPerKit,planSheets:p.planSheets,widthM:p.widthM||'',heightM:p.heightM||'',stage:stage,reason:reason,reverses:request.reverses||''};
       outcome.written=true;
-      journal.appendRow(BOXW.eventHeaders.map(function(k){var v=k==='action'?BOXW.actions[event[k]]:k==='unit'?(event[k]==='kits'?'Комплекты / шт.':'Листы'):k==='stage'?(BOXW.actions[event[k]]||''):event[k];return typeof v==='string'&&v.charAt(0)==='='?"'"+v:v;}));events.push(event);
+      journal.appendRow(BOXW.eventHeaders.map(function(k){var v=k==='action'?BOXW.actions[event[k]]:k==='unit'?(event[k]==='kits'||event[k]==='pieces'?'Шт. товара':'Листы'):k==='stage'?(BOXW.actions[event[k]]||''):event[k];return typeof v==='string'&&v.charAt(0)==='='?"'"+v:v;}));events.push(event);
       PropertiesService.getScriptProperties().setProperty('BOX_REVISION',event.eventId);
       // Journal is the commit point. A retry repairs projection, never re-appends.
-      state=boxTotals_(base,events);
+      state=boxTotals_(base,events,p);
     }
     boxProject_(books,sh,p,request.positionId,state.totals);
     return {ok:true,eventId:request.requestId,repeated:!!prior,totals:state.totals};
-  });
+  };
+  return sharedBooks?run():boxLocked_(run);
 }
 function onEdit(e){
   if(!e||!e.range||!boxEligible_(e.range.getSheet()))return;
@@ -257,14 +295,14 @@ function migrateBoxWorklogLayout(){
         var row=i+5,article=String(v[snapshot.schema.article-1]||'').trim(),store=snapshot.formulas[i][26]||v[26]||'';
         if(!article){output.push(['','','','','','',store,'','']);return;}
         positions++;
-        var plan=Number(v[snapshot.schema.plan-1])*Number(v[snapshot.schema.factor-1]),totals={taken:0,printed:0,cut:0,defect:0,surplus:0,takenAt:'',printedAt:'',cutAt:''};
-        if(Number.isSafeInteger(plan)&&plan>0){
+        var plan=Number(v[snapshot.schema.plan-1])/Number(v[snapshot.schema.multiplicity-1])*Number(v[snapshot.schema.factor-1]),totals={taken:0,printed:0,cut:0,defect:0,surplus:0,takenAt:'',printedAt:'',cutAt:''};
+        if(isFinite(plan)&&plan>0){
           totals.taken=snapshot.schema.taken&&v[snapshot.schema.taken-1]===true?plan:0;
           totals.printed=v[snapshot.schema.printed-1]===true?plan:0;totals.cut=v[snapshot.schema.cut-1]===true?plan:0;
           totals.takenAt=v[34]||'';totals.printedAt=v[snapshot.schema.printedAt-1]||'';totals.cutAt=v[snapshot.schema.cutAt-1]||'';
           if(byRow[row]){
             var p={sheetId:sh.getSheetId(),article:article,legacy:{taken:totals.taken,printed:totals.printed,cut:totals.cut},legacyDates:{takenAt:totals.takenAt,printedAt:totals.printedAt,cutAt:totals.cutAt}};
-            totals=boxTotals_(boxBaseline_(books,p,byRow[row],false),boxEvents_(books.journal,byRow[row])).totals;
+            totals=boxTotals_(boxBaseline_(books,p,byRow[row],false),boxEvents_(books.journal,byRow[row]),p).totals;
           }
         }
         [totals.defect,totals.surplus,totals.printed,totals.cut].forEach(function(n,j){if(Number(v[30+j])>0&&Number(v[30+j])!==n)throw new Error('Итоги журнала не совпали: '+article);sums[j]+=n;});

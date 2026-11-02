@@ -57,7 +57,7 @@ export function boxWorklogInitializationRequests(plan, sourceColumnCount) {
   const zero = () => ({userEnteredValue:{numberValue:0}});
   for (const columnIndex of [24,27])write(plan.startRow-1,columnIndex,plan.lines.map(()=>({values:[zero(),zero()]})));
   write(plan.startRow-1,23,plan.lines.map((_,i)=>{
-    const row=plan.startRow+i,den=`G${row}*P${row}`;
+    const row=plan.startRow+i,den=`IFERROR(P${row}/N${row}*G${row};0)`;
     const line=(label,col)=>`"${label} "&REPT("■";ROUND(MIN(1;${col}${row}/(${den}))*8;0))&REPT("□";8-ROUND(MIN(1;${col}${row}/(${den}))*8;0))&" "&TEXT(${col}${row}/(${den});"0%")`;
     return {values:[{userEnteredValue:{formulaValue:`=IFERROR(IF(${den}>0;${line("Печать","AB")}&CHAR(10)&${line("Порезка","AC")};"План не определён");"План не определён")`}}]};
   }));
@@ -1256,6 +1256,7 @@ export class RollSupplySheetsWriter {
     const inputCount = endRow - plan.startRow + 1;
     const articleItems = Array.from({ length: inputCount }, (_, index) => ({
       article: plan.lines[index]?.article || "",
+      store: plan.lines[index]?.store || "",
     }));
     const extensionItems = this.layout.extension
       ? Array.from({ length: inputCount }, (_, index) => ({
@@ -1413,6 +1414,11 @@ export class RollSupplySheetsWriter {
         "quantity",
         "number",
       ),
+      ...(this.box ? [cellsForColumn(
+        { sheetId, startRow: plan.startRow, columnIndex: 26, items: articleItems },
+        "store",
+        "string",
+      )] : []),
     );
     const uidItems = Array.from({ length: inputCount }, (_, index) => ({
       uid: plan.uids[index]?.uid || "",
@@ -1551,6 +1557,7 @@ export class RollSupplySheetsWriter {
           expected.set(`${columnName(this.layout.printReady)}${row}`, false);
           expected.set(`${columnName(this.layout.cutReady)}${row}`, false);
           expected.set(`${columnName(plan.takeWorkColumn)}${row}`, false);
+          expected.set(`AA${row}`, String(plan.lines[index]?.store || ""));
         }
         expected.set(`${columnName(this.layout.uid)}${row}`, plan.uids[index].uid);
       });
@@ -1603,6 +1610,8 @@ export class RollSupplySheetsWriter {
           `Google вернул другое значение в строке ${row}; операция не объявлена успешной.`,
           503,
         );
+      if (this.box && entered(gridCell(grid, row, 27)) !== String(plan.lines[index].store || ""))
+        fail("box_store_readback_failed", `Магазин артикула ${article} в колонке AA не совпал с базой выбранного маркетплейса. Повторная запись заблокирована.`, 503);
       if (!this.box && Number(entered(gridCell(grid, row, this.layout.remainingPrint))) !== plan.lines[index].quantity)
         fail(
           "roll_supply_print_remainder_readback_failed",

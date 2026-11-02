@@ -109,7 +109,7 @@ export async function refreshSnapshot(kind, bindings, store, { scope = null, fet
     const transfer = new AssemblyTransferService(current, { backfill: false });
     const source = { adapter: kind, documentId: sourceId(bindings, kind === "printing" ? "seasonalPrintingId" : "fboSourceId") };
     const value = await loadSource(source, (url, init) => reader.authenticatedFetch(url, init), new Date(), {
-      googleReader: reader, photoSourceId: sourceId(bindings, "photosId"), printingAdditionalSheets: current.meta("rollPrintingAdditionalSheets") || [],
+      googleReader: reader, boxJournalId: sourceId(bindings, "boxJournalId"), photoSourceId: sourceId(bindings, "photosId"), printingAdditionalSheets: current.meta("rollPrintingAdditionalSheets") || [],
       productionSupplies: current.meta("productionSupplies") || [], assemblyBoxLinks: transfer.links(),
     });
     validateApi(value, kind);
