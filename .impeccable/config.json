@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "arial",
+        "files": [
+          "apps-script/box-worklog/BoxPanel.html"
+        ],
+        "createdAt": "2026-11-02T11:33:30.607Z",
+        "reason": "Codex decision: operational sidebar embedded in Google Sheets; retain the native Arial appearance and Cyrillic coverage without external font loading. Scope is this sidebar only."
+      }
+    ]
+  }
+}
