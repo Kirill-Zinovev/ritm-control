@@ -1,3 +1,4 @@
+import { supplyProgressHeaderRequests } from "./supplyProgressHeader.js";
 import { createHash, randomInt } from "node:crypto";
 import {
   ROLL_PRINTING_SHEET,
@@ -1312,6 +1313,7 @@ export class RollSupplySheetsWriter {
           newSheetName: plan.name,
         },
       });
+    let progressHeaderRequests = [];
     if (plan.action === "create") {
       if (plan.insertExtension) requests.push({ insertDimension: { range: { sheetId, dimension: "COLUMNS", startIndex: 5, endIndex: 6 }, inheritFromBefore: true } });
       const sourceGrid = this.preparedTemplates.get(plan.operationId);
@@ -1321,6 +1323,7 @@ export class RollSupplySheetsWriter {
           "Проверка шаблона устарела. Подтвердите состав поставки ещё раз; изменений не выполнено.",
           409,
         );
+      progressHeaderRequests = supplyProgressHeaderRequests({...sourceGrid, properties:{...sourceGrid.properties,sheetId}}, {box:this.box,newSupply:true,name:plan.name});
       this.preparedTemplates.delete(plan.operationId);
 
       requests.push({ clearBasicFilter: { sheetId } });
@@ -1438,6 +1441,7 @@ export class RollSupplySheetsWriter {
       rows: plan.lines.map(() => ({ values: [{ userEnteredValue: { boolValue: false } }] })),
       fields: "userEnteredValue",
     } });
+    requests.push(...progressHeaderRequests);
     if (plan.manifest) requests.push(...supplyManifestRequests(sheetId, plan.manifest));
     if (plan.action === "create" && Number.isSafeInteger(plan.trimToRowCount) && plan.trimToRowCount < plan.templateRowCount)
       requests.push({ deleteDimension: { range: { sheetId, dimension: "ROWS", startIndex: plan.trimToRowCount, endIndex: plan.templateRowCount } } });

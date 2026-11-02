@@ -98,6 +98,7 @@ function googleHarness({
         values[17] = { userEnteredValue: { stringValue: "Завершил печать" } };
         values[18] = { userEnteredValue: { stringValue: "Завершил порезку" } };
       }
+      if (!box) { values[20] = {userEnteredValue:{stringValue:"Прогресс печати"}}; values[21] = {userEnteredValue:{stringValue:"Прогресс порезки"}}; }
       if (!box) values[rollExtensionColumn - 1] = { userEnteredValue: { stringValue: "Расширения" } };
     }
     if (!box && sheetRow === (descriptor.uidHeaderRow || 1))
@@ -464,12 +465,12 @@ test("new supply clears template data, renames the heading and initializes print
       .map((request) => request.updateCells.start.columnIndex);
     assert.deepEqual(
       [...new Set(updatedColumns)].sort((a, b) => a - b),
-      [0, 4, 5, 15, 24, 29],
+      [0, 4, 5, 14, 15, 24, 29],
     );
     const created = h.google.sheets.get(result.sheetId);
     const rows = created.data[0].rowData;
     assert.equal(rows[0].values[0].userEnteredValue.stringValue, result.name);
-    assert.equal(rows[2].values[0].userEnteredValue, undefined);
+    assert.match(rows[2].values[0].userEnteredValue.formulaValue, /SPARKLINE/);
     assert.equal(rows[4].values[4].userEnteredValue.stringValue, "TEST-001");
     assert.equal(rows[4].values[5].userEnteredValue, undefined);
     assert.equal(rows[4].values[15].userEnteredValue.numberValue, 12);

@@ -373,7 +373,7 @@
       <div class="card">
         <div class="shipment" id="batchShipment"></div>
         <div class="article"><span id="batchCount" class="batch-count"></span> артикулов выбрано</div>
-        <p class="muted">Одно действие для выделенных строк одного листа (до 20 артикулов). Количество указывается отдельно для каждого артикула.</p>
+        <p class="muted">Одно действие для выделенных строк одного листа (до 20 артикулов). Укажите количество отдельно. Для «В работу», «Печать» и «Порезка» пустое поле означает весь остаток до плана; выполненные позиции пропускаются.</p>
         <a id="batchJournal" target="_blank" rel="noopener">Журнал и сотрудники ↗</a>
       </div>
       <div class="tabs" id="batchActions">
@@ -607,6 +607,13 @@
             "Новых записей пока нет. Старые отметки сохранены как исходное состояние.";
         update();
       }
+      function batchInputAmount(item, raw, action, selectedUnit) {
+        const automatic = String(raw).trim() === "" && ["take", "print", "cut"].includes(action);
+        const unit = !item.xerox ? "pieces" : automatic ? "sheets" : selectedUnit;
+        const key = {take:"taken",print:"printed",cut:"cut"}[action];
+        const quantity = automatic ? Math.max(0, item.planSheets - Number(item.totals?.[key] || 0)) : Number(raw);
+        return {automatic, unit, quantity, complete: automatic && quantity === 0 && item.planSheets > 0};
+      }
       function renderBatch() {
         if (!batchContext?.batch) return;
         if (!batchContext.items.some(item=>item.xerox)) batchUnit = "kits";
@@ -642,7 +649,7 @@
           input.inputMode = "numeric";
           input.setAttribute("aria-label", names[batchAction] + ": количество для артикула " + item.article);
           input.setAttribute("aria-describedby", "batch-conversion-" + index);
-          input.placeholder = item.xerox && batchUnit === "sheets" ? "Количество листов" : "Количество товара, шт.";
+          input.placeholder = ["take", "print", "cut"].includes(batchAction) ? "Пусто — весь остаток до плана" : item.xerox ? "Количество листов" : "Количество товара, шт.";
           input.dataset.positionId = item.positionId;
           input.value = batchValues[item.positionId] || "";
           input.oninput = () => {
@@ -670,12 +677,12 @@
         const inputs = Array.from($("batchItems").querySelectorAll("input[type=number]"));
         let ready = 0, total = 0, allValid = inputs.length > 0;
         inputs.forEach((input, index) => {
-          const item = batchContext.items[index], quantity = Number(input.value);
+          const item = batchContext.items[index], resolved = batchInputAmount(item, input.value, batchAction, batchUnit), quantity = resolved.quantity;
           const numerator = quantity * item.sheetsPerKit;
-          const whole = !item.xerox || batchUnit === "sheets"
+          const whole = resolved.unit !== "kits"
             ? Number.isSafeInteger(quantity)
             : Number.isSafeInteger(numerator) && numerator % item.multiplicity === 0;
-          const sheets = !item.xerox || batchUnit === "sheets" ? quantity : numerator / item.multiplicity;
+          const sheets = resolved.unit !== "kits" ? quantity : numerator / item.multiplicity;
           const totals = item.totals || {};
           const totalKey = keys[batchAction];
           const current = Number(totals[totalKey]) || 0;
@@ -683,23 +690,23 @@
           const projected = current + sheets;
           const withinPlan = ["defect", "surplus"].includes(batchAction) || projected <= limit;
           const valid = Number.isSafeInteger(quantity) && quantity > 0 && quantity <= 1000000 && whole && withinPlan;
-          if (valid) { ready++; total += sheets; } else allValid = false;
+          if (valid) { ready++; total += sheets; } else if (!resolved.complete) allValid = false;
           const conversion = $("batch-conversion-" + index);
-          conversion.textContent = quantity > 0
-            ? (!item.xerox || batchUnit === "sheets"
+          conversion.textContent = resolved.complete ? "План уже выполнен — новая запись не создаётся." : quantity > 0
+            ? (resolved.unit !== "kits"
               ? fmt(quantity) + " " + amountUnit(item)
               : fmt(quantity) + " шт. → " + fmt(sheets) + " " + amountUnit(item) + (whole ? "" : " · результат должен быть целым числом листов"))
-              + " · уже " + fmt(current) + " " + amountUnit(item)
+              + (resolved.automatic ? " · весь остаток до плана" : "") + " · уже " + fmt(current) + " " + amountUnit(item)
               + (withinPlan ? " · после записи " + fmt(projected) : " · превышает доступный лимит " + fmt(limit))
             : item.xerox ? "Xerox: количество ÷ кратность " + fmt(item.multiplicity) + " × листов на товар " + fmt(item.sheetsPerKit) : "Укажите количество товара в штуках.";
         });
         $("batchReady").textContent = ready + " / " + inputs.length;
-        const readyItems = batchContext.items.map((item, i) => ({item, quantity:Number(inputs[i].value)}));
+        const readyItems = batchContext.items.map((item, i) => ({item, ...batchInputAmount(item, inputs[i].value, batchAction, batchUnit)}));
         const pieces = readyItems.filter(x=>!x.item.xerox).reduce((n,x)=>n+(Number.isSafeInteger(x.quantity)?x.quantity:0),0);
-        const sheetTotal = readyItems.filter(x=>x.item.xerox).reduce((n,x)=>n+(Number.isSafeInteger(x.quantity)?(batchUnit === "sheets"?x.quantity:x.quantity*x.item.sheetsPerKit/x.item.multiplicity):0),0);
+        const sheetTotal = readyItems.filter(x=>x.item.xerox).reduce((n,x)=>n+(Number.isSafeInteger(x.quantity)?(x.unit !== "kits"?x.quantity:x.quantity*x.item.sheetsPerKit/x.item.multiplicity):0),0);
         $("batchTotalSheets").textContent = fmt(pieces) + " шт. / " + fmt(sheetTotal) + " листов";
         $("batchSave").textContent = batchPending ? "Проверить и завершить сохранение" : busy ? "Сохраняем…" : "Сохранить для выбранных";
-        $("batchSave").disabled = busy || !batchPending && (!$("batchEmployee").value || !allValid);
+        $("batchSave").disabled = busy || !batchPending && (!$("batchEmployee").value || !allValid || ready === 0);
         $("batchRecover").disabled = busy;
         $("batchActions").querySelectorAll("button").forEach((button) => button.disabled = busy || !!batchPending);
         $("batchEmployee").disabled = busy || !!batchPending;
@@ -738,15 +745,19 @@
           const inputs = Array.from($("batchItems").querySelectorAll("input[type=number]"));
           const reason = $("batchReason").value.trim();
           batchPending = batchContext.items.map((item, index) => {
-            const quantity = Number(inputs[index].value);
+            const resolved = batchInputAmount(item, inputs[index].value, batchAction, batchUnit);
+            if (resolved.complete) return null;
+            const quantity = resolved.quantity;
             return {
               requestId: requestId(), positionId: item.positionId,
               sheetId: item.sheetId, fingerprint: item.fingerprint,
               article: item.article,
-              employeeId, action: batchAction, unit: item.xerox ? batchUnit : "pieces", quantity,
+              employeeId, action: batchAction, unit: resolved.unit, quantity,
               stage: $("batchStage").value, reason, reverses: "",
             };
           });
+          batchPending = batchPending.filter(Boolean);
+          if (!batchPending.length) { batchPending = null; msg("Все выбранные артикулы уже выполнены до плана.", "success"); return; }
           remember("pendingBatch", JSON.stringify(batchPending));
           remember("employee", employeeId);
         }
