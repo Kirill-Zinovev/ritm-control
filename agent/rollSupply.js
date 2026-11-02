@@ -1323,7 +1323,7 @@ export class RollSupplySheetsWriter {
           "Проверка шаблона устарела. Подтвердите состав поставки ещё раз; изменений не выполнено.",
           409,
         );
-      progressHeaderRequests = supplyProgressHeaderRequests({...sourceGrid, properties:{...sourceGrid.properties,sheetId}}, {box:this.box,newSupply:true,name:plan.name});
+      progressHeaderRequests = supplyProgressHeaderRequests({...sourceGrid, properties:{...sourceGrid.properties,sheetId}}, {box:this.box,newSupply:true,uidColumn:this.layout.uid-1,name:plan.name});
       this.preparedTemplates.delete(plan.operationId);
 
       requests.push({ clearBasicFilter: { sheetId } });

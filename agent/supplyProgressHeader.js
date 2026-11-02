@@ -1,5 +1,5 @@
 const column = n => {let s='';for(n++;n;n=Math.floor((n-1)/26))s=String.fromCharCode(65+(n-1)%26)+s;return s;};
-export function supplyProgressHeaderRequests(sheet, {box=false,newSupply=false,name=sheet.properties.title}={}) {
+export function supplyProgressHeaderRequests(sheet, {box=false,newSupply=false,uidColumn=null,name=sheet.properties.title}={}) {
   const id=sheet.properties.sheetId, count=sheet.properties.gridProperties.rowCount, cols=sheet.properties.gridProperties.columnCount;
   const rows=sheet.data?.[0]?.rowData||[];
   const value=c=>c?.userEnteredValue?.stringValue??c?.effectiveValue?.stringValue??'';
@@ -7,7 +7,7 @@ export function supplyProgressHeaderRequests(sheet, {box=false,newSupply=false,n
   const find=(names,required=true)=>{const hits=headers.flatMap((v,i)=>names.includes(v)?[i]:[]);if(hits.length!==1&&required)throw new Error('Не подтверждена колонка '+names[0]);return hits.length===1?hits[0]:-1;};
   const quantity=find(['кол-во','количество']),article=find(['артикул']);
   const uid=(rows[0]?.values||[]).findIndex(c=>value(c)==='UID');
-  const end=uid>=0?uid:Math.min(cols,29);if(end<16)throw new Error('Недостаточно места для панели');
+  const end=Number.isSafeInteger(uidColumn)?uidColumn:uid>=0?uid:Math.min(cols,29);if(end<16)throw new Error('Недостаточно места для панели');
   const range=c=>`${column(c)}5:${column(c)}${count}`,q=range(quantity),a=range(article);
   const plan=`SUMIF(${a};"<>";${q})`;
   let amounts;
