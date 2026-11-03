@@ -3,17 +3,14 @@ import { Package, CaretRight } from './icons';
 import { inPeriod, num, type Period } from './model';
 import type { BoxPrintingEvent, LivePrinting } from './livePrinting';
 
-const goodsNumber = (value: number) => {
-  const rounded = Math.round(value * 1000) / 1000;
-  return (Math.abs(value - rounded) > 1e-9 ? '≈ ' : '') + new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 3 }).format(value);
-};
+const goodsNumber = (value: number) => num(value);
 
 export function BoxPrintingStats({value,date,period,supplyFilter}:{value:LivePrinting|null;date:string;period:Period;supplyFilter:string}) {
   const [employee,setEmployee]=useState('');
   const [exceptionType,setExceptionType]=useState<'all'|'defect'|'surplus'>('all');
   const [query,setQuery]=useState('');
   const source=value?.boxPrinting;
-  const inScope=(e:{date:string;sheetId:number;shipment:string})=>inPeriod(e.date,date,period)&&(supplyFilter==='all'||supplyFilter===`box-printing::${e.sheetId}`||supplyFilter===e.shipment);
+  const inScope=(e:{date:string;sheetId:number;shipment:string;employee:string})=>e.employee.trim().toLocaleLowerCase('ru-RU')!=='евгений'&&inPeriod(e.date,date,period)&&(supplyFilter==='all'||supplyFilter===`box-printing::${e.sheetId}`||supplyFilter===e.shipment);
   const events=(source?.events||[]).filter(inScope);
   const cutEvents=(source?.cutEvents||[]).filter(inScope);
   const people=[...new Set([...events,...cutEvents].map(e=>e.employee))].sort((a,b)=>a.localeCompare(b,'ru'));
@@ -24,7 +21,7 @@ export function BoxPrintingStats({value,date,period,supplyFilter}:{value:LivePri
   const filteredExceptions=exceptions.filter(e=>(exceptionType==='all'||exceptionType===e.kind)&&[e.article,e.shipment,e.employee,e.comment].some(v=>v.toLocaleLowerCase('ru-RU').includes(query.trim().toLocaleLowerCase('ru-RU')))).sort((a,b)=>Date.parse(b.timestamp)-Date.parse(a.timestamp));
 
   return <><section className="panel printing-department printing-department--box" aria-label="Печать бокса">
-    <div className="printing-department-heading"><div className="printing-department-title"><span className="printing-department-icon"><Package size={30}/></span><div><h2>Бокс</h2><p>Печать и порезка · отменённые записи исключены</p></div></div>{source?.status==='available'&&<div className="printing-kpis">{[["Площадь печати",num(total.area,2)+" м²"],["Площадь порезки",num(totalCut.area,2)+" м²"]].map(([label,value])=><div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div>}</div>
+    <div className="printing-department-heading"><div className="printing-department-title"><span className="printing-department-icon"><Package size={30}/></span><div><h2>Бокс</h2><p>Итоги по отображённым сотрудникам · отменённые записи исключены</p></div></div>{source?.status==='available'&&<div className="printing-kpis">{[["Площадь печати",num(total.area,2)+" м²"],["Площадь порезки",num(totalCut.area,2)+" м²"]].map(([label,value])=><div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div>}</div>
     {source?.status!=='available'?<p role="status">{source?.reason||'Журнал бокса ещё не подключён к этому снимку.'}</p>:<>
       {(total.missing>0||totalCut.missing>0)&&<p className="printing-area-warning">Площадь не подтверждена: печать — {total.missing} записей, порезка — {totalCut.missing}. Показаны подтверждённые значения.</p>}
       <p className="box-stat-explainer">По каждому сотруднику за выбранный период. Нажмите на имя, чтобы увидеть артикулы и комментарии.</p>
@@ -52,7 +49,7 @@ export function BoxPrintingStats({value,date,period,supplyFilter}:{value:LivePri
           })}</tbody>
         </table>
       </div>
-      {[...events,...cutEvents].some(e=>!Number.isInteger(e.quantity))&&<p className="box-stat-footnote">Дробные штуки появляются при пересчёте листов Xerox в количество товаров.</p>}
+      {[...events,...cutEvents].some(e=>!Number.isInteger(e.quantity))&&<p className="box-stat-footnote">Количество товаров округлено до целых. Площадь рассчитана по точным данным.</p>}
       {!events.length&&!cutEvents.length&&<p>Нет подтверждённых записей печати или порезки бокса за выбранный период.</p>}
 
     </>}
