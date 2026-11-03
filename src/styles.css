@@ -6235,10 +6235,11 @@ td small {
 .printing-department-title h2{font-size:26px;margin:0 0 4px}
 .printing-department-title p{margin:0;color:var(--muted);font-size:13px}
 .printing-department-icon{display:grid;place-items:center;width:52px;height:52px;border-radius:14px;background:#fff4e5;color:#b98746;flex-shrink:0}
-.printing-kpis{display:grid;grid-template-columns:repeat(4,minmax(100px,1fr));gap:10px;flex:1;max-width:760px}
+.printing-kpis{display:grid;grid-template-columns:repeat(5,minmax(100px,1fr));gap:10px;flex:1;max-width:940px}
 .printing-kpis>div{padding:13px 16px;border:1px solid var(--border);border-radius:9px;background:#fbfdff}
 .printing-kpis span{display:block;color:var(--muted);font-size:12px;margin-bottom:6px}
 .printing-kpis strong{font-size:23px;white-space:nowrap}
+.printing-kpi-cut small,.printing-cut-sheets{display:block;color:var(--muted);font-size:12px;margin-top:4px}
 .printing-employee-table{border:1px solid var(--border);border-radius:10px}
 .printing-employee-table table{width:100%;font-size:15px;border-collapse:collapse}
 .printing-employee-table th,.printing-employee-table td{padding:14px 18px;text-align:left;border-bottom:1px solid var(--border)}
@@ -6252,7 +6253,7 @@ td small {
 .printing-work-detail h3{margin:0 0 12px;font-size:16px}
 .printing-area-warning{color:#895b13;background:#fff7e8;border-radius:8px;padding:12px}
 @media(max-width:1100px){.printing-department-heading{align-items:stretch;flex-direction:column}.printing-kpis{max-width:none}}
-@media(max-width:620px){.printing-department{padding:14px}.printing-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.printing-department-tabs{display:flex}.printing-department-tabs button{padding:10px;font-size:13px;flex:1}.printing-kpis strong{font-size:20px}.printing-employee-table table{min-width:690px}}
+@media(max-width:620px){.printing-department{padding:14px}.printing-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.printing-department-tabs{display:flex}.printing-department-tabs button{padding:10px;font-size:13px;flex:1}.printing-kpis strong{font-size:20px}.printing-employee-table table{min-width:850px}}
 
 .box-exceptions{margin-top:16px;padding:22px}.box-exceptions-heading h2{margin:0 0 4px;font-size:22px}.box-exceptions-heading p{margin:0;color:var(--muted);font-size:13px}.box-exceptions-controls{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:18px 0}.box-exceptions-filters{display:flex;flex-wrap:wrap;gap:8px}.box-exceptions-filters button{padding:8px 13px;border:1px solid var(--border);border-radius:8px;background:#f7faff;color:var(--text);font-weight:600}.box-exceptions-filters button[aria-pressed=true]{background:var(--primary);color:#fff;border-color:var(--primary)}.box-exceptions-search{width:min(440px,100%)}.box-exceptions-search input{width:100%;min-height:40px;border:1px solid var(--border);border-radius:8px;padding:8px 12px;background:#f8fafd;color:var(--text)}.box-exceptions-table table{min-width:960px}.box-exceptions-table td,.box-exceptions-table th{vertical-align:top}.box-exception-badge{display:inline-block;padding:4px 8px;border-radius:6px;font-size:12px;font-weight:700;white-space:nowrap}.box-exception-badge.is-defect{background:#fff0f0;color:#a32931}.box-exception-badge.is-surplus{background:#fff5e5;color:#85500c}.box-exception-stage{display:block;color:var(--muted);margin-top:4px}.box-exception-comment{white-space:pre-wrap;min-width:190px}.box-exceptions-empty{color:var(--muted);padding:12px 0;margin:0}@media(max-width:700px){.box-exceptions{padding:14px}.box-exceptions-controls{align-items:stretch;flex-direction:column}.box-exceptions-search{width:100%}}
 
