@@ -4974,6 +4974,18 @@
         if (!item) return;
         loadBoxControlTasks(item);
         const request = ++state.boxRequest;
+        // Show the already-selected product immediately; quantities remain unknown
+        // until the server confirms the current packing and carton state.
+        $('boxProductName').textContent = item.productName || 'Название не указано';
+        $('boxProductSku').textContent = item.sku || '';
+        $('boxProductType').textContent = item.boxType ? 'Короб ' + item.boxType : '';
+        $('boxPhotoSlot').replaceChildren();
+        if (item.photoAssetKey || item.photoUrl) {
+          const img = node('img', '', ''); img.alt = item.productName || item.sku;
+          if (item.photoAssetKey) img.dataset.photoKey = item.photoAssetKey; else img.src = item.photoUrl;
+          $('boxPhotoSlot').appendChild(img); if (item.photoAssetKey) observePhotos($('boxPhotoSlot'));
+        } else $('boxPhotoSlot').appendChild(photoPlaceholder('Фото не добавлено'));
+        ['boxPackedValue', 'boxAssignedValue', 'boxAvailableValue'].forEach(id => { $(id).textContent = '—'; });
         $('boxSnapshot').textContent = 'Загружаем фактическую упаковку и открытые короба…';
         $('boxCards').replaceChildren(node('div', 'box-empty', 'Загружаем короба…'));
         $('preflightBoxButton').disabled = true;

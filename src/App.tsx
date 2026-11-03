@@ -1380,6 +1380,7 @@ function AppShell() {
                 </div>
                 </div>
                 {printingDepartment!=='roll'&&<BoxPrintingStats value={live.value} date={date} period={period} supplyFilter={supplyFilter} />}
+                <div hidden={printingDepartment === "box"}>
                 {mode === "imported" && live.value && (
                   <section className="panel">
                     <div className="panel-heading">
@@ -1538,6 +1539,7 @@ function AppShell() {
                     {sourceLink("printing")}
                   </div>
                 </section>
+                </div>
                 {mode === "imported" && liveSupplyPanel}
                 {mode === "imported" && (
                   <Notice>

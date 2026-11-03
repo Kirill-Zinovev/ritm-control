@@ -975,11 +975,7 @@ function saveWork(payload) {
   const db = SpreadsheetApp.openById(DB_ID);
   const shipment = assemblyShipments_(db).find(row => String(row.shipmentId) === String(payload.shipmentId));
   if (!shipment || shipment.sourceAvailable === false) throw new Error('Источник поставки недоступен. Обновите список перед записью.');
-  const item = readShipmentItems_(db, shipment).find(row =>
-    String(row.positionId) === String(payload.positionId) &&
-    String(row.shipmentId) === String(payload.shipmentId) &&
-    String(row.directionId) === String(payload.directionId)
-  );
+  const item = String(shipment.directionId) === String(payload.directionId) ? readShipmentItem_(db, shipment, payload.positionId) : null;
   if (!item) throw new Error('Артикул не найден в выбранной поставке. Обновите страницу.');
   const employee = readTable_(db, TABLES.employees).find(row =>
     String(row.employeeId) === String(payload.employeeId) &&
@@ -1092,11 +1088,7 @@ function getBoxesForItem(shipmentId, directionId, positionId) {
   const sheets = getBoxTableSheets_(db);
   const cartons = readOpenCartonsForShipment_(sheets.cartons.sheet, context.shipment);
   const openIds = new Set(cartons.records.map(row => String(row.cartonId)));
-  const itemContents = readRowsByKey_(sheets.contents.sheet, 'positionId', new Set([String(context.item.positionId)]));
-  const openContents = openIds.size ? readRowsByKey_(sheets.contents.sheet, 'cartonId', openIds) : [];
-  const contentsById = new Map();
-  [...itemContents, ...openContents].forEach(row => contentsById.set(String(row.allocationId || row.eventId || JSON.stringify(row)), row));
-  const activeContents = normalizeCartonContents_(Array.from(contentsById.values()));
+  const activeContents = normalizeCartonContents_(readCartonPositionContents_(sheets.contents.sheet, openIds, context.item.positionId));
   const contentsHeaders = sheets.contents.sheet.getRange(1, 1, 1, sheets.contents.sheet.getLastColumn()).getValues()[0].map(String);
   const tables = {
     cartons,
@@ -1114,7 +1106,14 @@ function getBoxDetails(shipmentId, directionId, cartonId) {
   if (!carton || !cartonMatchesShipment_(carton, shipment)) throw new Error('Короб не найден в этой поставке. Обновите список.');
   const linked = normalizeCartonContents_(readRowsByKey_(sheets.contents.sheet, 'cartonId', new Set([String(carton.cartonId)])));
   const norms = boxNormsForSkus_(linked.map(row => row['Артикул']), false, shipmentMarketplace_(shipment));
-  const items = readShipmentItems_(db, shipment);
+  const ids = new Set(linked.map(row => String(row.positionId || '')).filter(Boolean));
+  const sheet = db.getSheetById(Number(shipment.sheetId));
+  const sourceId = String(shipment.shipmentId).replace('RITM-ROLL-', '');
+  if (!sheet || sheet.getRange(1, 1).getNote() !== (shipment.marker || RITM_SHEET_MARKER + sourceId)) throw new Error('Не удалось подтвердить источник позиций поставки.');
+  const items = readRowsByKey_(sheet, 'positionId', ids).filter(row => String(row.shipmentId) === String(shipment.shipmentId) && String(row.directionId) === String(shipment.directionId));
+  if (Array.from(ids).some(id => id.indexOf('|manual:') >= 0)) {
+    readShipmentItems_(db, shipment).filter(row => ids.has(String(row.positionId)) && String(row.positionId).indexOf('|manual:') >= 0).forEach(row => items.push(row));
+  }
   const itemByPosition = Object.create(null);
   items.forEach(row => { itemByPosition[String(row.positionId)] = row; });
   const box = publicCarton_(carton, linked, carton._rowNumber, norms, true);
@@ -1536,11 +1535,7 @@ function closeCarton(payload) {
 
 function boxItemContext_(db, shipmentId, directionId, positionId) {
   const shipment = requireRitmShipment_(db, shipmentId, directionId);
-  const item = readShipmentItems_(db, shipment).find(row =>
-    String(row.shipmentId) === String(shipment.shipmentId) &&
-    String(row.directionId) === String(shipment.directionId) &&
-    String(row.positionId) === String(positionId)
-  );
+  const item = readShipmentItem_(db, shipment, positionId);
   if (!item) throw new Error('Товар не найден в выбранной поставке. Обновите данные.');
   const packing = readPackedQuantityForItem_(db, shipment, item);
   const workLog = db.getSheetByName(TABLES.workLog);
@@ -2316,9 +2311,8 @@ function boxPlacementSnapshot_(db, payload, forceFreshNorm) {
   ]);
   const isNew = payload.mode === 'new';
   let cartonId = isNew ? 'carton-' + String(payload.idempotencyKey) : String(payload.cartonId || '');
-  const cartonRows = readRowsByKey_(sheets.contents.sheet, 'cartonId', new Set([cartonId]));
-  const positionRows = readRowsByKey_(sheets.contents.sheet, 'positionId', new Set([String(context.item.positionId)]));
-  const relevantContents = normalizeCartonContents_(uniqueCartonRows_(cartonRows.concat(positionRows)));
+  const scopedContents = readCartonPositionContents_(sheets.contents.sheet, new Set([cartonId]), context.item.positionId);
+  const relevantContents = normalizeCartonContents_(scopedContents);
   const tables = {
     cartons: { sheet: sheets.cartons.sheet, headers: cartonHeaders, records: [] },
     contents: { sheet: sheets.contents.sheet, headers: contentsHeaders, records: relevantContents, rawRecords: relevantContents },
@@ -2451,9 +2445,8 @@ function boxPlacementCurrentScope_(db, payload, snapshot) {
     throw new Error('Ключ операции уже связан с коробом другой поставки.');
   }
 
-  const cartonRows = readRowsByKey_(sheets.contents.sheet, 'cartonId', new Set([cartonId]));
-  const positionRows = readRowsByKey_(sheets.contents.sheet, 'positionId', new Set([String(context.item.positionId)]));
-  const contents = normalizeCartonContents_(uniqueCartonRows_(cartonRows.concat(positionRows)));
+  const scopedContents = readCartonPositionContents_(sheets.contents.sheet, new Set([cartonId]), context.item.positionId);
+  const contents = normalizeCartonContents_(scopedContents);
   const cartonContents = contents.filter(row => String(row.cartonId) === cartonId);
   const itemAllocations = itemAllocationsFor_(contents, context);
   const assigned = sumBoxQuantities_(itemAllocations);
@@ -2474,6 +2467,18 @@ function boxPlacementCurrentScope_(db, payload, snapshot) {
     norm: snapshot.norm, normsBySku: snapshot.normsBySku, quantity: snapshot.quantity,
     itemStoreNumber: snapshot.itemStoreNumber,
   };
+}
+
+// Read the union once: capacity needs all carton entries, availability needs
+// all entries for this position, including REMOVE events and closed cartons.
+function readCartonPositionContents_(sheet, cartonIds, positionId) {
+  const wanted = new Set(Array.from(cartonIds || [], String));
+  const id = String(positionId || '');
+  const width = sheet.getLastColumn();
+  if (width < 1) throw new Error('Не удалось проверить структуру состава коробов.');
+  const headers = sheet.getRange(1, 1, 1, width).getValues()[0].map(String);
+  if (!headers.includes('cartonId') || !headers.includes('positionId')) throw new Error('В составе коробов отсутствуют идентификаторы.');
+  return uniqueCartonRows_(readIndexedRows_(sheet, ['cartonId', 'positionId'], row => wanted.has(String(row.cartonId)) || String(row.positionId) === id, headers, 20));
 }
 
 function uniqueCartonRows_(rows) {
@@ -3465,6 +3470,21 @@ function getAssemblyOnlyItemIds(shipmentId) {
   const result = ritmControlApiRequest_('GET', '/api/assembly-only-items?shipmentId=' + encodeURIComponent(String(shipmentId || '')));
   if (!result || result.ok !== true || !Array.isArray(result.items)) throw new Error('Дополнительные товары временно недоступны.');
   return result.items.map(item => String(item.positionId || '')).sort();
+}
+
+// Mutation preflights need one verified position, not the complete enriched list.
+// Manual additions still use the authoritative RITM registry and deletion guard.
+function readShipmentItem_(db, shipment, positionId) {
+  const id = String(positionId || '');
+  if (shipment.environment !== 'RITM' || id.indexOf('|manual:') >= 0) {
+    return readShipmentItems_(db, shipment).find(row => String(row.positionId) === id && String(row.shipmentId) === String(shipment.shipmentId) && String(row.directionId) === String(shipment.directionId)) || null;
+  }
+  const sheet = db.getSheetById(Number(shipment.sheetId));
+  const sourceId = String(shipment.shipmentId).replace('RITM-ROLL-', '');
+  if (!sheet || sheet.getRange(1, 1).getNote() !== (shipment.marker || RITM_SHEET_MARKER + sourceId)) throw new Error('Не удалось подтвердить источник позиций поставки.');
+  const matches = readRowsByKey_(sheet, 'positionId', new Set([id])).filter(row => String(row.shipmentId) === String(shipment.shipmentId) && String(row.directionId) === String(shipment.directionId));
+  if (matches.length > 1) throw new Error('Повторяется идентификатор позиции. Запись остановлена.');
+  return matches[0] || null;
 }
 
 function readShipmentItems_(db, shipment) {
