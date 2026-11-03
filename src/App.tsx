@@ -1542,13 +1542,16 @@ function AppShell() {
                 </section>
                 </div>
                 {mode === "imported" && printingDepartment !== "box" && liveSupplyPanel}
-                {mode === "imported" && (
+                {mode === "imported" && printingDepartment !== "box" && (
                   <Notice>
                     Площадь берётся из столбца L журнала, день выпуска — из
                     столбца B. Лист «Выпуск по дням» суммирует эти же записи.
                     Ноль означает отсутствие записей о печати за выбранный
                     период.
                   </Notice>
+                )}
+                {mode === "imported" && printingDepartment === "box" && (
+                  <Notice>Площадь бокса рассчитывается по столбцу K листа поставки пропорционально количеству товаров, записанных сотрудником.</Notice>
                 )}
                 {mode === "imported" && !!live.value?.issues.length && (
                   <Notice tone="warning">

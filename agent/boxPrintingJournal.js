@@ -33,7 +33,11 @@ function boxOperationEvents(rows, orders, action) {
     const machine=machines.size===1?[...machines][0]:null;
     const xerox=machine!==null&&/^(xerox|ксерокс|x|х)$/.test(machine);
     const physicalSheets=xerox?e.sheets:null;
-    const area=e.area!==null?e.area:(e.width>0&&e.height>0&&(xerox?physicalSheets!==null:machine!==null||e.sheets===null)?(xerox?physicalSheets:machine||e.sheets===null?e.quantity:null)*e.width*e.height:null);
+    // K is the full planned artwork area; allocate it to the employee's
+    // recorded product quantity. Never infer an area from an ambiguous row.
+    const order=matches.length===1?matches[0]:null;
+    const area=order&&order.areaKnown===true&&Number.isFinite(order.plannedArea)&&order.plannedArea>=0&&Number.isFinite(order.quantity)&&order.quantity>0
+      ? order.plannedArea*e.quantity/order.quantity : null;
     if(area!==null&&(!Number.isFinite(area)||area<0))throw new Error('Некорректная площадь бокса');
     return {...e,area,sheets:physicalSheets,operation:action==='Порезка'?'cut':'print',sourceId:'box-printing',date:new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(e.date))};
   });

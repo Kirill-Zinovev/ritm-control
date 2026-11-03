@@ -14,7 +14,7 @@ function fixture(){
    getValues:()=>data.slice(row-2,row-2+n).map(v=>v.slice(col-1,col-1+width)),
    createTextFinder:value=>({matchEntireCell(){return this;},useRegularExpression(){return this;},findAll:()=>data.flatMap((v,i)=>String(v[col-1])===String(value)?[{getRow:()=>i+2}]:[])})
  })};
- const p={sheetId:7,row:5,shipment:'OZON Test',article:'NC0005.A5121',xerox:true,multiplicity:1,planKits:20,sheetsPerKit:2,planSheets:40,widthM:.21,heightM:.297,fingerprint:'known-plan'};
+ const p={sheetId:7,row:5,shipment:'OZON Test',article:'NC0005.A5121',xerox:true,multiplicity:1,planKits:20,sheetsPerKit:2,planSheets:40,planArea:40*.21*.297,widthM:.21,heightM:.297,fingerprint:'known-plan'};
  const c=vm.createContext({console,Date,Number,Object,JSON,Utilities:{getUuid:randomUUID,DigestAlgorithm:{SHA_256:'sha256'},Charset:{UTF_8:'utf8'},computeDigest:(_,text)=>[...createHash('sha256').update(text).digest()]},
    LockService:{getScriptLock:()=>({tryLock:()=>{if(locked)return false;hasLock=true;return true;},releaseLock:()=>{hasLock=false;}})},PropertiesService:{getScriptProperties:()=>({setProperty(){},getProperty(){return null;}})}});
  vm.runInContext(code,c);
@@ -28,6 +28,8 @@ test('physical sheets: 20 kits × 2 = 40; 6 kits record 12 sheets and source are
  const f=fixture(),r=f.c.saveBoxWork(f.req({unit:'kits',quantity:6}));assert.equal(r.totals.printed,12);
  assert.equal(f.data[0][13],12);assert.equal(f.data[0][14],6);assert.ok(Math.abs(f.data[0][15]-12*.21*.297)<1e-12);
 });
+test('journal records proportional K area for Xerox and other machines',()=>{const x=fixture();Object.assign(x.p,{planKits:80,sheetsPerKit:6,multiplicity:4,planSheets:120,planArea:16.896});x.c.saveBoxWork(x.req({unit:'sheets',quantity:30}));assert.equal(x.data[0][14],20);assert.ok(Math.abs(x.data[0][15]-4.224)<1e-10);const u=fixture();Object.assign(u.p,{xerox:false,planKits:20,planSheets:20,planArea:2.8});u.c.saveBoxWork(u.req({unit:'pieces',quantity:10}));assert.ok(Math.abs(u.data[0][15]-1.4)<1e-10);});
+test('missing K or Xerox defect in sheets leaves journal area blank',()=>{const a=fixture();a.p.planArea=null;a.c.saveBoxWork(a.req());assert.equal(a.data[0][15],'');const b=fixture();b.c.saveBoxWork(b.req({action:'defect',stage:'print',quantity:2}));assert.equal(b.data[0][15],'');});
 test('partial printing sums while defect and surplus stay separate',()=>{const f=fixture();f.c.saveBoxWork(f.req({quantity:16}));f.c.saveBoxWork(f.req({quantity:12}));f.c.saveBoxWork(f.req({action:'defect',quantity:3,stage:'print'}));const r=f.c.saveBoxWork(f.req({action:'surplus',quantity:4}));assert.equal(r.totals.printed,28);assert.equal(r.totals.defect,3);assert.equal(r.totals.surplus,4);assert.equal(f.data.length,4);});
 test('same request ID never duplicates quantities after restart-like reread',()=>{const f=fixture(),q=f.req();f.c.saveBoxWork(q);const r=f.c.saveBoxWork(q);assert.equal(r.repeated,true);assert.equal(r.totals.printed,12);assert.equal(f.data.length,1);assert.equal(f.projections.length,2);});
 test('same ID cannot be reused for another quantity',()=>{const f=fixture(),q=f.req();f.c.saveBoxWork(q);assert.throws(()=>f.c.saveBoxWork({...q,quantity:13}),/другой записи/);assert.equal(f.data.length,1);});

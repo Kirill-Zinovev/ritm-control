@@ -6,7 +6,7 @@
     <style>
       :root {
         font:
-          14px/1.5 "Segoe UI Variable", "Segoe UI", -apple-system,
+          16px/1.5 "Segoe UI Variable", "Segoe UI", -apple-system,
           BlinkMacSystemFont, Arial,
           sans-serif;
         color: #18304d;
@@ -35,11 +35,11 @@
         cursor: default;
       }
       h1 {
-        font-size: 20px;
+        font-size: 22px;
         margin: 0 0 4px;
       }
       h2 {
-        font-size: 14px;
+        font-size: 16px;
         margin: 0 0 10px;
       }
       p {
@@ -47,7 +47,7 @@
       }
       .muted {
         color: #526781;
-        font-size: 12px;
+        font-size: 14px;
       }
       .card {
         background: white;
@@ -57,19 +57,19 @@
         margin: 12px 0;
       }
       .article {
-        font-size: 17px;
+        font-size: 19px;
         font-weight: 700;
         user-select: text;
       }
       .shipment {
         color: #526781;
-        font-size: 12px;
+        font-size: 14px;
         overflow-wrap: anywhere;
       }
       .factor {
         color: #1765ed;
         margin-top: 8px;
-        font-size: 12px;
+        font-size: 14px;
       }
       label {
         display: block;
@@ -102,14 +102,14 @@
         margin: 12px 0;
       }
       .tabs button {
-        flex: 1;
-        min-width: 72px;
+        flex: 1 1 120px;
+        min-width: 0;
         background: white;
         border: 1px solid var(--line);
         border-radius: 8px;
         padding: 8px 5px;
         color: #344c6a;
-        font-size: 12px;
+        font-size: 14px;
       }
       .tabs button.active {
         background: #1765ed;
@@ -177,7 +177,7 @@
         padding: 7px 10px;
       }
       .message {
-        font-size: 12px;
+        font-size: 14px;
         padding: 10px;
         border-radius: 8px;
         margin: 10px 0;
@@ -201,7 +201,7 @@
         text-align: center;
         padding: 7px 3px;
         border-radius: 7px;
-        font-size: 11px;
+        font-size: 13px;
       }
       .defect {
         background: #fff0e6;
@@ -214,7 +214,7 @@
       .event {
         padding: 10px 0;
         border-bottom: 1px solid #e8eef6;
-        font-size: 12px;
+        font-size: 14px;
       }
       .event-line {
         display: flex;
@@ -222,7 +222,7 @@
         gap: 5px;
       }
       .event button {
-        font-size: 11px;
+        font-size: 13px;
         padding: 4px 7px;
         margin-top: 6px;
       }
@@ -235,7 +235,7 @@
         justify-content: space-between;
         gap: 8px;
         margin: 15px 0;
-        font-size: 12px;
+        font-size: 14px;
       }
       .footer a {
         color: #1765ed;
@@ -261,7 +261,7 @@
         align-items: baseline;
       }
       .batch-item .article {
-        font-size: 14px;
+        font-size: 16px;
         overflow-wrap: anywhere;
       }
       .batch-item input[type="number"] {
@@ -276,6 +276,8 @@
         color: #1765ed;
         font-weight: 700;
       }
+      .batch-item-head label { display: flex; align-items: center; gap: 7px; margin: 0; min-width: 0; }
+      .batch-item-head input[type="checkbox"] { width: 18px; height: 18px; flex: 0 0 18px; }
       button:focus-visible,
       a:focus-visible,
       input:focus-visible,
@@ -288,9 +290,14 @@
   </head>
   <body>
     <h1>Учёт бокса</h1>
-    <p class="muted">
-      Выберите одну строку или несколько строк на одном листе поставки. Все действия сохраняются с именем и временем.
-    </p>
+    <p class="muted">Выберите строки вручную или найдите товары по станку. Все действия сохраняются с именем и временем.</p>
+    <label for="selectionMode">Выбор артикулов</label>
+    <select id="selectionMode"><option value="manual">Выделить в таблице</option><option value="machine">По станку</option></select>
+    <div id="machinePicker" class="hidden">
+      <label for="machineSelect">Станок</label>
+      <select id="machineSelect"><option value="">Выберите станок</option></select>
+      <p class="muted" id="machineHint">Учитываются видимые строки открытого листа.</p>
+    </div>
     <div id="message" role="status" aria-live="polite"></div>
     <div class="footer">
       <button class="secondary" id="refresh">Обновить</button
@@ -307,8 +314,8 @@
       </div>
       <div class="tabs" id="actions">
         <button data-action="take">▷ В работу</button
-        ><button data-action="print" class="active">▤ Печать</button
-        ><button data-action="cut">✂ Порезка</button
+        ><button data-action="print" class="active">▤ Готовность печати</button
+        ><button data-action="cut">✂ Готовность порезки</button
         ><button data-action="defect">△ Брак</button
         ><button data-action="surplus">＋ Излишек</button>
       </div>
@@ -373,13 +380,13 @@
       <div class="card">
         <div class="shipment" id="batchShipment"></div>
         <div class="article"><span id="batchCount" class="batch-count"></span> артикулов выбрано</div>
-        <p class="muted">Одно действие для выделенных строк одного листа (до 20 артикулов). Укажите количество отдельно. Для «В работу», «Печать» и «Порезка» пустое поле означает весь остаток до плана; выполненные позиции пропускаются.</p>
+        <p class="muted">Одно действие для выделенных видимых строк одного листа. Укажите количество отдельно. Для действий «В работу», «Готовность печати» и «Готовность порезки» пустое поле означает весь остаток до плана; выполненные позиции пропускаются.</p>
         <a id="batchJournal" target="_blank" rel="noopener">Журнал и сотрудники ↗</a>
       </div>
       <div class="tabs" id="batchActions">
         <button data-action="take">▷ В работу</button
-        ><button data-action="print" class="active">▤ Печать</button
-        ><button data-action="cut">✂ Порезка</button
+        ><button data-action="print" class="active">▤ Готовность печати</button
+        ><button data-action="cut">✂ Готовность порезки</button
         ><button data-action="defect">△ Брак</button
         ><button data-action="surplus">＋ Излишек</button>
       </div>
@@ -429,12 +436,15 @@
         batchUnit = "sheets",
         batchValues = {},
         undoTarget = null,
-        loading = false;
+        loading = false,
+        selectionMode = "manual",
+        machineSheetId = null,
+        batchExcluded = {};
       const $ = (id) => document.getElementById(id),
         names = {
           take: "Взяли в работу",
-          print: "Печать",
-          cut: "Порезка",
+          print: "Готовность печати",
+          cut: "Готовность порезки",
           defect: "Брак",
           surplus: "Излишек",
           cancel: "Отмена",
@@ -498,13 +508,28 @@
       }
       async function load(force = false) {
         if (loading || busy || pending) return;
+        if (selectionMode === "machine") { if (force) await loadMachines(); return; }
         loading = true;
         try {
           const r = await call(
             "getBoxPanelContext",
             force ? "" : lastSelection,
           );
+          if (selectionMode !== "manual") return;
           if (r.unchanged) return;
+          applyContext(r);
+        } catch (e) {
+          if (selectionMode !== "manual") return;
+          context = null;
+          $("content").classList.add("hidden");
+          $("batchContent").classList.add("hidden");
+          msg(e.message || String(e));
+        } finally {
+          loading = false;
+          if (selectionMode === "machine" && !machineSheetId && !busy && !batchPending) void loadMachines();
+        }
+      }
+      function applyContext(r) {
           const selectionSignature = (value) => value.batch
             ? value.items.map((item) => item.positionId).join("|")
             : value.positionId;
@@ -514,6 +539,7 @@
             $("reason").value = "";
             $("batchReason").value = "";
             batchValues = {};
+            batchExcluded = {};
             undoTarget = null;
             action = "print";
             batchAction = "print";
@@ -537,14 +563,53 @@
           }
           renderBatchRecovery();
           msg("");
-        } catch (e) {
-          context = null;
-          $("content").classList.add("hidden");
-          $("batchContent").classList.add("hidden");
-          msg(e.message || String(e));
-        } finally {
-          loading = false;
-        }
+      }
+      async function loadMachines() {
+        if (busy || pending || batchPending || loading) return;
+        loading = true;
+        $("machineSelect").disabled = true;
+        msg("Загружаем список станков…", "success");
+        try {
+          const result = await call("getBoxMachineList");
+          if (selectionMode !== "machine") return;
+          machineSheetId = result.sheetId;
+          const select = $("machineSelect"), previous = select.value;
+          select.replaceChildren(new Option("Выберите станок", ""));
+          result.machines.forEach(m => select.add(new Option(m.name + " · " + m.count, m.key)));
+          select.value = result.machines.some(m => m.key === previous) ? previous : "";
+          $("machineHint").textContent = result.shipment + " · только видимые строки";
+          context = batchContext = null;
+          $("content").classList.add("hidden"); $("batchContent").classList.add("hidden");
+          if (select.value) { const selected = await loadMachineArticles(machineSheetId, select.value); if (selectionMode === "machine") applyContext(selected); }
+          else msg("");
+        } catch(e) { if(selectionMode === "machine"){ context = batchContext = null; $("content").classList.add("hidden"); $("batchContent").classList.add("hidden"); msg(e.message || String(e)); } }
+        finally { loading = false; $("machineSelect").disabled = false; if(selectionMode === "manual") void load(true); }
+      }
+      async function loadMachineArticles(sheetId, machine) {
+        let result = null, offset = 0, signature = "";
+        do {
+          msg("Загружаем артикулы станка: " + offset + "…", "success");
+          const page = await call("getBoxMachineContext", sheetId, machine, offset, 10);
+          if (!page || !page.machinePage || !Array.isArray(page.items) || page.machinePage.next <= offset) throw new Error("Не удалось получить список станка. Обновите панель.");
+          if (signature && signature !== page.machinePage.signature) throw new Error("Данные или фильтр изменились при загрузке. Обновите список станка.");
+          signature = page.machinePage.signature;
+          if (!result) result = {...page, items: []};
+          result.items.push(...page.items);
+          offset = page.machinePage.next;
+          msg("Загружаем артикулы станка: " + offset + " из " + page.machinePage.total + "…", "success");
+          if (offset >= page.machinePage.total) break;
+        } while (true);
+        return result;
+      }
+      async function selectMachine() {
+        if (busy || pending || batchPending || loading) return;
+        context = batchContext = null; $("content").classList.add("hidden"); $("batchContent").classList.add("hidden");
+        if (!$("machineSelect").value) return;
+        loading = true;
+        $("machineSelect").disabled = true;
+        try { const selected = await loadMachineArticles(machineSheetId, $("machineSelect").value); if(selectionMode === "machine") applyContext(selected); }
+        catch(e) { if(selectionMode === "machine") msg(e.message || String(e)); }
+        finally { loading = false; $("machineSelect").disabled = false; if(selectionMode === "manual") void load(true); }
       }
       function amountUnit(item) { return item.xerox ? "листов" : "шт."; }
       function render() {
@@ -638,10 +703,17 @@
           const article = document.createElement("strong");
           article.className = "article";
           article.textContent = item.article;
+          const selectLabel = document.createElement("label");
+          const selected = document.createElement("input");
+          selected.type = "checkbox";
+          selected.checked = !batchExcluded[item.positionId];
+          selected.setAttribute("aria-label", "Выбрать артикул " + item.article);
+          selected.onchange = () => { batchExcluded[item.positionId] = !selected.checked; updateBatch(); };
+          selectLabel.append(selected, article);
           const plan = document.createElement("span");
           plan.className = "muted";
           plan.textContent = "План " + fmt(item.planKits) + " шт.";
-          head.append(article, plan);
+          head.append(selectLabel, plan);
           const input = document.createElement("input");
           input.type = "number";
           input.min = "1";
@@ -674,10 +746,12 @@
       }
       function updateBatch() {
         if (!batchContext?.batch) return;
+        $("batchCount").textContent = String(batchContext.items.filter(item => !batchExcluded[item.positionId]).length);
         const inputs = Array.from($("batchItems").querySelectorAll("input[type=number]"));
         let ready = 0, total = 0, allValid = inputs.length > 0;
         inputs.forEach((input, index) => {
           const item = batchContext.items[index], resolved = batchInputAmount(item, input.value, batchAction, batchUnit), quantity = resolved.quantity;
+          if (batchExcluded[item.positionId]) { $("batch-conversion-" + index).textContent = "Исключён из записи."; return; }
           const numerator = quantity * item.sheetsPerKit;
           const whole = resolved.unit !== "kits"
             ? Number.isSafeInteger(quantity)
@@ -692,7 +766,7 @@
           const valid = Number.isSafeInteger(quantity) && quantity > 0 && quantity <= 1000000 && whole && withinPlan;
           if (valid) { ready++; total += sheets; } else if (!resolved.complete) allValid = false;
           const conversion = $("batch-conversion-" + index);
-          conversion.textContent = resolved.complete ? "План уже выполнен — новая запись не создаётся." : quantity > 0
+          conversion.textContent = resolved.complete ? (batchAction === "take" ? "Уже взято в работу на весь план. Для фиксации печати или порезки выберите соответствующее действие." : "Этот этап уже выполнен на весь план — повторная запись не создаётся.") : quantity > 0
             ? (resolved.unit !== "kits"
               ? fmt(quantity) + " " + amountUnit(item)
               : fmt(quantity) + " шт. → " + fmt(sheets) + " " + amountUnit(item) + (whole ? "" : " · результат должен быть целым числом листов"))
@@ -701,7 +775,7 @@
             : item.xerox ? "Xerox: количество ÷ кратность " + fmt(item.multiplicity) + " × листов на товар " + fmt(item.sheetsPerKit) : "Укажите количество товара в штуках.";
         });
         $("batchReady").textContent = ready + " / " + inputs.length;
-        const readyItems = batchContext.items.map((item, i) => ({item, ...batchInputAmount(item, inputs[i].value, batchAction, batchUnit)}));
+        const readyItems = batchContext.items.map((item, i) => ({item, ...batchInputAmount(item, inputs[i].value, batchAction, batchUnit)})).filter(x => !batchExcluded[x.item.positionId]);
         const pieces = readyItems.filter(x=>!x.item.xerox).reduce((n,x)=>n+(Number.isSafeInteger(x.quantity)?x.quantity:0),0);
         const sheetTotal = readyItems.filter(x=>x.item.xerox).reduce((n,x)=>n+(Number.isSafeInteger(x.quantity)?(x.unit !== "kits"?x.quantity:x.quantity*x.item.sheetsPerKit/x.item.multiplicity):0),0);
         $("batchTotalSheets").textContent = fmt(pieces) + " шт. / " + fmt(sheetTotal) + " листов";
@@ -714,6 +788,9 @@
         $("batchStage").disabled = busy || !!batchPending;
         $("batchSheets").disabled = busy || !!batchPending;
         $("batchKits").disabled = busy || !!batchPending || ["defect", "surplus"].includes(batchAction);
+        $("selectionMode").disabled = busy || !!batchPending || !!pending;
+        $("machineSelect").disabled = busy || !!batchPending || !!pending;
+        $("batchItems").querySelectorAll('input[type="checkbox"]').forEach((input) => input.disabled = busy || !!batchPending);
         inputs.forEach((input) => input.disabled = busy || !!batchPending);
         renderBatchRecovery();
       }
@@ -745,6 +822,7 @@
           const inputs = Array.from($("batchItems").querySelectorAll("input[type=number]"));
           const reason = $("batchReason").value.trim();
           batchPending = batchContext.items.map((item, index) => {
+            if (batchExcluded[item.positionId]) return null;
             const resolved = batchInputAmount(item, inputs[index].value, batchAction, batchUnit);
             if (resolved.complete) return null;
             const quantity = resolved.quantity;
@@ -766,12 +844,14 @@
         $("batchResult").className = "message success";
         $("batchResult").textContent = "Сохраняем записи по выбранным артикулам. Дождитесь подтверждения.";
         try {
-          const sent = batchPending.slice();
+          const messages = [];
+          let saved = 0;
+          while (batchPending && batchPending.length) {
+          const sent = batchPending.slice(0, 20);
           const response = await call("saveBoxWorkBatch", sent);
           if (!response || !Array.isArray(response.results) || response.results.length !== sent.length)
             throw new Error("Сервер не вернул полный результат. Повторная проверка использует те же ID.");
-          const uncertain = [], messages = [];
-          let saved = 0;
+          const uncertain = [];
           response.results.forEach((result, index) => {
             const request = sent[index];
             if (result.ok && result.eventId === request.requestId) {
@@ -786,8 +866,13 @@
               messages.push((request.article || batchContext?.items.find((entry) => entry.positionId === request.positionId)?.article || "Артикул") + ": подтверждение ещё не получено");
             }
           });
-          batchPending = uncertain.length ? uncertain : null;
+          const remaining = batchPending.slice(sent.length);
+          batchPending = uncertain.concat(remaining);
+          if (!batchPending.length) batchPending = null;
           remember("pendingBatch", batchPending ? JSON.stringify(batchPending) : "");
+          if (uncertain.length) break;
+          if (batchPending) $("batchResult").textContent = "Сохранено: " + saved + ". Осталось проверить: " + batchPending.length + ".";
+          }
           $("batchResult").className = "message " + (messages.length ? "error" : "success");
           $("batchResult").textContent = (saved ? "Сохранено: " + saved + ". " : "") + (messages.length ? messages.join("\n") : "Все записи подтверждены.");
           if (!batchPending && batchContext) {
@@ -966,6 +1051,16 @@
       $("save").onclick = save;
       $("cancelUndo").onclick = () => choose("print");
       $("refresh").onclick = () => load(true);
+      $("selectionMode").onchange = async () => {
+        if (busy || pending || batchPending) { $("selectionMode").value = selectionMode; return; }
+        selectionMode = $("selectionMode").value;
+        lastSelection = ""; machineSheetId = null; context = batchContext = null; batchExcluded = {}; batchValues = {};
+        $("machinePicker").classList.toggle("hidden", selectionMode !== "machine");
+        $("content").classList.add("hidden"); $("batchContent").classList.add("hidden");
+        if (loading) { msg("Переключаем режим…", "success"); return; }
+        if (selectionMode === "machine") await loadMachines(); else await load(true);
+      };
+      $("machineSelect").onchange = selectMachine;
       $("batchActions").onclick = (e) => {
         const button = e.target.closest("[data-action]");
         if (button) chooseBatch(button.dataset.action);
