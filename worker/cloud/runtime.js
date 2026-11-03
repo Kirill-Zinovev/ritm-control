@@ -1,3 +1,4 @@
+import {createAssemblyOnlyItem, listAssemblyOnlyItems} from "./assemblyOnlyItems.js";
 import { loadSource, todayMoscow, validateApi } from "../../agent/adapters.js";
 import { selectAssemblyPeriod } from "../assembly.js";
 import { cloudConfig, sourceId } from "./config.js";
@@ -27,6 +28,7 @@ function managerRouteAllowed(method, path) {
     "/api/assembly-transfers/sources", "/api/assembly-transfers/links",
     "/api/assembly-transfers/source", "/api/assembly-transfers/operation",
     "/api/production-controls",
+    "/api/assembly-only-items",
     "/api/shipment-locks",
   ].includes(path);
   return method === "POST" && [
@@ -34,6 +36,7 @@ function managerRouteAllowed(method, path) {
     "/api/assembly-transfers", "/api/assembly-transfers/preview",
     "/api/warehouse/dispatch",
     "/api/production-controls",
+    "/api/assembly-only-items",
     "/api/shipment-locks",
   ].includes(path);
 }
@@ -327,6 +330,24 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
         return value;
       });
       return json({ ok: true, ...result }, result.confirmed ? 200 : 202);
+    }
+    if (path === "/api/assembly-only-items") {
+      methods(request, ["GET", "POST"]);
+      if (bridgeId || (assemblyControlApp && request.method !== "GET")) throw new CloudError("assembly_item_forbidden", "Недостаточно прав для изменения товаров.", 403);
+      if (request.method === "GET") return json({ok:true, items:listAssemblyOnlyItems(await store.scope(), url.searchParams.get("shipmentId") || "")});
+      const input=await readJson(request,4096);
+      const snapshot=await currentShipmentLockSnapshot(bindings,store,{fetcher});
+      const active=activePrintingShipmentIds(snapshot.value), shipmentId=String(input?.shipmentId||'');
+      if (!active || !active.has(shipmentId)) throw new CloudError("assembly_item_shipment_unavailable", "Поставка изменилась или недоступна. Обновите данные.", 409);
+      const sheetIdentity = sheet => sheet.assemblyShipmentId || `RITM-${sheet.sourceId === 'box-printing' ? 'BOX' : 'ROLL'}-${sheet.sheetId}`;
+      const targetNames = new Set((snapshot.value.sheets || []).filter(sheet => sheetIdentity(sheet) === shipmentId).map(sheet => sheet.name).filter(Boolean));
+      const orders=(snapshot.value.supplies||[]).filter(o => sheetIdentity(o)===shipmentId || targetNames.has(o.sheetName));
+      const result=await store.withScope(async scope=>{
+        if(scope.meta("migrationReady")!==true) throw new CloudError("migration_not_imported","Реестр поставок ещё не готов.",503);
+        const value=createAssemblyOnlyItem(scope,input,{owner:principal?.displayName||principal?.username||'RITM',orders});
+        appendAudit(scope,principal,path,value.item);return value;
+      });
+      return json({ok:true,...result});
     }
     if (path === "/api/assembly-controls") {
       methods(request, ["GET"]);

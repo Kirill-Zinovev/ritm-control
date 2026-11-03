@@ -88,7 +88,7 @@ export type LivePrinting = {
     missing: number;
     ambiguous: number;
   };
-  boxPrinting?: {status: "available" | "unavailable"; reason: string | null; events: {id: string; employee: string; date: string; shipment: string; sheetId: number; article: string; quantity: number; sheets: number | null; area: number | null}[]};
+  boxPrinting?: {status: "available" | "unavailable"; reason: string | null; exceptions?: {id: string; date: string; timestamp: string; shipment: string; sheetId: number; article: string; employee: string; kind: "defect" | "surplus"; quantity: number; unit: "sheets" | "pieces" | "unknown"; stage: string; comment: string}[]; events: {id: string; employee: string; date: string; shipment: string; sheetId: number; article: string; quantity: number; sheets: number | null; area: number | null}[]};
   events: LiveEvent[];
   cutEvents?: LiveEvent[];
   supplies: LiveOrder[];

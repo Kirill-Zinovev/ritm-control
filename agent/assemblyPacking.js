@@ -232,10 +232,27 @@ export function attachAssemblyPacking(printing, workLog, checkedAt) {
     if (!orderPositions.has(alias)) orderPositions.set(alias, order);
   }
 
+  // Preserve historical roll UIDs only when the same shipment and article
+  // identify exactly one current row and no current identity conflicts.
+  const legacyCandidates = new Map();
+  for (const order of orders) {
+    if (order.sourceId !== "roll-printing" || !order.legacyUid || !order.rawUid || counts.get(articleScope(order)) !== 1) continue;
+    const alias = `${workShipmentId(order)}|uid:${order.legacyUid}|${String(order.article || "")}`;
+    const list = legacyCandidates.get(alias) || [];
+    list.push(order); legacyCandidates.set(alias, list);
+  }
+  for (const [alias, candidates] of legacyCandidates) {
+    if (candidates.length === 1 && !orderPositions.has(alias)) orderPositions.set(alias, candidates[0]);
+  }
+
   let eventCount = 0;
   let sourceUpdatedAt = null;
   for (const event of workLog.events || []) {
     if (!activeShipmentIds.has(event.shipmentId)) continue;
+    // Assembly-only additions have no production-sheet position and must not
+    // invalidate or inflate production progress.
+    const manual = String(event.positionId || "").match(/^(.+)\|manual:([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})\|([^|]+)$/i);
+    if (manual && manual[1] === event.shipmentId && manual[3] === event.article) continue;
     const order = orderPositions.get(event.positionId);
     if (!order || order.article !== event.article) {
       invalidRecords++;

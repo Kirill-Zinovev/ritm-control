@@ -353,3 +353,12 @@ test("legacy row fallback refuses repeated articles and does not cross departmen
   const box = attachAssemblyPacking({ supplies: [{ ...order, sourceId: "box-printing", assemblyShipmentId: event.shipmentId }] }, { invalid: [], events: [event] }, "2026-10-30T07:00:00Z");
   assert.equal(box.supplies[0].packed, null);
 });
+test('old roll UID maps to its unique unchanged article while retaining the current identity',()=>{
+ const shipment='RITM-ROLL-119710351'; const order={sourceId:'roll-printing',sheetId:119710351,row:6,rawUid:'new-uid',legacyUid:'f6eeb59f-78aa-47c3-8392-f5f2885e95c0',article:'JA0037.A0225'};
+ const events=[{shipmentId:shipment,positionId:`${shipment}|uid:${order.legacyUid}|${order.article}`,article:order.article,quantity:60,createdAt:'2026-11-02T10:00:00Z'},{shipmentId:shipment,positionId:`${shipment}|uid:new-uid|${order.article}`,article:order.article,quantity:3,createdAt:'2026-11-02T11:00:00Z'}];
+ const result=attachAssemblyPacking({supplies:[order]},{events,invalid:[]},'2026-11-03T00:00:00Z');assert.equal(result.packing.invalidRecords,0);assert.equal(result.supplies[0].packed,63);
+});
+test('ambiguous old UID does not invent an article match',()=>{
+ const shipment='RITM-ROLL-119710351', common={sourceId:'roll-printing',sheetId:119710351,legacyUid:'old',article:'SKU'};
+ const result=attachAssemblyPacking({supplies:[{...common,row:5,rawUid:'new-a'},{...common,row:6,rawUid:'new-b'}]},{invalid:[],events:[{shipmentId:shipment,positionId:`${shipment}|uid:old|SKU`,article:'SKU',quantity:10,createdAt:'2026-11-02T10:00:00Z'}]},'2026-11-03T00:00:00Z');assert.equal(result.packing.status,'partial');assert.equal(result.supplies[0].packed,null);
+});

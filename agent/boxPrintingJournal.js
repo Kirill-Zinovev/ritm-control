@@ -1,5 +1,5 @@
 // Read-only interpretation of the box work journal; original records remain immutable.
-export function parseBoxJournal(rows) {
+function activeBoxJournalRows(rows) {
   const expected=['ID записи','Контроль запроса','Время','ID позиции','ID таблицы','ID листа','Поставка','Артикул','ID сотрудника','Сотрудник','Действие','Единица','Введено','Физических листов','Комплектов','Площадь, м²','План, комплектов','Листов в комплекте','План, листов','Ширина, м','Высота, м','Этап','Комментарий / причина','Отменяет ID'];
   if (!Array.isArray(rows) || expected.some((v,i)=>String(rows[0]?.[i]??'').trim()!==v)) throw new Error('Структура журнала бокса не подтверждена');
   const ids=new Map();
@@ -14,7 +14,11 @@ export function parseBoxJournal(rows) {
     if(!target || cancelled.has(target) || (!ids.has(target)&&!target.startsWith('baseline:')) || (ids.has(target)&&String(ids.get(target)[3])!==String(row[3]))) throw new Error('Отмена журнала бокса не подтверждена');
     cancelled.add(target);
   }
-  return [...ids.values()].filter(row=>String(row[10]).trim()==='Печать'&&!cancelled.has(String(row[0]).trim())).map(row=>({id:String(row[0]).trim(),positionId:String(row[3]),sheetId:Number(row[5]),shipment:String(row[6]),article:String(row[7]),employee:String(row[9]),date:String(row[2]),sheets:row[13]===''||row[13]==null?null:Number(row[13]),quantity:row[14]===''||row[14]==null?null:Number(row[14]),area:row[15]===''||row[15]==null?null:Number(row[15]),width:row[19]===''||row[19]==null?null:Number(row[19]),height:row[20]===''||row[20]==null?null:Number(row[20])}));
+  return [...ids.values()].filter(row=>String(row[10]).trim()!=='Отмена'&&!cancelled.has(String(row[0]).trim()));
+}
+
+export function parseBoxJournal(rows) {
+  return activeBoxJournalRows(rows).filter(row=>String(row[10]).trim()==='Печать').map(row=>({id:String(row[0]).trim(),positionId:String(row[3]),sheetId:Number(row[5]),shipment:String(row[6]),article:String(row[7]),employee:String(row[9]),date:String(row[2]),sheets:row[13]===''||row[13]==null?null:Number(row[13]),quantity:row[14]===''||row[14]==null?null:Number(row[14]),area:row[15]===''||row[15]==null?null:Number(row[15]),width:row[19]===''||row[19]==null?null:Number(row[19]),height:row[20]===''||row[20]==null?null:Number(row[20])}));
 }
 
 export function boxPrintingEvents(rows, orders = []) {
@@ -30,8 +34,19 @@ export function boxPrintingEvents(rows, orders = []) {
     return {...e,area,sheets:physicalSheets,sourceId:'box-printing',date:new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(e.date))};
   });
 }
+export function boxJournalExceptions(rows) {
+  return activeBoxJournalRows(rows).filter(row=>['Брак','Излишек'].includes(String(row[10]).trim())).map(row=>{
+    const timestamp=String(row[2]??'').trim(), quantity=Number(row[12]);
+    if(!Number.isFinite(Date.parse(timestamp))||!Number.isFinite(quantity)||quantity<=0) throw new Error('Некорректная запись брака или излишка');
+    const unit=String(row[11]??'').trim();
+    return {id:String(row[0]).trim(),date:new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(timestamp)),timestamp,
+      sheetId:Number(row[5]),shipment:String(row[6]??''),article:String(row[7]??''),employee:String(row[9]??''),
+      kind:String(row[10]).trim()==='Брак'?'defect':'surplus',quantity,unit:unit==='Листы'?'sheets':unit==='Шт. товара'?'pieces':'unknown',
+      stage:String(row[21]??''),comment:String(row[22]??'')};
+  });
+}
 export async function loadBoxPrinting(reader, printing, {journalId,signal}={}) {
-  const unavailable=reason=>({...printing,boxPrinting:{status:'unavailable',events:[],reason}});
+  const unavailable=reason=>({...printing,boxPrinting:{status:'unavailable',events:[],exceptions:[],reason}});
   if(!journalId)return unavailable('Журнал бокса не подключён.');
   try {
     const metadata=await reader.metadata(journalId,signal,5);
@@ -42,6 +57,6 @@ export async function loadBoxPrinting(reader, printing, {journalId,signal}={}) {
     const block=grid.sheets?.find(s=>s.properties?.sheetId===sheet.properties.sheetId)?.data?.[0];
     if(grid.spreadsheetId!==journalId||!block||block.startRow||block.startColumn||!Array.isArray(block.rowData))throw new Error('grid');
     const rows=block.rowData.map(r=>(r.values||[]).map(c=>c.effectiveValue?.stringValue??c.effectiveValue?.numberValue??c.userEnteredValue?.stringValue??c.userEnteredValue?.numberValue??''));
-    return {...printing,boxPrinting:{status:'available',events:boxPrintingEvents(rows,printing.supplies||[]),reason:null}};
+    return {...printing,boxPrinting:{status:'available',events:boxPrintingEvents(rows,printing.supplies||[]),exceptions:boxJournalExceptions(rows),reason:null}};
   } catch(error) {if(signal?.aborted)throw error;return unavailable('Журнал бокса недоступен или содержит неподтверждённые записи.');}
 }

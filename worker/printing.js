@@ -485,6 +485,9 @@ export function indexOrders(sheets) {
       const o = {
         uid,
         rawUid: raw || null,
+        // A former roll UID can remain in AC after the UID column moved to AD.
+        // Only accept an actual UUID from the unlabeled legacy column.
+        legacyUid: sourceId === "roll-printing" && uidCol === 29 && !String((rows[uidHeaderRow - 1] || [])[28] || "").trim() && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(r[28] || "").trim()) ? String(r[28]).trim() : null,
         sheetId: gid,
         sheetName: name,
         journalAliases,

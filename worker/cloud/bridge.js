@@ -12,7 +12,7 @@ export function bridgeSignature(secret, { method, path, timestamp, nonce, body =
 // scoped reverse channel. It cannot call supply writers or any other API.
 export async function verifyAssemblyControlApp(request, bindings, now = Date.now()) {
   const url = new URL(request.url), at = request.headers.get("x-ritm-assembly-at"), nonce = request.headers.get("x-ritm-assembly-nonce"), signature = request.headers.get("x-ritm-assembly-signature");
-  const allowed = request.method === "GET" && url.pathname === "/api/assembly-controls" || request.method === "POST" && url.pathname === "/api/assembly-controls/complete";
+  const allowed = request.method === "GET" && ["/api/assembly-controls", "/api/assembly-only-items"].includes(url.pathname) || request.method === "POST" && url.pathname === "/api/assembly-controls/complete";
   const secret = bindings.RITM_ASSEMBLY_SYNC_SECRET;
   const fail = () => { throw new CloudError("assembly_control_forbidden", "Связь с RITM Assembly не подтверждена.", 403); };
   if (!allowed || !/^[a-f0-9]{64}$/i.test(secret || "") || !/^\d{13}$/.test(at || "") || Math.abs(now - Number(at)) > 120000 || !/^[a-f0-9-]{36}$/i.test(nonce || "") || !/^[a-f0-9]{64}$/i.test(signature || "") || !bindings.DB) fail();

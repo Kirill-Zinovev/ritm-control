@@ -1,3 +1,4 @@
+import { AssemblyOnlyItems } from "./AssemblyOnlyItems";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowSquareOut,
@@ -1833,6 +1834,8 @@ export function LiveSuppliesWorkspace({
                   </div>
                 </div>
               </ShipmentHero>
+
+              <AssemblyOnlyItems shipmentId={selectedControlShipmentIds[0] || ""} />
 
               <ProductionControls
                 shipmentIds={selectedControlShipmentIds}

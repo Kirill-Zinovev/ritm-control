@@ -717,3 +717,4 @@ test("live loader combines both printing sources without double-counting summari
   assert.equal(r.issues[0].code, "invalid_record");
   assert.match(r.issues[0].message, /Нет количества или площади/);
 });
+test('legacy roll UID is taken only from the unlabeled former column next to current UID',()=>{const rows=Array.from({length:5},()=>Array(30).fill(''));rows[0][29]='UID';rows[3][4]='Артикул';rows[3][14]='Кол-во';rows[4][4]='JA0037.A0225';rows[4][14]='20';rows[4][28]='f6eeb59f-78aa-47c3-8392-f5f2885e95c0';rows[4][29]='new';const sheets=[{gid:119710351,name:'OZON test',rows,sourceId:'roll-printing',dataStartRow:5,headerRow:4,uidHeaderRow:1}];assert.equal(indexOrders(sheets).orders[0].legacyUid,rows[4][28]);rows[0][28]='Другие данные';assert.equal(indexOrders(sheets).orders[0].legacyUid,null);});
