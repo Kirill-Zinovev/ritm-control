@@ -375,9 +375,10 @@ function AppShell() {
   }
   const area = rolls.reduce((s, r) => s + r.area, 0);
   const printerPeople =
-    mode === "imported"
+    (mode === "imported"
       ? PRINTERS
-      : data.employees.filter((e) => rolls.some((r) => r.employee === e.id));
+      : data.employees.filter((e) => rolls.some((r) => r.employee === e.id)))
+      .filter((employee) => employee.id !== "printer-pavel");
   const activePrinterProfile = printerProfileId
     ? data.employees.find((person) => person.id === printerProfileId) ||
       PRINTERS.find((person) => person.id === printerProfileId) ||
