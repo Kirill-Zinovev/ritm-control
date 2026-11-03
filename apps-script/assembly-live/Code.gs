@@ -1659,7 +1659,7 @@ function readOpenCartonsForShipment_(sheet, shipment) {
   const missing = required.filter(header => headers.indexOf(header) < 0);
   if (missing.length) throw new Error('В листе коробов отсутствуют колонки: ' + missing.join(', ') + '.');
   const records = [];
-  const chunkSize = 250;
+  const chunkSize = 2000;
   for (let end = lastRow; end >= 2; end -= chunkSize) {
     const start = Math.max(2, end - chunkSize + 1);
     const values = sheet.getRange(start, 1, end - start + 1, lastColumn).getValues();

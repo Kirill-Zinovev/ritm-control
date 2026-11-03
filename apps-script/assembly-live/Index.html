@@ -4988,6 +4988,10 @@
         ['boxPackedValue', 'boxAssignedValue', 'boxAvailableValue'].forEach(id => { $(id).textContent = '—'; });
         $('boxSnapshot').textContent = 'Загружаем фактическую упаковку и открытые короба…';
         $('boxCards').replaceChildren(node('div', 'box-empty', 'Загружаем короба…'));
+        $('boxPlacement').hidden = true;
+        $('boxOpenCount').textContent = '';
+        $('boxClosedCount').textContent = '';
+        $('boxResult').textContent = '';
         $('preflightBoxButton').disabled = true;
         $('boxDetails').hidden = true;
         state.boxData = null;

@@ -1540,7 +1540,7 @@ function AppShell() {
                   </div>
                 </section>
                 </div>
-                {mode === "imported" && liveSupplyPanel}
+                {mode === "imported" && printingDepartment !== "box" && liveSupplyPanel}
                 {mode === "imported" && (
                   <Notice>
                     Площадь берётся из столбца L журнала, день выпуска — из
