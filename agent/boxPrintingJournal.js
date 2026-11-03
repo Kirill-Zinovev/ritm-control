@@ -18,7 +18,7 @@ function activeBoxJournalRows(rows) {
 }
 
 export function parseBoxJournal(rows) {
-  return activeBoxJournalRows(rows).filter(row=>String(row[10]).trim()==='Печать').map(row=>({id:String(row[0]).trim(),positionId:String(row[3]),sheetId:Number(row[5]),shipment:String(row[6]),article:String(row[7]),employee:String(row[9]),date:String(row[2]),sheets:row[13]===''||row[13]==null?null:Number(row[13]),quantity:row[14]===''||row[14]==null?null:Number(row[14]),area:row[15]===''||row[15]==null?null:Number(row[15]),width:row[19]===''||row[19]==null?null:Number(row[19]),height:row[20]===''||row[20]==null?null:Number(row[20])}));
+  return activeBoxJournalRows(rows).filter(row=>String(row[10]).trim()==='Печать').map(row=>({id:String(row[0]).trim(),positionId:String(row[3]),sheetId:Number(row[5]),shipment:String(row[6]),article:String(row[7]),employee:String(row[9]),date:String(row[2]),comment:String(row[22]??''),sheets:row[13]===''||row[13]==null?null:Number(row[13]),quantity:row[14]===''||row[14]==null?null:Number(row[14]),area:row[15]===''||row[15]==null?null:Number(row[15]),width:row[19]===''||row[19]==null?null:Number(row[19]),height:row[20]===''||row[20]==null?null:Number(row[20])}));
 }
 
 export function boxPrintingEvents(rows, orders = []) {
