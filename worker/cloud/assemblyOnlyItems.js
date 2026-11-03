@@ -6,7 +6,7 @@ const clean=(v,n)=>typeof v==='string'?v.trim().slice(0,n):'';
 const fail=(code,message,status=400)=>{throw new CloudError(code,message,status)};
 export function listAssemblyOnlyItems(scope,shipmentId){
   if(!SHIPMENT.test(shipmentId||''))fail('assembly_item_shipment_invalid','Не удалось проверить поставку.');
-  return [...scope.operations.values()].filter(r=>r.kind===KIND&&r.value?.shipmentId===shipmentId).map(r=>structuredClone(r.value)).sort((a,b)=>a.createdAt.localeCompare(b.createdAt));
+  return [...scope.operations.values()].filter(r=>r.kind===KIND&&r.value?.shipmentId===shipmentId&&r.value?.status!=='removed').map(r=>structuredClone(r.value)).sort((a,b)=>a.createdAt.localeCompare(b.createdAt));
 }
 export function createAssemblyOnlyItem(scope,input,{owner='',orders=[],now=Date.now}={}){
   if(!scope?.lease)fail('assembly_item_lease_required','Операция сохранения занята. Повторите.',409);
@@ -21,4 +21,16 @@ export function createAssemblyOnlyItem(scope,input,{owner='',orders=[],now=Date.
   if(additions.some(x=>x.article===article)||orders.some(o=>String(o.article||'').trim().toLocaleUpperCase('ru-RU')===article))fail('assembly_item_duplicate','Этот артикул уже есть в поставке.',409);
   const item={id,shipmentId,article,quantity,comment,createdAt:new Date(now()).toISOString(),createdBy:clean(owner,120)||'RITM',positionId:`${shipmentId}|manual:${id}|${article}`};
   scope.putOperation(KIND,item);return {item:structuredClone(item),duplicate:false};
+}
+
+export async function removeAssemblyOnlyItem(scope,input,{owner='',deliver,now=Date.now}={}){
+ if(!scope?.lease)fail('assembly_item_lease_required','Операция занята. Повторите.',409);
+ const id=clean(input?.itemId,36),shipmentId=clean(input?.shipmentId,120);if(!UUID.test(id)||!SHIPMENT.test(shipmentId))fail('assembly_item_invalid','Не удалось проверить товар.');
+ const item=scope.operations.get(`${KIND}:${id}`)?.value;if(!item||item.shipmentId!==shipmentId)fail('assembly_item_missing','Товар не найден.',404);
+ if(item.status==='removed')return {item,confirmed:true,duplicate:true};
+ const eventId=item.removeEventId||crypto.randomUUID();const pending={...item,status:'removing',removeEventId:eventId,removeBy:clean(owner,120)||'RITM'};scope.putOperation(KIND,pending);await scope.checkpoint();
+ const result=await deliver({v:1,eventId,action:'assembly-only-remove',issuedAt:now(),shipmentId,itemId:id,positionId:item.positionId});
+ if(result==='rejected'){const active={...item,status:'active',removeEventId:null};scope.putOperation(KIND,active);await scope.checkpoint();fail('assembly_item_has_work','Нельзя удалить товар: по нему уже есть записи работы или коробов.',409);}
+ if(result!=='synced')return {item:pending,confirmed:false};
+ const removed={...pending,status:'removed',removedAt:new Date(now()).toISOString()};scope.putOperation(KIND,removed);await scope.checkpoint();return {item:removed,confirmed:true};
 }

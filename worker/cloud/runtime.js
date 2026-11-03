@@ -1,4 +1,6 @@
-import {createAssemblyOnlyItem, listAssemblyOnlyItems} from "./assemblyOnlyItems.js";
+import {deliverAssemblyOnlyRemoval} from "./assemblyOnlyDelivery.js";
+import {findAssemblyCatalog} from "./assemblyOnlyCatalog.js";
+import {createAssemblyOnlyItem, listAssemblyOnlyItems, removeAssemblyOnlyItem} from "./assemblyOnlyItems.js";
 import { loadSource, todayMoscow, validateApi } from "../../agent/adapters.js";
 import { selectAssemblyPeriod } from "../assembly.js";
 import { cloudConfig, sourceId } from "./config.js";
@@ -29,6 +31,7 @@ function managerRouteAllowed(method, path) {
     "/api/assembly-transfers/source", "/api/assembly-transfers/operation",
     "/api/production-controls",
     "/api/assembly-only-items",
+    "/api/assembly-only-catalog",
     "/api/shipment-locks",
   ].includes(path);
   return method === "POST" && [
@@ -331,11 +334,26 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
       });
       return json({ ok: true, ...result }, result.confirmed ? 200 : 202);
     }
+    if (path === "/api/assembly-only-catalog") {
+      methods(request,["GET"]);
+      if (assemblyControlApp || bridgeId) throw new CloudError("catalog_access_forbidden", "Поиск доступен только в RITM.",403);
+      const shipmentId=url.searchParams.get("shipmentId")||"";
+      const snapshot=await currentShipmentLockSnapshot(bindings,store,{fetcher});
+      const source=(snapshot.value.sheets||[]).find(sheet=>(sheet.assemblyShipmentId || `RITM-${sheet.sourceId === 'box-printing' ? 'BOX' : 'ROLL'}-${sheet.sheetId}`)===shipmentId);
+      if(!source)throw new CloudError("catalog_supply_missing","Поставка недоступна.",409);
+      const market=/^OZON/i.test(String(source.name||''))?'OZON':/^WB/i.test(String(source.name||''))?'WB':'';
+      const articles=url.searchParams.getAll('article');
+      return json({ok:true,items:await findAssemblyCatalog(new CloudSheetsReader(bindings,{fetcher}),bindings,market,articles)});
+    }
     if (path === "/api/assembly-only-items") {
       methods(request, ["GET", "POST"]);
       if (bridgeId || (assemblyControlApp && request.method !== "GET")) throw new CloudError("assembly_item_forbidden", "Недостаточно прав для изменения товаров.", 403);
       if (request.method === "GET") return json({ok:true, items:listAssemblyOnlyItems(await store.scope(), url.searchParams.get("shipmentId") || "")});
       const input=await readJson(request,4096);
+      if(input?.action === 'remove') {
+        const result=await store.withScope(scope=>removeAssemblyOnlyItem(scope,input,{owner:principal?.displayName||principal?.username||'RITM',deliver:event=>deliverAssemblyOnlyRemoval(bindings,event,fetcher)}));
+        return json({ok:true,...result},result.confirmed?200:202);
+      }
       const snapshot=await currentShipmentLockSnapshot(bindings,store,{fetcher});
       const active=activePrintingShipmentIds(snapshot.value), shipmentId=String(input?.shipmentId||'');
       if (!active || !active.has(shipmentId)) throw new CloudError("assembly_item_shipment_unavailable", "Поставка изменилась или недоступна. Обновите данные.", 409);

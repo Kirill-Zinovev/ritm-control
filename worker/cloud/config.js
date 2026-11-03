@@ -3,12 +3,12 @@ const keys = ["seasonalPrintingId", "rollPrintingId", "boxPrintingId", "catalogI
 
 export function sourceId(bindings, key) {
   const name = "RITM_GOOGLE_" + key.replace(/[A-Z]/g, (letter) => "_" + letter).toUpperCase();
-  const value = bindings[name];
+  const value = bindings[name] || (key === "assemblyPhotosId" ? "1_oKOKNdlcjnQUEg_Z9A43-VEJ7P1JeRgmRZ9j85xmhw" : "");
   return typeof value === "string" && documentId.test(value) ? value : "";
 }
 
 export function sourceIds(bindings) {
-  return [...new Set([...keys, "photosId", "boxJournalId"].map((key) => sourceId(bindings, key)).filter(Boolean))];
+  return [...new Set([...keys, "photosId", "assemblyPhotosId", "boxJournalId"].map((key) => sourceId(bindings, key)).filter(Boolean))];
 }
 
 export function cloudConfig(bindings) {

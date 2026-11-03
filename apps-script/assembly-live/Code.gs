@@ -72,10 +72,12 @@ function receiveRitmAssemblyEvent_(body) {
     ? 'action,eventId,issuedAt,transfer,v'
     : event && event.action === 'shipment-lock'
       ? 'action,eventId,issuedAt,locked,shipmentIds,v'
-      : 'action,eventId,issuedAt,v';
+      : event && event.action === 'assembly-only-remove'
+        ? 'action,eventId,issuedAt,itemId,positionId,shipmentId,v'
+        : 'action,eventId,issuedAt,v';
   if (!/^[a-f0-9]{64}$/i.test(secret || '') || !event ||
       Object.keys(event).sort().join(',') !== expectedKeys ||
-      event.v !== 1 || !['reconcile', 'transfer', 'shipment-lock'].includes(event.action) || !/^[a-f0-9-]{36}$/i.test(event.eventId || '') ||
+      event.v !== 1 || !['reconcile', 'transfer', 'shipment-lock', 'assembly-only-remove'].includes(event.action) || !/^[a-f0-9-]{36}$/i.test(event.eventId || '') ||
       !Number.isSafeInteger(event.issuedAt) || Math.abs(Date.now() - event.issuedAt) > 300000 ||
       !/^[a-f0-9]{64}$/i.test(body.signature || '')) throw new Error('unauthorized_event');
   const expected = Utilities.computeHmacSha256Signature(JSON.stringify(event), secret, Utilities.Charset.UTF_8)
@@ -86,6 +88,7 @@ function receiveRitmAssemblyEvent_(body) {
   const receipts = parseSyncJson_(props.getProperty(RITM_EVENT_RECEIPTS), []);
   const priorReceipt = receipts.find(receipt => receipt.id === event.eventId);
   if (priorReceipt) return Object.assign({ ok: true, status: 'synced', eventId: event.eventId }, priorReceipt.result || {});
+  if (event.action === 'assembly-only-remove') return receiveAssemblyOnlyRemoval_(event, props);
   if (event.action === 'shipment-lock') {
     try { return receiveRitmShipmentLockEvent_(event, props); }
     catch (error) { return { ok: false, status: 'rejected', eventId: event.eventId, reason: String(error && error.message || 'Ошибка обработки замка').slice(0, 200) }; }
@@ -101,6 +104,26 @@ function receiveRitmAssemblyEvent_(body) {
     appendRitmEventReceipt_(props, { id: event.eventId, at: Date.now() });
   } finally { lock.releaseLock(); }
   return { ok: true, status: 'synced', eventId: event.eventId };
+}
+
+function assemblyOnlyTombstoneKey_(positionId) {
+  return 'ritm.assembly.deleted.' + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(positionId))).slice(0, 42);
+}
+function assertAssemblyOnlyNotDeleted_(positionId) {
+  if (String(positionId || '').indexOf('|manual:') >= 0 && PropertiesService.getScriptProperties().getProperty(assemblyOnlyTombstoneKey_(positionId))) throw new Error('Товар удалён из поставки. Обновите список.');
+}
+function receiveAssemblyOnlyRemoval_(event, props) {
+  if (!/^[a-f0-9-]{36}$/i.test(String(event.itemId || '')) || String(event.positionId || '').indexOf(String(event.shipmentId) + '|manual:' + event.itemId + '|') !== 0) return {ok:false,status:'rejected',eventId:event.eventId};
+  const lock=LockService.getScriptLock(); if(!lock.tryLock(5000))return {ok:false,status:'pending',eventId:event.eventId};
+  try {
+    const db=SpreadsheetApp.openById(DB_ID), log=db.getSheetByName(TABLES.workLog), contents=db.getSheetByName(TABLES.cartonContents);
+    if(!log||!contents || [log,contents].some(sheet => sheet.getLastColumn()<1 || !sheet.getRange(1,1,1,sheet.getLastColumn()).getValues()[0].map(String).includes('positionId'))) return {ok:false,status:'pending',eventId:event.eventId};
+    const wanted=new Set([String(event.positionId)]);
+    if(readRowsByKey_(log,'positionId',wanted).length || readRowsByKey_(contents,'positionId',wanted).length) return {ok:false,status:'rejected',reason:'item_has_work',eventId:event.eventId};
+    props.setProperty(assemblyOnlyTombstoneKey_(event.positionId),JSON.stringify({itemId:event.itemId,shipmentId:event.shipmentId,removedAt:new Date().toISOString()}));
+    appendRitmEventReceipt_(props,{id:event.eventId,at:Date.now()}); bumpDataVersion_();
+    return {ok:true,status:'synced',eventId:event.eventId};
+  } catch (_) {return {ok:false,status:'pending',eventId:event.eventId};} finally {lock.releaseLock();}
 }
 
 function ritmShipmentLockPropertyKey_(shipmentId) {
@@ -1005,7 +1028,7 @@ function saveWork(payload) {
     // same key cannot both append, even if both passed the earlier fast-path lookup.
     const duplicate = findWorkByIdempotency_(logSheet, headers, key);
     if (duplicate) return existingWorkResult_(duplicate, payload);
-    if (shipment.environment === 'RITM') assertLocalShipmentUnlocked_(payload.shipmentId);
+    if (shipment.environment === 'RITM') { assertLocalShipmentUnlocked_(payload.shipmentId); assertAssemblyOnlyNotDeleted_(payload.positionId); }
     const now = rowByHeader.createdAt;
     const eventId = rowByHeader.eventId;
     logSheet.getRange(logSheet.getLastRow() + 1, 1, 1, headers.length).setValues([row]);
@@ -1244,7 +1267,7 @@ function saveBoxPlacement(payload) {
     else {
       let liveScope;
       try {
-        if (snapshot.context.shipment.environment === 'RITM') assertLocalShipmentUnlocked_(snapshot.context.shipment.shipmentId);
+        if (snapshot.context.shipment.environment === 'RITM') { assertLocalShipmentUnlocked_(snapshot.context.shipment.shipmentId); assertAssemblyOnlyNotDeleted_(payload.positionId); }
         liveScope = boxPlacementCurrentScope_(db, payload, snapshot);
         if (quote && boxPlacementScopeFingerprint_(liveScope) !== String(quote.scopeFingerprint))
           throw new Error('Данные этого артикула или короба изменились после проверки. Обновите короб и подтвердите размещение ещё раз.');
@@ -3456,19 +3479,20 @@ function readShipmentItems_(db, shipment) {
   const market = labelMarketplace_('', shipment['Название поставки']);
   const cache = CacheService.getScriptCache();
   const products = new Map();
+  let photos = null;
   const missing = [];
   response.items.forEach(item => {
     const key = market + '|' + String(item.article || '').toUpperCase();
-    const cached = parseSyncJson_(cache.get('ritm.assembly.manual.product.' + key), null);
+    const cached = parseSyncJson_(cache.get('ritm.assembly.manual.product.v2.' + key), null);
     if (cached) products.set(key, cached); else missing.push(key);
   });
   if (missing.length) {
-    try {
-      const catalog = readRitmCatalog_();
-      missing.forEach(key => { const product = catalog.get(key) || {}; products.set(key, product); cache.put('ritm.assembly.manual.product.' + key, JSON.stringify(product), 900); });
-    } catch (_) { /* Missing catalog data does not hide the requested article. */ }
+    let catalog = new Map();
+    try { catalog = readRitmCatalog_(); } catch (_) { /* Product text may be unavailable independently. */ }
+    try { photos = readRitmPhotoMap_(); } catch (_) { photos = new Map(); }
+    missing.forEach(key => { const sku = key.slice(key.indexOf('|') + 1); const product = Object.assign({}, catalog.get(key) || {}); if (!product.photoUrl) product.photoUrl = photos.get(sku) || ''; products.set(key, product); if (product.name || product.type) cache.put('ritm.assembly.manual.product.v2.' + key, JSON.stringify(product), 60); });
   }
-  const extra = response.items.map(item => {
+  const extra = response.items.filter(item => !PropertiesService.getScriptProperties().getProperty(assemblyOnlyTombstoneKey_(item.positionId))).map(item => {
     if (!item || String(item.shipmentId) !== String(shipment.shipmentId) || !/^[a-f0-9-]{36}$/i.test(String(item.id || '')) ||
         !/^[A-ZА-ЯЁ0-9][A-ZА-ЯЁ0-9._-]{0,79}$/i.test(String(item.article || '')) || !Number.isSafeInteger(item.quantity) || item.quantity < 1 ||
         String(item.positionId) !== String(shipment.shipmentId) + '|manual:' + item.id + '|' + item.article) throw new Error('Дополнительные товары не прошли проверку.');
