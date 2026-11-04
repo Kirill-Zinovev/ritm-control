@@ -9258,6 +9258,7 @@ td small {
   border-radius: 9px;
   background: #f4f7fb;
 }
+.box-comment-badge { display: inline-block; margin-left: 8px; padding: 4px 8px; border-radius: 999px; background: #fff1d6; color: #895400; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .box-view-tabs button {
   min-height: 35px;
   padding: 7px 14px;

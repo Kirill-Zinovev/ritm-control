@@ -222,6 +222,7 @@ export function BoxPrintingStats({
                           cuts = cutEvents.filter((e) => e.employee === name),
                           t = totals(rows),
                           cut = totals(cuts),
+                          commentCount = [...rows, ...cuts].filter((e) => e.comment?.trim()).length,
                           open = employee === name;
                         const operation = (
                           label: string,
@@ -273,6 +274,7 @@ export function BoxPrintingStats({
                                     }}
                                   />
                                   {name}
+                                  {commentCount > 0 && <span className="box-comment-badge">💬 Комментарии: {commentCount}</span>}
                                 </button>
                               </th>
                               <td>{operation("Напечатано", rows, t)}</td>
@@ -425,7 +427,7 @@ export function BoxPrintingStats({
                             <Fragment key={row.key}>
                               <tr>
                         <td>{boxDate(row.date)}</td>
-                                <th scope="row">{row.employee}</th>
+                                <th scope="row">{row.employee} {[...row.print, ...row.cut].some((e) => e.comment?.trim()) && <span className="box-comment-badge">💬 Есть комментарий</span>}</th>
                                 <td>
                                   {row.print.length
                                     ? `${goodsNumber(printed.quantity)} шт.`
