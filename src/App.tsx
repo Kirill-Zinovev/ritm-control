@@ -1,5 +1,4 @@
 import { BoxPrintingStats } from "./BoxPrintingStats";
-import { AICenter } from "./AICenter";
 import { TelegramMiniApp } from "./TelegramMiniApp";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -80,6 +79,7 @@ const LiveSuppliesWorkspace = lazy(() =>
     default: module.LiveSuppliesWorkspace,
   })),
 );
+const AICenter = lazy(() => import("./AICenter").then((module) => ({ default: module.AICenter })));
 import { PrinterProfilePage, type PrinterRecord } from "./EmployeeProfiles";
 import {
   Badge,
@@ -185,7 +185,7 @@ function AppShell() {
     period,
     page === "assembly" || page === "overview" || page === "sources",
   );
-  const data = mode === "demo" ? demo : printingDataset(real, live.value);
+  const data = useMemo(() => mode === "demo" ? demo : printingDataset(real, live.value), [mode, demo, real, live.value]);
   const [supplyFilter, setSupplyFilter] = useState("all");
   const [sources, setSources] = useState<Source[]>(() =>
     readStorage("ritm-sources-v1", sourceSeed),
@@ -409,7 +409,7 @@ function AppShell() {
             supply: record.source,
           }))
     : [];
-  const supplyPrintingRows = (live.value?.sheets || []).map((sheet) => {
+  const supplyPrintingRows = useMemo(() => (live.value?.sheets || []).map((sheet) => {
     const orders = live.value!.supplies.filter(
       (o) =>
         o.sheetId === sheet.sheetId &&
@@ -437,7 +437,7 @@ function AppShell() {
         orders.map((o) => (typeof o.packed === "number" ? o.packed : null)),
       ),
     };
-  });
+  }), [live.value]);
   const totals = data.supplies.reduce(
     (s, v) => {
       const t = lineTotals(v);
@@ -1086,7 +1086,7 @@ function AppShell() {
             </div>
           </div>
         )}
-        {page === "intelligence" && <AICenter />}
+        {page === "intelligence" && <Suspense fallback={<section className="panel"><Empty title="Открываю AI Center">Загружаю раздел.</Empty></section>}><AICenter /></Suspense>}
         {page === "overview" && mode === "imported" && (
           <OverviewDashboard live={live.value} liveError={live.error} assembly={assemblyLive.value} assemblyError={assemblyLive.error} date={date} period={period} go={go} />
         )}
