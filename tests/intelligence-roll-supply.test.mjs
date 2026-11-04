@@ -445,6 +445,26 @@ test("new roll supply writes and verifies the catalog extension in column F", as
   assert.equal(created.data[0].rowData[4].values[29].userEnteredValue.stringValue, plan.uids[0].uid);
 });
 
+test("new roll supply records layout availability per article and verifies formulas", async () => {
+  const google = googleHarness();
+  const writer = new ProductionSupplyWriter({ department: "roll", credentialWriter: { token: async () => "test-token", metrics: { readRequests: 0, writeRequests: 0 } }, fetcher: google.fetcher, layoutLookup: async () => new Set(["TEST-001"]) });
+  const input = payload("10101010-1010-4010-8010-101010101010", { lines: [{article:"TEST-001",quantity:12},{article:"TEST-002",quantity:7}] });
+  const plan = await writer.prepareCreate(input);
+  await writer.execute(plan);
+  await writer.verify(plan);
+  const cells = google.sheets.get(plan.sheetId).data[0].rowData;
+  assert.match(cells[4].values[2].userEnteredValue.formulaValue, /"Есть"/);
+  assert.match(cells[5].values[2].userEnteredValue.formulaValue, /"Не в таблице макетов"/);
+  assert.match(cells[4].values[2].userEnteredValue.formulaValue, /Проверить макет/);
+});
+
+test("unavailable layout catalog prevents production writes", async () => {
+  const google = googleHarness();
+  const writer = new ProductionSupplyWriter({ department: "roll", credentialWriter: { token: async () => "test-token", metrics: { readRequests: 0, writeRequests: 0 } }, fetcher: google.fetcher, layoutLookup: async () => { throw new Error('unavailable'); } });
+  await assert.rejects(writer.prepareCreate(payload("10101010-1010-4010-8010-101010101010")), /unavailable/);
+  assert.equal(google.requests.length, 0);
+});
+
 test("new supply clears template data, renames the heading and initializes print remainder", async () => {
   const h = makeService();
   try {

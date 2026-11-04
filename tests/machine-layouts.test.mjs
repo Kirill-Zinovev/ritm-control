@@ -1,0 +1,5 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {readMachineLayoutArticles} from '../worker/cloud/machineLayouts.js';
+const id='1ftCWbg_tIu-TA870NVOWo2sZdcpMKOuMmsJ_Z3T3Z_E';
+const reader=(rows)=>({metadata:async()=>({sheets:[{properties:{title:'Все макеты',sheetId:0,gridProperties:{rowCount:4}}}]}),grid:async()=>({sheets:[{properties:{sheetId:0},data:[{startColumn:1,rowData:rows.map(value=>({values:[{effectiveValue:value}]}))}]}]})});
+test('reads exact canonical list and normalizes article case',async()=>{const set=await readMachineLayoutArticles(reader([{stringValue:'Артикул'},{stringValue:' ab01 '},{stringValue:'ZZ02'}]),id);assert.equal(set.has('AB01'),true);assert.equal(set.has('ZZ02'),true)});
+test('rejects errors, changed header and empty list',async()=>{for(const rows of [[{stringValue:'wrong'},{stringValue:'x'}],[{stringValue:'Артикул'},{errorValue:{type:'REF'}}],[{stringValue:'Артикул'}]]) await assert.rejects(readMachineLayoutArticles(reader(rows),id),/Не удалось проверить/)});

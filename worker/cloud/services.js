@@ -3,7 +3,8 @@ import { ProductionSupplyService, ProductionSupplyWriter, DEPARTMENTS } from "..
 import { AssemblySyncQueue } from "../../agent/assemblySync.js";
 import { AssemblyTransferService } from "../../agent/assemblyTransfer.js";
 import { CloudSheetsReader } from "./googleSheets.js";
-import { cloudConfig } from "./config.js";
+import { cloudConfig, sourceId } from "./config.js";
+import { readMachineLayoutArticles } from "./machineLayouts.js";
 import { CloudError } from "./access.js";
 import { cloudFetch } from "./fetch.js";
 import { deliverShipmentLockEvent, setShipmentLocks } from "./shipmentLocks.js";
@@ -39,7 +40,7 @@ export async function createServices(bindings, scope, { fetcher = fetch, refresh
     }
     return cloudFetch(fetcher,url.href,init);
   };
-  const writers = reader.configured ? Object.fromEntries(Object.entries(DEPARTMENTS).map(([department, target]) => [department, new ProductionSupplyWriter({ department, credentialWriter: writerCredentials, fetcher: guardedFetch, beforeWrite: () => guard(target.documentId), documentId: target.documentId, template: target.template })])) : null;
+  const writers = reader.configured ? Object.fromEntries(Object.entries(DEPARTMENTS).map(([department, target]) => [department, new ProductionSupplyWriter({ department, credentialWriter: writerCredentials, fetcher: guardedFetch, beforeWrite: () => guard(target.documentId), documentId: target.documentId, template: target.template, ...(department === 'roll' ? { layoutLookup: () => readMachineLayoutArticles(reader, sourceId(bindings, 'machineLayoutsId')) } : {}) })])) : null;
   const queue = new AssemblySyncQueue(scope, { secret: bindings.RITM_ASSEMBLY_SYNC_SECRET || "", fetchImpl: (...args) => cloudFetch(fetcher,...args), beforeDeliver: () => guard() });
   // No process-owned timers in Sites. Requests and the protected maintenance
   // endpoint drain the same durable outbox; the scheduler survives closed tabs.

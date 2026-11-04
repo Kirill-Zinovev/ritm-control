@@ -680,13 +680,14 @@ function formulaColumnRequests(sheetId, repairs) {
 }
 
 export class RollSupplySheetsWriter {
-  constructor({ credentialWriter, fetcher = fetch, timeoutMs = 25000, beforeWrite = null, documentId = ROLL_PRINTING_SHEET_ID, template = ROLL_PRINTING_SHEET, box = false } = {}) {
+  constructor({ credentialWriter, fetcher = fetch, timeoutMs = 25000, beforeWrite = null, documentId = ROLL_PRINTING_SHEET_ID, template = ROLL_PRINTING_SHEET, box = false, layoutLookup = null } = {}) {
     if (!credentialWriter || typeof credentialWriter.token !== "function")
       throw new TypeError("A configured production writer is required");
     this.credentials = credentialWriter;
     this.documentId = documentId;
     this.template = template;
     this.box = box;
+    this.layoutLookup = layoutLookup;
     this.layout = box ? BOX_LAYOUT : ROLL_LAYOUT;
     this.formulaColumns = box ? [6, 10] : ROLL_FORMULA_COLUMNS;
     this.fetcher = (...args) => fetcher(...args);
@@ -781,6 +782,18 @@ export class RollSupplySheetsWriter {
     this.formulaColumns = extended ? [7, 11] : [6, 10];
   }
 
+  async layoutFormulaRepairs(lines) {
+    const articles = await this.layoutLookup();
+    if (!(articles instanceof Set) || !articles.size) fail('machine_layouts_unavailable', 'Не удалось проверить таблицу макетов. Изменений не выполнено.', 503);
+    return lines.map((line, index) => {
+      const row = DATA_START_ROW + index;
+      const sku = String(line.article || '').trim().toLocaleUpperCase('ru-RU');
+      const label = articles.has(sku) ? 'Есть' : 'Не в таблице макетов';
+      const quoted = sku.replaceAll('"', '""');
+      return { row, column: 3, cell: `C${row}`, sourceCell: `E${row}`, formula: `=IF(E${row}="";"";IF(UPPER(TRIM(E${row}))="${quoted}";"${label}";"Проверить макет"))` };
+    });
+  }
+
   configureBoxHeaders(grid) {
     if (!this.box) return;
     const layout = { ...this.layout };
@@ -856,6 +869,7 @@ export class RollSupplySheetsWriter {
   }
 
   async prepareCreate({ operationId, name, lines }) {
+    const layoutRepairs = !this.box && this.layoutLookup ? await this.layoutFormulaRepairs(lines) : [];
     await this.verifyEditAccess();
     const sheets = await this.metadata();
     const template = sheets.find(
@@ -904,6 +918,7 @@ export class RollSupplySheetsWriter {
       this.formulaColumns,
     );
     formulaRepairs.push(...catalogRepairs);
+    formulaRepairs.push(...layoutRepairs);
     const sourceRows = inputRows(sourceGrid, this.layout);
     const clearThrough = this.box
       ? DATA_START_ROW + lines.length - 1
@@ -975,6 +990,7 @@ export class RollSupplySheetsWriter {
   }
 
   async prepareAppend({ operationId, name, sheetId, lines, registeredSheets }) {
+    const layoutRepairs = !this.box && this.layoutLookup ? await this.layoutFormulaRepairs(lines) : [];
     await this.verifyEditAccess();
     const registered = [
       { gid: this.template.gid, name: this.template.name },
@@ -1105,7 +1121,7 @@ export class RollSupplySheetsWriter {
       existingRows: plannedRows,
       copyFormulaColumns: Array.from({ length: this.layout.maxColumn }, (_, i) => i + 1).filter(column => gridCell(grid, DATA_START_ROW, column).userEnteredValue?.formulaValue),
       formulaSourceRow: DATA_START_ROW + lines.length,
-      formulaRepairs: [...catalogRepairs, ...(this.box
+      formulaRepairs: [...catalogRepairs, ...layoutRepairs, ...(this.box
         ? boxDimensionFormulaRepairs(startRow, lines.length, this.layout, [this.layout.takeWorkColumn, this.layout.printReady, this.layout.cutReady].filter(Boolean))
         : rollDimensionFormulaRepairs(startRow, lines.length))],
       verifyThrough: Math.max(scanRows, DATA_START_ROW + MAX_ORDERS - 1) + lines.length,
@@ -1593,6 +1609,10 @@ export class RollSupplySheetsWriter {
         if (this.formulaColumns.some((column) => !gridCell(grid, row, column).userEnteredValue?.formulaValue))
           fail("roll_supply_formula_readback_failed", `В новой строке ${row} формулы не подтверждены. Повторная запись заблокирована.`, 503);
       }
+    }
+    if (!this.box) for (const repair of (plan.formulaRepairs || []).filter(item => item.column === 3)) {
+      if (gridCell(grid, repair.row, 3).userEnteredValue?.formulaValue !== repair.formula)
+        fail("roll_layout_readback_failed", `Не подтверждена отметка макета в C${repair.row}. Повторная запись заблокирована.`, 503);
     }
     const calculations = [];
     for (let index = 0; index < plan.lines.length; index++) {
