@@ -9249,6 +9249,21 @@ td small {
 .printing-cut-detail {
   margin-top: 18px;
 }
+.printing-department--box .printing-department-title p,
+.printing-department--box .printing-kpis span,
+.printing-department--box .box-stat-explainer,
+.printing-department--box .box-stat-footnote { font-size: 15px; line-height: 1.5; }
+.printing-department--box .box-view-tabs button,
+.printing-department--box .printing-employee-toggle,
+.printing-department--box .box-summary-table th,
+.printing-department--box .box-summary-table td,
+.printing-department--box .box-daily-table th,
+.printing-department--box .box-daily-table td { font-size: 15px; }
+.printing-department--box .box-operation-summary > strong { font-size: 20px; }
+.printing-department--box .box-operation-summary > span,
+.printing-department--box .box-operation-summary > small,
+.printing-department--box .box-no-work { font-size: 15px; }
+.printing-department--box .printing-kpis strong { font-size: 25px; }
 .box-view-tabs {
   display: inline-flex;
   gap: 3px;
