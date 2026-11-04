@@ -801,7 +801,7 @@ export function MachineWorkload({
                       {workloadStateLabel(m)}
                     </span>
                   </header>
-                  <MachineBlock machine={m} showSupply expandedInitially />
+                  <MachineBlock machine={m} showSupply />
                 </article>
               ))}
         </div>
