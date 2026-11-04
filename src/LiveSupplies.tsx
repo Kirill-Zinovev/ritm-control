@@ -1,4 +1,5 @@
 import { AssemblyOnlyItems } from "./AssemblyOnlyItems";
+import { startWriterStatusPolling } from "./writerStatusPolling";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowSquareOut,
@@ -749,6 +750,9 @@ export function LiveSuppliesWorkspace({
   const hasFreshSnapshot =
     Number.isFinite(snapshotAtMs) &&
     Date.now() - snapshotAtMs < 5 * 60 * 1000;
+  const pendingProduction = writer?.production?.operations?.find(
+    item => !["verified", "cancelled"].includes(item.status),
+  );
   const canWrite =
     // Allow writes against a recently verified snapshot while its background
     // refresh is running. Supply creation still performs its own fresh catalog,
@@ -761,14 +765,21 @@ export function LiveSuppliesWorkspace({
     !error &&
     (!loading || hasFreshSnapshot) &&
     !busy &&
-    !writer.busy;
+    !writer.busy &&
+    !pendingProduction;
   const writeBlockedReason = !writer?.available
     ? writer?.reason || "Проверьте доступ к управлению поставками"
     : !live || live.stale || !hasFreshSnapshot
       ? "Сначала дождитесь свежей загрузки источника"
       : live.quality?.status === "partial"
         ? "В обновлённых данных есть строки с ошибками; проверьте журнал"
-        : error || (loading && !hasFreshSnapshot) || busy || writer.busy
+        : busy
+          ? "Проверяем и сохраняем поставку"
+          : writer.busy
+          ? "Другая операция завершается. Проверяем готовность записи…"
+          : pendingProduction
+          ? "Предыдущая операция требует проверки. Откройте её состояние ниже."
+          : error || (loading && !hasFreshSnapshot)
           ? "Дождитесь завершения обновления"
           : undefined;
   const selectedDepartment =
@@ -842,7 +853,7 @@ export function LiveSuppliesWorkspace({
     }
   };
 
-  const reloadWriter = async () => {
+  const reloadWriter = useCallback(async () => {
     try {
       const response = await fetch("/api/roll-supplies/status", {
         cache: "no-store",
@@ -865,13 +876,18 @@ export function LiveSuppliesWorkspace({
       };
       setWriter(unavailable);
     }
-  };
+  }, [onRefresh]);
 
   useEffect(() => {
     void reloadWriter();
     const timer = window.setInterval(() => void reloadWriter(), 60_000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [reloadWriter]);
+
+  useEffect(() => {
+    if (busy || !(writer?.busy || ["writing", "checking"].includes(pendingProduction?.status || ""))) return;
+    return startWriterStatusPolling(reloadWriter);
+  }, [writer?.busy, pendingProduction?.status, busy, reloadWriter]);
 
   const openDialog = (mode: "create" | "append") => {
     setDialog(mode);
@@ -1293,6 +1309,7 @@ export function LiveSuppliesWorkspace({
           </Button>
         </div>
       </div>
+      {!canWrite && writeBlockedReason && <p className="supply-write-wait" role="status">{writeBlockedReason}</p>}
 
       {!!(recoveryError || productionNotices.length) && (
         <section className="panel" aria-label="Загрузка поставок по отделам">
