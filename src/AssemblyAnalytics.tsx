@@ -32,7 +32,6 @@ type SortKey =
   | "coefficient"
   | "date";
 type DetailTab = "summary" | "history" | "chart" | "norms";
-type ReportView = "employees" | "days";
 type OperationFilter = "all" | "machine" | "manual" | "packing";
 
 type Props = {
@@ -737,8 +736,6 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
   const [sortKey, setSortKey] = useState<SortKey>("coefficient");
   const [sortDescending, setSortDescending] = useState(true);
   const [selectedEmployee, setSelectedEmployee] = useState("");
-  const [reportView, setReportView] = useState<ReportView>("employees");
-  const [expandedDailyRow, setExpandedDailyRow] = useState("");
   const [tab, setTab] = useState<DetailTab>("summary");
   const [operationFilter, setOperationFilter] =
     useState<OperationFilter>("all");
@@ -771,21 +768,6 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
       ),
     [history, range.start, range.end],
   );
-  const dailyReportRows = useMemo(() => {
-    const query = normalize(search);
-    return [
-      ...rowsForSource(periodRows, "assembly"),
-      ...rowsForSource(periodRows, "fbo"),
-    ]
-      .filter((row) => !query || normalize(row.employee).includes(query))
-      .filter((row) => hasType(row, productType))
-      .sort(
-        (a, b) =>
-          b.date.localeCompare(a.date) ||
-          a.employee.localeCompare(b.employee, "ru-RU") ||
-          (a.sourceKind || "").localeCompare(b.sourceKind || ""),
-      );
-  }, [periodRows, search, productType]);
   const team = useMemo(() => {
     const identities = new Set(
       periodRows.filter((row) => hasType(row, productType)).map(identityOf),
@@ -1270,151 +1252,7 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
         />
       </div>
 
-      <div
-        className="assembly-report-switch"
-        role="tablist"
-        aria-label="Вид отчёта по сборщикам"
-      >
-        <button
-          type="button"
-          role="tab"
-          aria-selected={reportView === "employees"}
-          className={reportView === "employees" ? "is-active" : ""}
-          onClick={() => setReportView("employees")}
-        >
-          По сотрудникам
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={reportView === "days"}
-          className={reportView === "days" ? "is-active" : ""}
-          onClick={() => setReportView("days")}
-        >
-          По дням
-        </button>
-      </div>
-
-      {reportView === "days" ? (
-        <section
-          className="assembly-daily-report"
-          aria-label="История работы по дням"
-        >
-          <div className="assembly-panel-heading">
-            <div>
-              <span className="assembly-heading-icon">
-                <CalendarDays size={18} />
-              </span>
-              <div>
-                <h2>Работа по дням</h2>
-                <p>
-                  {countWithNoun(dailyReportRows.length, [
-                    "дневная запись",
-                    "дневные записи",
-                    "дневных записей",
-                  ])}{" "}
-                  · отменённые действия исключены
-                </p>
-              </div>
-            </div>
-          </div>
-          {dailyReportRows.length ? (
-            <div className="assembly-daily-table-scroll">
-              <table className="assembly-daily-table">
-                <thead>
-                  <tr>
-                    <th>Дата</th>
-                    <th>Сотрудник</th>
-                    <th>Источник</th>
-                    <th>Станочная резка</th>
-                    <th>Ручная резка</th>
-                    <th>Упаковка</th>
-                    <th>Коэффициент</th>
-                    <th>Детали</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {dailyReportRows.map((row) => {
-                    const key = `${row.date}|${identityOf(row)}|${row.sourceKind}`;
-                    const expanded = expandedDailyRow === key;
-                    const hasEvents =
-                      row.sourceKind === "assembly" &&
-                      (row.events?.length || 0) > 0;
-                    return (
-                      <Fragment key={key}>
-                        <tr key={key}>
-                          <td>{dateTitle(row.date)}</td>
-                          <th scope="row">{row.employee}</th>
-                          <td>
-                            <span
-                              className={`assembly-source-pill is-${row.sourceKind}`}
-                            >
-                              {row.sourceKind === "fbo"
-                                ? "FBO · итог дня"
-                                : "Assembly · журнал"}
-                            </span>
-                          </td>
-                          <td>{fmt(row.machineCut)}</td>
-                          <td>{fmt(row.manualCut)}</td>
-                          <td>{fmt(row.packed)}</td>
-                          <td>{fmt(row.coefficient, true)}</td>
-                          <td>
-                            {hasEvents ? (
-                              <button
-                                type="button"
-                                className="assembly-daily-expand"
-                                aria-expanded={expanded}
-                                onClick={() =>
-                                  setExpandedDailyRow(expanded ? "" : key)
-                                }
-                              >
-                                {expanded ? (
-                                  <ChevronDown size={15} />
-                                ) : (
-                                  <ChevronRight size={15} />
-                                )}{" "}
-                                {fmt(row.events?.length || 0)} операций
-                              </button>
-                            ) : (
-                              <span className="assembly-muted">
-                                Без детализации
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                        {expanded && hasEvents && (
-                          <tr
-                            key={`${key}|events`}
-                            className="assembly-daily-events"
-                          >
-                            <td colSpan={8}>
-                              <AssemblyEventRows
-                                events={row.events || []}
-                                limit={row.events?.length || 1}
-                              />
-                            </td>
-                          </tr>
-                        )}
-                      </Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="assembly-panel-state">
-              <strong>Нет записей за выбранный период</strong>
-              <span>Проверьте даты, сотрудника или вид товара.</span>
-            </div>
-          )}
-          <p className="assembly-daily-foot">
-            Assembly показывает отдельные действия с временем и артикулом. FBO
-            передаёт только дневные итоги, поэтому подробностей по операциям там
-            нет.
-          </p>
-        </section>
-      ) : (
-        <div className="assembly-master-detail">
+      <div className="assembly-master-detail">
           <section
             className="assembly-team-panel"
             aria-label="Таблица сотрудников"
@@ -2070,7 +1908,6 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
             </aside>
           )}
         </div>
-      )}
     </section>
   );
 }
