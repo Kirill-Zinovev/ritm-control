@@ -3209,16 +3209,19 @@ function ritmOrderColumns_(sheet) {
   if (articleColumns.length !== 1 || quantityColumns.length !== 1) {
     throw new Error('В строке 4 должны быть единственные столбцы «Артикул» и «Кол-во».');
   }
-  return { width, articleIndex: articleColumns[0], quantityIndex: quantityColumns[0] };
+  // AC used to hold legacy IDs; newer box sheets use it for cut quantities.
+  // Only an empty or explicitly ID-labelled header can be a legacy UID column.
+  const acHeader = headers[24] || '';
+  return { width, articleIndex: articleColumns[0], quantityIndex: quantityColumns[0], legacyUidInAc: !acHeader || /^(uid|id|идентификатор|идентификатор позиции)$/.test(acHeader) };
 }
 
-function ritmSourceUid_(row) {
+function ritmSourceUid_(row, legacyUidInAc) {
   const generatedPattern = /^ritm-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-\d+$/i;
   const generated = row.map(value => String(value || '').trim()).filter(value => generatedPattern.test(value));
   if (generated.length > 1) throw new Error('В строке найдено несколько UID позиции.');
   if (generated.length === 1) return generated[0];
   // Older source tabs stored the UID in AC without the newer "ritm-...-row" prefix.
-  return String(row[24] || '').trim();
+  return legacyUidInAc ? String(row[24] || '').trim() : '';
 }
 
 function readRitmOrders_(sheet, columns) {
@@ -3231,7 +3234,7 @@ function readRitmOrders_(sheet, columns) {
   return values.flatMap((row, index) => {
     const sku = String(row[columns.articleIndex] || '').trim();
     if (!sku) return [];
-    const uid = ritmSourceUid_(row);
+    const uid = ritmSourceUid_(row, columns.legacyUidInAc);
     if (uid && seen.has(uid)) throw new Error('Повторяется UID позиции; синхронизация этой поставки остановлена.');
     if (uid) seen.add(uid);
     const quantity = toNumberOrNull_(row[columns.quantityIndex]);

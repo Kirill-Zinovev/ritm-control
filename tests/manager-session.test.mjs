@@ -27,14 +27,18 @@ test("manager session is attached only to allowed same-origin RITM APIs", async 
     await window.fetch("/api/production-controls?shipmentIds=shipment-1");
     await window.fetch("/api/shipment-locks?shipmentIds=shipment-1");
     await window.fetch("/api/shipment-locks", { method: "POST", body: "{}" });
+    await window.fetch("/api/assembly-only-items?shipmentId=shipment-1");
+    await window.fetch("/api/assembly-only-catalog?article=ABC");
+    await window.fetch("/api/assembly-only-items", { method: "POST", body: "{}" });
+    await window.fetch("https://other.test/api/assembly-only-items");
     await window.fetch("/api/cloud/maintenance", { method: "POST" });
     await window.fetch("https://other.test/api/roll-supplies");
 
     assert.equal(new Headers(calls[0].init.headers).get("authorization"), `Bearer ${token}`);
-    for (const call of calls.slice(1, 4))
+    for (const call of calls.slice(1, 7))
       assert.equal(new Headers(call.init?.headers).get("authorization"), `Bearer ${token}`);
-    assert.equal(new Headers(calls[4].init?.headers).has("authorization"), false);
-    assert.equal(new Headers(calls[5].init?.headers).has("authorization"), false);
+    for (const call of calls.slice(7))
+      assert.equal(new Headers(call.init?.headers).has("authorization"), false);
     clearManagerSession();
     assert.equal(values.size, 0);
   } finally {

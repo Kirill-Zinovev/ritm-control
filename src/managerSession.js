@@ -35,6 +35,8 @@ export function installManagerSessionFetch() {
       || path === "/api/warehouse/dispatch"
       || path === "/api/cloud/registry"
       || path === "/api/production-controls"
+      || path === "/api/assembly-only-items"
+      || path === "/api/assembly-only-catalog"
       || path === "/api/shipment-locks"
       || path === "/api/roll-supplies"
       || path === "/api/assembly-transfers"
