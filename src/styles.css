@@ -9271,7 +9271,7 @@ td small {
   cursor: pointer;
 }
 .box-view-tabs button.is-active {
-  background: var(--blue);
+  background: #245be4;
   color: #fff;
   box-shadow: 0 2px 6px #1769e833;
 }
