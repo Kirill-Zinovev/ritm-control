@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { sourceCoefficientSum, groupWorkEvents } from "./assemblyCoefficient";
 import {
   Activity,
   BookOpen,
   CalendarDays,
   Clock3,
+  ChevronDown,
+  ChevronRight,
   Download,
   Hand,
   Package,
@@ -30,6 +32,7 @@ type SortKey =
   | "coefficient"
   | "date";
 type DetailTab = "summary" | "history" | "chart" | "norms";
+type ReportView = "employees" | "days";
 type OperationFilter = "all" | "machine" | "manual" | "packing";
 
 type Props = {
@@ -734,6 +737,8 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
   const [sortKey, setSortKey] = useState<SortKey>("coefficient");
   const [sortDescending, setSortDescending] = useState(true);
   const [selectedEmployee, setSelectedEmployee] = useState("");
+  const [reportView, setReportView] = useState<ReportView>("employees");
+  const [expandedDailyRow, setExpandedDailyRow] = useState("");
   const [tab, setTab] = useState<DetailTab>("summary");
   const [operationFilter, setOperationFilter] =
     useState<OperationFilter>("all");
@@ -766,6 +771,21 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
       ),
     [history, range.start, range.end],
   );
+  const dailyReportRows = useMemo(() => {
+    const query = normalize(search);
+    return [
+      ...rowsForSource(periodRows, "assembly"),
+      ...rowsForSource(periodRows, "fbo"),
+    ]
+      .filter((row) => !query || normalize(row.employee).includes(query))
+      .filter((row) => hasType(row, productType))
+      .sort(
+        (a, b) =>
+          b.date.localeCompare(a.date) ||
+          a.employee.localeCompare(b.employee, "ru-RU") ||
+          (a.sourceKind || "").localeCompare(b.sourceKind || ""),
+      );
+  }, [periodRows, search, productType]);
   const team = useMemo(() => {
     const identities = new Set(
       periodRows.filter((row) => hasType(row, productType)).map(identityOf),
@@ -1250,652 +1270,807 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
         />
       </div>
 
-      <div className="assembly-master-detail">
+      <div
+        className="assembly-report-switch"
+        role="tablist"
+        aria-label="Вид отчёта по сборщикам"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={reportView === "employees"}
+          className={reportView === "employees" ? "is-active" : ""}
+          onClick={() => setReportView("employees")}
+        >
+          По сотрудникам
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={reportView === "days"}
+          className={reportView === "days" ? "is-active" : ""}
+          onClick={() => setReportView("days")}
+        >
+          По дням
+        </button>
+      </div>
+
+      {reportView === "days" ? (
         <section
-          className="assembly-team-panel"
-          aria-label="Таблица сотрудников"
+          className="assembly-daily-report"
+          aria-label="История работы по дням"
         >
           <div className="assembly-panel-heading">
             <div>
               <span className="assembly-heading-icon">
-                <Users size={18} />
+                <CalendarDays size={18} />
               </span>
               <div>
-                <h2>
-                  {needsReconciliation ? "Профили источников" : "Сотрудники"}
-                </h2>
+                <h2>Работа по дням</h2>
                 <p>
-                  {value
-                    ? `${countWithNoun(
-                        team.length,
-                        needsReconciliation
-                          ? [
-                              "профиль источника",
-                              "профиля источников",
-                              "профилей источников",
-                            ]
-                          : ["сотрудник", "сотрудника", "сотрудников"],
-                      )} · ${countWithNoun(activeDays, [
-                        "рабочий день",
-                        "рабочих дня",
-                        "рабочих дней",
-                      ])}`
-                    : "Ожидаем источник"}
+                  {countWithNoun(dailyReportRows.length, [
+                    "дневная запись",
+                    "дневные записи",
+                    "дневных записей",
+                  ])}{" "}
+                  · отменённые действия исключены
                 </p>
               </div>
             </div>
-            {loading && (
-              <span className="assembly-loading-indicator">
-                <span />
-                Обновление
-              </span>
-            )}
           </div>
-          {!value && loading ? (
-            <div className="assembly-panel-state">
-              <span className="assembly-spinner" />
-              Загружаем данные сотрудников…
-            </div>
-          ) : !value ? (
-            <div className="assembly-panel-state">
-              <strong>Данные временно недоступны</strong>
-              <span>Проверьте подключение к FBO и повторите загрузку.</span>
-              <button
-                className="assembly-button assembly-button-primary"
-                onClick={onRefresh}
-              >
-                Повторить загрузку
-              </button>
-            </div>
-          ) : !periodRows.length ? (
-            <div className="assembly-panel-state">
-              <strong>Нет записей за выбранный период</strong>
-              <span>
-                {workLogUnavailable || fboUnavailable
-                  ? "Один из источников сейчас не отвечает. Данные за этот период неизвестны, а не равны нулю."
-                  : "В выбранных источниках нет подтверждённых записей за указанные даты."}
-              </span>
-            </div>
-          ) : !visibleTeam.length ? (
-            <div className="assembly-panel-state">
-              <strong>Сотрудники не найдены</strong>
-              <span>Измените поисковый запрос.</span>
-            </div>
-          ) : (
-            <div className="assembly-team-table-scroll">
-              <table className="assembly-team-table">
+          {dailyReportRows.length ? (
+            <div className="assembly-daily-table-scroll">
+              <table className="assembly-daily-table">
                 <thead>
                   <tr>
-                    <th>
-                      <button onClick={() => setSort("employee")}>
-                        Сотрудник{" "}
-                        <span>
-                          {sortKey === "employee"
-                            ? sortDescending
-                              ? "↓"
-                              : "↑"
-                            : "↕"}
-                        </span>
-                      </button>
-                    </th>
-                    <th>
-                      <button onClick={() => setSort("machineCut")}>
-                        <i className="is-green">
-                          <Scissors size={15} />
-                        </i>
-                        Резка на станке{" "}
-                        <span>
-                          {sortKey === "machineCut"
-                            ? sortDescending
-                              ? "↓"
-                              : "↑"
-                            : "↕"}
-                        </span>
-                      </button>
-                    </th>
-                    <th>
-                      <button onClick={() => setSort("manualCut")}>
-                        <i className="is-violet">
-                          <Hand size={15} />
-                        </i>
-                        Ручная резка{" "}
-                        <span>
-                          {sortKey === "manualCut"
-                            ? sortDescending
-                              ? "↓"
-                              : "↑"
-                            : "↕"}
-                        </span>
-                      </button>
-                    </th>
-                    <th>
-                      <button onClick={() => setSort("packed")}>
-                        <i className="is-indigo">
-                          <Package size={15} />
-                        </i>
-                        Упаковка{" "}
-                        <span>
-                          {sortKey === "packed"
-                            ? sortDescending
-                              ? "↓"
-                              : "↑"
-                            : "↕"}
-                        </span>
-                      </button>
-                    </th>
-                    <th>
-                      <button onClick={() => setSort("coefficient")}>
-                        {needsReconciliation ? "Итоговый кэф" : "Общий кэф"}{" "}
-                        <span>
-                          {sortKey === "coefficient"
-                            ? sortDescending
-                              ? "↓"
-                              : "↑"
-                            : "↕"}
-                        </span>
-                      </button>
-                    </th>
-                    <th>
-                      <button onClick={() => setSort("date")}>
-                        Последняя работа{" "}
-                        <span>
-                          {sortKey === "date"
-                            ? sortDescending
-                              ? "↓"
-                              : "↑"
-                            : "↕"}
-                        </span>
-                      </button>
-                    </th>
+                    <th>Дата</th>
+                    <th>Сотрудник</th>
+                    <th>Источник</th>
+                    <th>Станочная резка</th>
+                    <th>Ручная резка</th>
+                    <th>Упаковка</th>
+                    <th>Коэффициент</th>
+                    <th>Детали</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleTeam.map((row) => {
-                    const initial = row.employee
-                      .trim()
-                      .split(/\s+/)
-                      .map((part) => part[0])
-                      .slice(0, 2)
-                      .join("")
-                      .toLocaleUpperCase("ru-RU");
-                    const displayMachine = row.machineCut;
-                    const displayManual = row.manualCut;
-                    const displayPacked = row.packed;
-                    const displayCoefficient = row.coefficient;
+                  {dailyReportRows.map((row) => {
+                    const key = `${row.date}|${identityOf(row)}|${row.sourceKind}`;
+                    const expanded = expandedDailyRow === key;
+                    const hasEvents =
+                      row.sourceKind === "assembly" &&
+                      (row.events?.length || 0) > 0;
                     return (
-                      <tr
-                        key={row.identityKey}
-                        className={
-                          row.identityKey === selectedEmployee
-                            ? "is-selected"
-                            : ""
-                        }
-                        onClick={() => setSelectedEmployee(row.identityKey)}
-                        aria-selected={row.identityKey === selectedEmployee}
-                      >
-                        <th scope="row">
-                          <button
-                            className="assembly-person-button"
-                            onClick={() => setSelectedEmployee(row.identityKey)}
+                      <Fragment key={key}>
+                        <tr key={key}>
+                          <td>{dateTitle(row.date)}</td>
+                          <th scope="row">{row.employee}</th>
+                          <td>
+                            <span
+                              className={`assembly-source-pill is-${row.sourceKind}`}
+                            >
+                              {row.sourceKind === "fbo"
+                                ? "FBO · итог дня"
+                                : "Assembly · журнал"}
+                            </span>
+                          </td>
+                          <td>{fmt(row.machineCut)}</td>
+                          <td>{fmt(row.manualCut)}</td>
+                          <td>{fmt(row.packed)}</td>
+                          <td>{fmt(row.coefficient, true)}</td>
+                          <td>
+                            {hasEvents ? (
+                              <button
+                                type="button"
+                                className="assembly-daily-expand"
+                                aria-expanded={expanded}
+                                onClick={() =>
+                                  setExpandedDailyRow(expanded ? "" : key)
+                                }
+                              >
+                                {expanded ? (
+                                  <ChevronDown size={15} />
+                                ) : (
+                                  <ChevronRight size={15} />
+                                )}{" "}
+                                {fmt(row.events?.length || 0)} операций
+                              </button>
+                            ) : (
+                              <span className="assembly-muted">
+                                Без детализации
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                        {expanded && hasEvents && (
+                          <tr
+                            key={`${key}|events`}
+                            className="assembly-daily-events"
                           >
-                            <span className="assembly-avatar">
-                              {initial || "?"}
-                            </span>
-                            <span>
-                              <strong>{row.employee}</strong>
-                              <small>
-                                <span
-                                  className={`assembly-source-pill is-${row.sourceKind}`}
-                                >
-                                  {sourceBadgeLabel(row.sourceKinds)}
-                                </span>
-                                {row.employeeId ? ` · ${row.employeeId}` : ""}
-                                {row.reconciliationStatus !== "clear" &&
-                                  row.sourceContributions.length > 1 && (
-                                    <span className="assembly-review-pill">
-                                      Сумма источников
-                                    </span>
-                                  )}
-                              </small>
-                            </span>
-                          </button>
-                        </th>
-                        <td>
-                          <div className="assembly-bar-cell">
-                            <b>{fmt(displayMachine)}</b>
-                            <span className="assembly-value-bar">
-                              <i
-                                className="is-green"
-                                style={{
-                                  width: `${displayMachine === null ? 0 : (Math.max(0, displayMachine) / maxMachine) * 100}%`,
-                                }}
+                            <td colSpan={8}>
+                              <AssemblyEventRows
+                                events={row.events || []}
+                                limit={row.events?.length || 1}
                               />
-                            </span>
-                          </div>
-                        </td>
-                        <td>
-                          <div className="assembly-bar-cell">
-                            <b>{fmt(displayManual)}</b>
-                            <span className="assembly-value-bar">
-                              <i
-                                className="is-violet"
-                                style={{
-                                  width: `${displayManual === null ? 0 : (Math.max(0, displayManual) / maxManual) * 100}%`,
-                                }}
-                              />
-                            </span>
-                          </div>
-                        </td>
-                        <td>
-                          <div className="assembly-bar-cell">
-                            <b>{fmt(displayPacked)}</b>
-                            <span className="assembly-value-bar">
-                              <i
-                                className="is-indigo"
-                                style={{
-                                  width: `${displayPacked === null ? 0 : (Math.max(0, displayPacked) / maxPacked) * 100}%`,
-                                }}
-                              />
-                            </span>
-                          </div>
-                        </td>
-                        <td>
-                          <strong className="assembly-coef-value">
-                            {fmt(displayCoefficient, true)}
-                          </strong>
-                        </td>
-                        <td>
-                          <span
-                            className="assembly-last-date"
-                            title={
-                              row.sourceKind === "assembly" ||
-                              row.sourceKind === "both"
-                                ? "Дата операции по createdAt в WorkLog, время показано в часовом поясе Москвы"
-                                : "FBO сохраняет дату дневного итога, точное время выполнения операции отсутствует"
-                            }
-                          >
-                            {row.date ? dayLabel(row.date) : "—"}
-                          </span>
-                        </td>
-                      </tr>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
                     );
                   })}
                 </tbody>
               </table>
             </div>
+          ) : (
+            <div className="assembly-panel-state">
+              <strong>Нет записей за выбранный период</strong>
+              <span>Проверьте даты, сотрудника или вид товара.</span>
+            </div>
           )}
-          <div className="assembly-table-foot">
-            <span>
-              Полосы показывают объём относительно максимума среди видимых
-              сотрудников.
-            </span>
-            <span>
-              FBO хранит дневные итоги, WorkLog — события. Фактические значения
-              видны по каждому источнику. Итоговый кэф складывает FBO и
-              Assembly; возможные повторы не вычитаются.
-            </span>
-          </div>
+          <p className="assembly-daily-foot">
+            Assembly показывает отдельные действия с временем и артикулом. FBO
+            передаёт только дневные итоги, поэтому подробностей по операциям там
+            нет.
+          </p>
         </section>
-
-        {selected ? (
-          <aside
-            className="assembly-detail-panel"
-            aria-label={`Детализация сотрудника ${selected.employee}`}
+      ) : (
+        <div className="assembly-master-detail">
+          <section
+            className="assembly-team-panel"
+            aria-label="Таблица сотрудников"
           >
-            <div className="assembly-detail-heading">
-              <div className="assembly-avatar is-large">
-                {selected.employee
-                  .trim()
-                  .split(/\s+/)
-                  .map((part) => part[0])
-                  .slice(0, 2)
-                  .join("")
-                  .toLocaleUpperCase("ru-RU")}
-              </div>
+            <div className="assembly-panel-heading">
               <div>
-                <h2>{selected.employee}</h2>
-                <p>
-                  {sourceBadgeLabel(selected.sourceKinds)}
-                  {selected.employeeId
-                    ? ` · employeeId ${selected.employeeId}`
-                    : " · FBO employeeId не передаётся"}
-                </p>
-              </div>
-              <span
-                className={`assembly-detail-active ${selectedHasMultipleSources && selected.reconciliationStatus !== "clear" ? "is-review" : ""}`}
-              >
-                <i />
-                {selectedHasMultipleSources &&
-                selected.reconciliationStatus !== "clear"
-                  ? "Сумма FBO + Assembly"
-                  : selected.sourceContributions.length === 1
-                    ? `Данные ${selected.sourceContributions[0].sourceKind === "fbo" ? "FBO" : "Assembly"}`
-                    : "Работал · сверено"}
-              </span>
-            </div>
-            <div
-              className="assembly-tabs assembly-detail-tabs"
-              role="tablist"
-              aria-label="Разделы сотрудника"
-            >
-              {tabs.map((item) => (
-                <button
-                  key={item.id}
-                  role="tab"
-                  aria-selected={tab === item.id}
-                  className={tab === item.id ? "is-active" : ""}
-                  onClick={() => {
-                    setTab(item.id);
-                    setHistoryLimit(25);
-                  }}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-            {tab === "summary" && (
-              <>
-                <p className="assembly-detail-source-note">
-                  {selectedHasMultipleSources
-                    ? selected.reconciliationStatus === "clear"
-                      ? "Общий итог подтверждён. Ниже можно отдельно посмотреть количества и коэффициенты FBO и Assembly."
-                      : "Выше — суммарная работа и кэф. Ниже — количества, операции и коэффициенты отдельно по FBO и Assembly."
-                    : `Показаны фактические данные ${selected.sourceContributions[0]?.sourceKind === "fbo" ? "FBO" : selected.sourceContributions[0]?.sourceKind === "assembly" ? "Assembly WorkLog" : "источника"}; они не смешиваются с другой системой.`}
-                </p>
-                <div className="assembly-employee-kpis">
-                  <div className="is-green">
-                    <Scissors size={17} />
-                    <small>Резка на станке</small>
-                    <strong
-                      className={selectedHasMultipleSources ? "is-split" : ""}
-                    >
-                      {selectedSourceMetric("machineCut")}
-                    </strong>
-                  </div>
-                  <div className="is-violet">
-                    <Hand size={17} />
-                    <small>Ручная резка</small>
-                    <strong
-                      className={selectedHasMultipleSources ? "is-split" : ""}
-                    >
-                      {selectedSourceMetric("manualCut")}
-                    </strong>
-                  </div>
-                  <div className="is-indigo">
-                    <Package size={17} />
-                    <small>Упаковка</small>
-                    <strong
-                      className={selectedHasMultipleSources ? "is-split" : ""}
-                    >
-                      {selectedSourceMetric("packed")}
-                    </strong>
-                  </div>
-                  <div className="is-blue">
-                    <Activity size={17} />
-                    <small>Итоговый кэф</small>
-                    <strong
-                      className={selectedHasMultipleSources ? "is-split" : ""}
-                    >
-                      {selectedSourceMetric("coefficient")}
-                    </strong>
-                    <em>
-                      {selectedHasMultipleSources &&
-                      selected.reconciliationStatus !== "clear"
-                        ? "Сумма FBO + Assembly"
-                        : selected.sourceContributions.length === 1
-                          ? "Коэффициент этого источника"
-                          : selected.coefficient === null
-                            ? productType
-                              ? "Не делится по виду"
-                              : "Есть операции без подтверждённой нормы или коэффициента"
-                            : `${selected.activeDays} акт. дн. · ${fmt(selected.activeDays ? selected.coefficient / selected.activeDays : 0, true)} в день`}
-                    </em>
-                  </div>
-                </div>
-                <div className="assembly-source-breakdown">
-                  <div className="assembly-source-breakdown-heading">
-                    <h3>По источникам</h3>
-                    <span>
-                      {countWithNoun(selected.sourceContributions.length, [
-                        "источник",
-                        "источника",
-                        "источников",
-                      ])}
-                    </span>
-                  </div>
-                  {selected.sourceContributions.map((source) => {
-                    const types = [...source.cutTypes, ...source.packTypes];
-                    const operations = [
-                      source.machineCut > 0 &&
-                        `Станок ${fmt(source.machineCut)}`,
-                      source.manualCut > 0 && `Ручная ${fmt(source.manualCut)}`,
-                      source.packed > 0 && `Упаковка ${fmt(source.packed)}`,
-                    ].filter(Boolean);
-                    return (
-                      <div
-                        className="assembly-source-breakdown-row"
-                        key={source.sourceKind}
-                      >
-                        <div>
-                          <strong>
-                            {source.sourceKind === "fbo" ? "FBO" : "Assembly"}
-                          </strong>
-                          <small>
-                            {source.sourceKind === "fbo"
-                              ? source.employeeLabel
-                              : `${source.employeeLabel} · ${source.employeeId}`}
-                          </small>
-                        </div>
-                        <div>
-                          <b>{operations.join(" · ") || "Нет операций"}</b>
-                          <small>
-                            {types.length
-                              ? types
-                                  .map(
-                                    (item) =>
-                                      `${item.name} · ${fmt(item.quantity)} шт.`,
-                                  )
-                                  .join("; ")
-                              : `${fmt(source.total)} операционных шт.`}
-                            {source.coefficient === null
-                              ? " · кэф неизвестен"
-                              : ` · кэф ${fmt(source.coefficient, true)}`}
-                          </small>
-                        </div>
-                        <span
-                          className={`assembly-review-pill ${selectedHasMultipleSources ? (source.reconciliationStatus === "clear" ? "is-clear" : "") : "is-source"}`}
-                        >
-                          {selectedHasMultipleSources
-                            ? source.reconciliationStatus === "clear"
-                              ? "Подтверждён"
-                              : "Дневной итог / журнал"
-                            : "Фактические данные"}
-                        </span>
-                      </div>
-                    );
-                  })}
-                  <p
-                    className={
-                      selectedHasMultipleSources &&
-                      selected.reconciliationStatus !== "clear"
-                        ? ""
-                        : "is-source"
-                    }
-                  >
-                    {selectedHasMultipleSources &&
-                    selected.reconciliationStatus !== "clear"
-                      ? "Количество и кэф складываются по источникам. FBO не передаёт артикулы и время операций, поэтому точную сверку повторов между системами выполнить нельзя; ничего не вычтено."
-                      : selected.sourceContributions.length === 1
-                        ? `Вклад ${selected.sourceContributions[0].sourceKind === "fbo" ? "FBO" : "Assembly"}: ${fmt(selected.sourceContributions[0].total)} шт. · кэф ${fmt(selected.sourceContributions[0].coefficient, true)}.`
-                        : `Подтверждённый итог: ${fmt(selected.total)} шт. · кэф ${fmt(selected.coefficient, true)}`}
+                <span className="assembly-heading-icon">
+                  <Users size={18} />
+                </span>
+                <div>
+                  <h2>
+                    {needsReconciliation ? "Профили источников" : "Сотрудники"}
+                  </h2>
+                  <p>
+                    {value
+                      ? `${countWithNoun(
+                          team.length,
+                          needsReconciliation
+                            ? [
+                                "профиль источника",
+                                "профиля источников",
+                                "профилей источников",
+                              ]
+                            : ["сотрудник", "сотрудника", "сотрудников"],
+                        )} · ${countWithNoun(activeDays, [
+                          "рабочий день",
+                          "рабочих дня",
+                          "рабочих дней",
+                        ])}`
+                      : "Ожидаем источник"}
                   </p>
                 </div>
-                {selectedFboHistory.length > 0 && (
-                  <>
-                    <div className="assembly-detail-section-heading">
-                      <div>
-                        <h3>FBO · дневные итоги</h3>
-                        <p>Количество и коэффициент из FBO</p>
-                      </div>
-                      <span>{fmt(selectedFboHistory.length)} записей</span>
-                    </div>
-                    <p className="assembly-detail-note">
-                      FBO хранит дневной итог без точного времени, поставки и
-                      артикула. Он показан отдельно от событий Assembly.
-                    </p>
-                    <DetailRows
-                      rows={selectedFboHistory.slice(0, 7)}
-                      productType={productType}
-                    />
-                  </>
-                )}
-                {selected.events.length > 0 && (
-                  <>
-                    <div className="assembly-detail-section-heading">
-                      <div>
-                        <h3>Assembly · операции WorkLog</h3>
-                        <p>Сохранённые события и время выполнения</p>
-                      </div>
-                      <span>{fmt(selected.events.length)} записей</span>
-                    </div>
-                    <p className="assembly-detail-note">
-                      Норма и коэффициент взяты из события WorkLog на момент
-                      записи; текущие нормы историю не пересчитывают.
-                    </p>
-                    <AssemblyEventRows events={selected.events} limit={7} />
-                  </>
-                )}
-                <div className="assembly-mini-breakdowns">
-                  <div>
-                    <h3>Объём порезки по видам</h3>
-                    {topCutTypes.length ? (
-                      topCutTypes.map((item) => (
-                        <div className="assembly-breakdown-row" key={item.name}>
-                          <span>{item.name}</span>
-                          <b>{fmt(item.quantity)} шт.</b>
-                        </div>
-                      ))
-                    ) : (
-                      <span className="assembly-muted">Нет данных</span>
-                    )}
-                  </div>
-                  <div>
-                    <h3>Упаковка по видам</h3>
-                    {topPackTypes.length ? (
-                      topPackTypes.map((item) => (
-                        <div className="assembly-breakdown-row" key={item.name}>
-                          <span>{item.name}</span>
-                          <b>{fmt(item.quantity)} шт.</b>
-                        </div>
-                      ))
-                    ) : (
-                      <span className="assembly-muted">Нет данных</span>
-                    )}
-                  </div>
-                  <div className="assembly-supply-breakdown">
-                    <h3>По поставкам</h3>
-                    <p>В FBO «История производства» поставка не указана.</p>
-                  </div>
-                </div>
-              </>
-            )}
-            {tab === "history" && (
-              <div className="assembly-history-view">
-                <div className="assembly-history-filters">
-                  <label>
-                    <span>Операция</span>
-                    <select
-                      value={productType ? "all" : operationFilter}
-                      disabled={!!productType}
-                      onChange={(event) => {
-                        setOperationFilter(
-                          event.target.value as OperationFilter,
-                        );
-                        setHistoryLimit(25);
-                      }}
-                    >
-                      <option value="all">Все операции</option>
-                      <option value="machine">Резка на станке</option>
-                      <option value="manual">Ручная резка</option>
-                      <option value="packing">Упаковка</option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>Поставка</span>
-                    <select value="none" disabled>
-                      <option value="none">Нет данных в FBO</option>
-                    </select>
-                  </label>
-                </div>
-                <p className="assembly-detail-note">
-                  FBO отображается дневными итогами, Assembly — отдельными
-                  событиями с временем. Фильтры применены к выбранному периоду.
-                </p>
-                {selectedFboHistory.length > 0 && (
-                  <>
-                    <div className="assembly-detail-section-heading">
-                      <div>
-                        <h3>FBO · дневные итоги</h3>
-                        <p>Объём и коэффициент по дням</p>
-                      </div>
-                    </div>
-                    <DetailRows
-                      rows={selectedFboHistory.slice(0, historyLimit)}
-                      productType={productType}
-                    />
-                  </>
-                )}
-                {selectedEvents.length > 0 && (
-                  <>
-                    <div className="assembly-detail-section-heading">
-                      <div>
-                        <h3>Assembly · операции WorkLog</h3>
-                        <p>Сохранённые действия с точным временем</p>
-                      </div>
-                    </div>
-                    <AssemblyEventRows
-                      events={selectedEvents}
-                      limit={historyLimit}
-                    />
-                  </>
-                )}
-                {Math.max(selectedFboHistory.length, selectedEvents.length) >
-                  historyLimit && (
-                  <button
-                    className="assembly-show-more"
-                    onClick={() => setHistoryLimit((limit) => limit + 25)}
-                  >
-                    Показать ещё 25 записей
-                  </button>
-                )}
               </div>
-            )}
-            {tab === "chart" && (
-              <DetailChart stats={selected} productType={productType} />
-            )}
-            {tab === "norms" && (
-              <div className="assembly-norms-view">
-                <div className="assembly-detail-section-heading">
-                  <div>
-                    <h3>Действующие нормы</h3>
-                    <p>Текущий лист FBO «Нормы»</p>
-                  </div>
-                  <BookOpen size={18} />
-                </div>
-                <NormsTable norms={value?.norms} productType={productType} />
-              </div>
-            )}
-          </aside>
-        ) : (
-          <aside className="assembly-detail-panel assembly-detail-empty">
-            <div className="assembly-detail-empty-icon">
-              <Users size={25} />
+              {loading && (
+                <span className="assembly-loading-indicator">
+                  <span />
+                  Обновление
+                </span>
+              )}
             </div>
-            <strong>Выберите сотрудника</strong>
-            <span>Здесь появятся сводка, журнал, график и нормы.</span>
-          </aside>
-        )}
-      </div>
+            {!value && loading ? (
+              <div className="assembly-panel-state">
+                <span className="assembly-spinner" />
+                Загружаем данные сотрудников…
+              </div>
+            ) : !value ? (
+              <div className="assembly-panel-state">
+                <strong>Данные временно недоступны</strong>
+                <span>Проверьте подключение к FBO и повторите загрузку.</span>
+                <button
+                  className="assembly-button assembly-button-primary"
+                  onClick={onRefresh}
+                >
+                  Повторить загрузку
+                </button>
+              </div>
+            ) : !periodRows.length ? (
+              <div className="assembly-panel-state">
+                <strong>Нет записей за выбранный период</strong>
+                <span>
+                  {workLogUnavailable || fboUnavailable
+                    ? "Один из источников сейчас не отвечает. Данные за этот период неизвестны, а не равны нулю."
+                    : "В выбранных источниках нет подтверждённых записей за указанные даты."}
+                </span>
+              </div>
+            ) : !visibleTeam.length ? (
+              <div className="assembly-panel-state">
+                <strong>Сотрудники не найдены</strong>
+                <span>Измените поисковый запрос.</span>
+              </div>
+            ) : (
+              <div className="assembly-team-table-scroll">
+                <table className="assembly-team-table">
+                  <thead>
+                    <tr>
+                      <th>
+                        <button onClick={() => setSort("employee")}>
+                          Сотрудник{" "}
+                          <span>
+                            {sortKey === "employee"
+                              ? sortDescending
+                                ? "↓"
+                                : "↑"
+                              : "↕"}
+                          </span>
+                        </button>
+                      </th>
+                      <th>
+                        <button onClick={() => setSort("machineCut")}>
+                          <i className="is-green">
+                            <Scissors size={15} />
+                          </i>
+                          Резка на станке{" "}
+                          <span>
+                            {sortKey === "machineCut"
+                              ? sortDescending
+                                ? "↓"
+                                : "↑"
+                              : "↕"}
+                          </span>
+                        </button>
+                      </th>
+                      <th>
+                        <button onClick={() => setSort("manualCut")}>
+                          <i className="is-violet">
+                            <Hand size={15} />
+                          </i>
+                          Ручная резка{" "}
+                          <span>
+                            {sortKey === "manualCut"
+                              ? sortDescending
+                                ? "↓"
+                                : "↑"
+                              : "↕"}
+                          </span>
+                        </button>
+                      </th>
+                      <th>
+                        <button onClick={() => setSort("packed")}>
+                          <i className="is-indigo">
+                            <Package size={15} />
+                          </i>
+                          Упаковка{" "}
+                          <span>
+                            {sortKey === "packed"
+                              ? sortDescending
+                                ? "↓"
+                                : "↑"
+                              : "↕"}
+                          </span>
+                        </button>
+                      </th>
+                      <th>
+                        <button onClick={() => setSort("coefficient")}>
+                          {needsReconciliation ? "Итоговый кэф" : "Общий кэф"}{" "}
+                          <span>
+                            {sortKey === "coefficient"
+                              ? sortDescending
+                                ? "↓"
+                                : "↑"
+                              : "↕"}
+                          </span>
+                        </button>
+                      </th>
+                      <th>
+                        <button onClick={() => setSort("date")}>
+                          Последняя работа{" "}
+                          <span>
+                            {sortKey === "date"
+                              ? sortDescending
+                                ? "↓"
+                                : "↑"
+                              : "↕"}
+                          </span>
+                        </button>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleTeam.map((row) => {
+                      const initial = row.employee
+                        .trim()
+                        .split(/\s+/)
+                        .map((part) => part[0])
+                        .slice(0, 2)
+                        .join("")
+                        .toLocaleUpperCase("ru-RU");
+                      const displayMachine = row.machineCut;
+                      const displayManual = row.manualCut;
+                      const displayPacked = row.packed;
+                      const displayCoefficient = row.coefficient;
+                      return (
+                        <tr
+                          key={row.identityKey}
+                          className={
+                            row.identityKey === selectedEmployee
+                              ? "is-selected"
+                              : ""
+                          }
+                          onClick={() => setSelectedEmployee(row.identityKey)}
+                          aria-selected={row.identityKey === selectedEmployee}
+                        >
+                          <th scope="row">
+                            <button
+                              className="assembly-person-button"
+                              onClick={() =>
+                                setSelectedEmployee(row.identityKey)
+                              }
+                            >
+                              <span className="assembly-avatar">
+                                {initial || "?"}
+                              </span>
+                              <span>
+                                <strong>{row.employee}</strong>
+                                <small>
+                                  <span
+                                    className={`assembly-source-pill is-${row.sourceKind}`}
+                                  >
+                                    {sourceBadgeLabel(row.sourceKinds)}
+                                  </span>
+                                  {row.employeeId ? ` · ${row.employeeId}` : ""}
+                                  {row.reconciliationStatus !== "clear" &&
+                                    row.sourceContributions.length > 1 && (
+                                      <span className="assembly-review-pill">
+                                        Сумма источников
+                                      </span>
+                                    )}
+                                </small>
+                              </span>
+                            </button>
+                          </th>
+                          <td>
+                            <div className="assembly-bar-cell">
+                              <b>{fmt(displayMachine)}</b>
+                              <span className="assembly-value-bar">
+                                <i
+                                  className="is-green"
+                                  style={{
+                                    width: `${displayMachine === null ? 0 : (Math.max(0, displayMachine) / maxMachine) * 100}%`,
+                                  }}
+                                />
+                              </span>
+                            </div>
+                          </td>
+                          <td>
+                            <div className="assembly-bar-cell">
+                              <b>{fmt(displayManual)}</b>
+                              <span className="assembly-value-bar">
+                                <i
+                                  className="is-violet"
+                                  style={{
+                                    width: `${displayManual === null ? 0 : (Math.max(0, displayManual) / maxManual) * 100}%`,
+                                  }}
+                                />
+                              </span>
+                            </div>
+                          </td>
+                          <td>
+                            <div className="assembly-bar-cell">
+                              <b>{fmt(displayPacked)}</b>
+                              <span className="assembly-value-bar">
+                                <i
+                                  className="is-indigo"
+                                  style={{
+                                    width: `${displayPacked === null ? 0 : (Math.max(0, displayPacked) / maxPacked) * 100}%`,
+                                  }}
+                                />
+                              </span>
+                            </div>
+                          </td>
+                          <td>
+                            <strong className="assembly-coef-value">
+                              {fmt(displayCoefficient, true)}
+                            </strong>
+                          </td>
+                          <td>
+                            <span
+                              className="assembly-last-date"
+                              title={
+                                row.sourceKind === "assembly" ||
+                                row.sourceKind === "both"
+                                  ? "Дата операции по createdAt в WorkLog, время показано в часовом поясе Москвы"
+                                  : "FBO сохраняет дату дневного итога, точное время выполнения операции отсутствует"
+                              }
+                            >
+                              {row.date ? dayLabel(row.date) : "—"}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className="assembly-table-foot">
+              <span>
+                Полосы показывают объём относительно максимума среди видимых
+                сотрудников.
+              </span>
+              <span>
+                FBO хранит дневные итоги, WorkLog — события. Фактические
+                значения видны по каждому источнику. Итоговый кэф складывает FBO
+                и Assembly; возможные повторы не вычитаются.
+              </span>
+            </div>
+          </section>
+
+          {selected ? (
+            <aside
+              className="assembly-detail-panel"
+              aria-label={`Детализация сотрудника ${selected.employee}`}
+            >
+              <div className="assembly-detail-heading">
+                <div className="assembly-avatar is-large">
+                  {selected.employee
+                    .trim()
+                    .split(/\s+/)
+                    .map((part) => part[0])
+                    .slice(0, 2)
+                    .join("")
+                    .toLocaleUpperCase("ru-RU")}
+                </div>
+                <div>
+                  <h2>{selected.employee}</h2>
+                  <p>
+                    {sourceBadgeLabel(selected.sourceKinds)}
+                    {selected.employeeId
+                      ? ` · employeeId ${selected.employeeId}`
+                      : " · FBO employeeId не передаётся"}
+                  </p>
+                </div>
+                <span
+                  className={`assembly-detail-active ${selectedHasMultipleSources && selected.reconciliationStatus !== "clear" ? "is-review" : ""}`}
+                >
+                  <i />
+                  {selectedHasMultipleSources &&
+                  selected.reconciliationStatus !== "clear"
+                    ? "Сумма FBO + Assembly"
+                    : selected.sourceContributions.length === 1
+                      ? `Данные ${selected.sourceContributions[0].sourceKind === "fbo" ? "FBO" : "Assembly"}`
+                      : "Работал · сверено"}
+                </span>
+              </div>
+              <div
+                className="assembly-tabs assembly-detail-tabs"
+                role="tablist"
+                aria-label="Разделы сотрудника"
+              >
+                {tabs.map((item) => (
+                  <button
+                    key={item.id}
+                    role="tab"
+                    aria-selected={tab === item.id}
+                    className={tab === item.id ? "is-active" : ""}
+                    onClick={() => {
+                      setTab(item.id);
+                      setHistoryLimit(25);
+                    }}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+              {tab === "summary" && (
+                <>
+                  <p className="assembly-detail-source-note">
+                    {selectedHasMultipleSources
+                      ? selected.reconciliationStatus === "clear"
+                        ? "Общий итог подтверждён. Ниже можно отдельно посмотреть количества и коэффициенты FBO и Assembly."
+                        : "Выше — суммарная работа и кэф. Ниже — количества, операции и коэффициенты отдельно по FBO и Assembly."
+                      : `Показаны фактические данные ${selected.sourceContributions[0]?.sourceKind === "fbo" ? "FBO" : selected.sourceContributions[0]?.sourceKind === "assembly" ? "Assembly WorkLog" : "источника"}; они не смешиваются с другой системой.`}
+                  </p>
+                  <div className="assembly-employee-kpis">
+                    <div className="is-green">
+                      <Scissors size={17} />
+                      <small>Резка на станке</small>
+                      <strong
+                        className={selectedHasMultipleSources ? "is-split" : ""}
+                      >
+                        {selectedSourceMetric("machineCut")}
+                      </strong>
+                    </div>
+                    <div className="is-violet">
+                      <Hand size={17} />
+                      <small>Ручная резка</small>
+                      <strong
+                        className={selectedHasMultipleSources ? "is-split" : ""}
+                      >
+                        {selectedSourceMetric("manualCut")}
+                      </strong>
+                    </div>
+                    <div className="is-indigo">
+                      <Package size={17} />
+                      <small>Упаковка</small>
+                      <strong
+                        className={selectedHasMultipleSources ? "is-split" : ""}
+                      >
+                        {selectedSourceMetric("packed")}
+                      </strong>
+                    </div>
+                    <div className="is-blue">
+                      <Activity size={17} />
+                      <small>Итоговый кэф</small>
+                      <strong
+                        className={selectedHasMultipleSources ? "is-split" : ""}
+                      >
+                        {selectedSourceMetric("coefficient")}
+                      </strong>
+                      <em>
+                        {selectedHasMultipleSources &&
+                        selected.reconciliationStatus !== "clear"
+                          ? "Сумма FBO + Assembly"
+                          : selected.sourceContributions.length === 1
+                            ? "Коэффициент этого источника"
+                            : selected.coefficient === null
+                              ? productType
+                                ? "Не делится по виду"
+                                : "Есть операции без подтверждённой нормы или коэффициента"
+                              : `${selected.activeDays} акт. дн. · ${fmt(selected.activeDays ? selected.coefficient / selected.activeDays : 0, true)} в день`}
+                      </em>
+                    </div>
+                  </div>
+                  <div className="assembly-source-breakdown">
+                    <div className="assembly-source-breakdown-heading">
+                      <h3>По источникам</h3>
+                      <span>
+                        {countWithNoun(selected.sourceContributions.length, [
+                          "источник",
+                          "источника",
+                          "источников",
+                        ])}
+                      </span>
+                    </div>
+                    {selected.sourceContributions.map((source) => {
+                      const types = [...source.cutTypes, ...source.packTypes];
+                      const operations = [
+                        source.machineCut > 0 &&
+                          `Станок ${fmt(source.machineCut)}`,
+                        source.manualCut > 0 &&
+                          `Ручная ${fmt(source.manualCut)}`,
+                        source.packed > 0 && `Упаковка ${fmt(source.packed)}`,
+                      ].filter(Boolean);
+                      return (
+                        <div
+                          className="assembly-source-breakdown-row"
+                          key={source.sourceKind}
+                        >
+                          <div>
+                            <strong>
+                              {source.sourceKind === "fbo" ? "FBO" : "Assembly"}
+                            </strong>
+                            <small>
+                              {source.sourceKind === "fbo"
+                                ? source.employeeLabel
+                                : `${source.employeeLabel} · ${source.employeeId}`}
+                            </small>
+                          </div>
+                          <div>
+                            <b>{operations.join(" · ") || "Нет операций"}</b>
+                            <small>
+                              {types.length
+                                ? types
+                                    .map(
+                                      (item) =>
+                                        `${item.name} · ${fmt(item.quantity)} шт.`,
+                                    )
+                                    .join("; ")
+                                : `${fmt(source.total)} операционных шт.`}
+                              {source.coefficient === null
+                                ? " · кэф неизвестен"
+                                : ` · кэф ${fmt(source.coefficient, true)}`}
+                            </small>
+                          </div>
+                          <span
+                            className={`assembly-review-pill ${selectedHasMultipleSources ? (source.reconciliationStatus === "clear" ? "is-clear" : "") : "is-source"}`}
+                          >
+                            {selectedHasMultipleSources
+                              ? source.reconciliationStatus === "clear"
+                                ? "Подтверждён"
+                                : "Дневной итог / журнал"
+                              : "Фактические данные"}
+                          </span>
+                        </div>
+                      );
+                    })}
+                    <p
+                      className={
+                        selectedHasMultipleSources &&
+                        selected.reconciliationStatus !== "clear"
+                          ? ""
+                          : "is-source"
+                      }
+                    >
+                      {selectedHasMultipleSources &&
+                      selected.reconciliationStatus !== "clear"
+                        ? "Количество и кэф складываются по источникам. FBO не передаёт артикулы и время операций, поэтому точную сверку повторов между системами выполнить нельзя; ничего не вычтено."
+                        : selected.sourceContributions.length === 1
+                          ? `Вклад ${selected.sourceContributions[0].sourceKind === "fbo" ? "FBO" : "Assembly"}: ${fmt(selected.sourceContributions[0].total)} шт. · кэф ${fmt(selected.sourceContributions[0].coefficient, true)}.`
+                          : `Подтверждённый итог: ${fmt(selected.total)} шт. · кэф ${fmt(selected.coefficient, true)}`}
+                    </p>
+                  </div>
+                  {selectedFboHistory.length > 0 && (
+                    <>
+                      <div className="assembly-detail-section-heading">
+                        <div>
+                          <h3>FBO · дневные итоги</h3>
+                          <p>Количество и коэффициент из FBO</p>
+                        </div>
+                        <span>{fmt(selectedFboHistory.length)} записей</span>
+                      </div>
+                      <p className="assembly-detail-note">
+                        FBO хранит дневной итог без точного времени, поставки и
+                        артикула. Он показан отдельно от событий Assembly.
+                      </p>
+                      <DetailRows
+                        rows={selectedFboHistory.slice(0, 7)}
+                        productType={productType}
+                      />
+                    </>
+                  )}
+                  {selected.events.length > 0 && (
+                    <>
+                      <div className="assembly-detail-section-heading">
+                        <div>
+                          <h3>Assembly · операции WorkLog</h3>
+                          <p>Сохранённые события и время выполнения</p>
+                        </div>
+                        <span>{fmt(selected.events.length)} записей</span>
+                      </div>
+                      <p className="assembly-detail-note">
+                        Норма и коэффициент взяты из события WorkLog на момент
+                        записи; текущие нормы историю не пересчитывают.
+                      </p>
+                      <AssemblyEventRows events={selected.events} limit={7} />
+                    </>
+                  )}
+                  <div className="assembly-mini-breakdowns">
+                    <div>
+                      <h3>Объём порезки по видам</h3>
+                      {topCutTypes.length ? (
+                        topCutTypes.map((item) => (
+                          <div
+                            className="assembly-breakdown-row"
+                            key={item.name}
+                          >
+                            <span>{item.name}</span>
+                            <b>{fmt(item.quantity)} шт.</b>
+                          </div>
+                        ))
+                      ) : (
+                        <span className="assembly-muted">Нет данных</span>
+                      )}
+                    </div>
+                    <div>
+                      <h3>Упаковка по видам</h3>
+                      {topPackTypes.length ? (
+                        topPackTypes.map((item) => (
+                          <div
+                            className="assembly-breakdown-row"
+                            key={item.name}
+                          >
+                            <span>{item.name}</span>
+                            <b>{fmt(item.quantity)} шт.</b>
+                          </div>
+                        ))
+                      ) : (
+                        <span className="assembly-muted">Нет данных</span>
+                      )}
+                    </div>
+                    <div className="assembly-supply-breakdown">
+                      <h3>По поставкам</h3>
+                      <p>В FBO «История производства» поставка не указана.</p>
+                    </div>
+                  </div>
+                </>
+              )}
+              {tab === "history" && (
+                <div className="assembly-history-view">
+                  <div className="assembly-history-filters">
+                    <label>
+                      <span>Операция</span>
+                      <select
+                        value={productType ? "all" : operationFilter}
+                        disabled={!!productType}
+                        onChange={(event) => {
+                          setOperationFilter(
+                            event.target.value as OperationFilter,
+                          );
+                          setHistoryLimit(25);
+                        }}
+                      >
+                        <option value="all">Все операции</option>
+                        <option value="machine">Резка на станке</option>
+                        <option value="manual">Ручная резка</option>
+                        <option value="packing">Упаковка</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>Поставка</span>
+                      <select value="none" disabled>
+                        <option value="none">Нет данных в FBO</option>
+                      </select>
+                    </label>
+                  </div>
+                  <p className="assembly-detail-note">
+                    FBO отображается дневными итогами, Assembly — отдельными
+                    событиями с временем. Фильтры применены к выбранному
+                    периоду.
+                  </p>
+                  {selectedFboHistory.length > 0 && (
+                    <>
+                      <div className="assembly-detail-section-heading">
+                        <div>
+                          <h3>FBO · дневные итоги</h3>
+                          <p>Объём и коэффициент по дням</p>
+                        </div>
+                      </div>
+                      <DetailRows
+                        rows={selectedFboHistory.slice(0, historyLimit)}
+                        productType={productType}
+                      />
+                    </>
+                  )}
+                  {selectedEvents.length > 0 && (
+                    <>
+                      <div className="assembly-detail-section-heading">
+                        <div>
+                          <h3>Assembly · операции WorkLog</h3>
+                          <p>Сохранённые действия с точным временем</p>
+                        </div>
+                      </div>
+                      <AssemblyEventRows
+                        events={selectedEvents}
+                        limit={historyLimit}
+                      />
+                    </>
+                  )}
+                  {Math.max(selectedFboHistory.length, selectedEvents.length) >
+                    historyLimit && (
+                    <button
+                      className="assembly-show-more"
+                      onClick={() => setHistoryLimit((limit) => limit + 25)}
+                    >
+                      Показать ещё 25 записей
+                    </button>
+                  )}
+                </div>
+              )}
+              {tab === "chart" && (
+                <DetailChart stats={selected} productType={productType} />
+              )}
+              {tab === "norms" && (
+                <div className="assembly-norms-view">
+                  <div className="assembly-detail-section-heading">
+                    <div>
+                      <h3>Действующие нормы</h3>
+                      <p>Текущий лист FBO «Нормы»</p>
+                    </div>
+                    <BookOpen size={18} />
+                  </div>
+                  <NormsTable norms={value?.norms} productType={productType} />
+                </div>
+              )}
+            </aside>
+          ) : (
+            <aside className="assembly-detail-panel assembly-detail-empty">
+              <div className="assembly-detail-empty-icon">
+                <Users size={25} />
+              </div>
+              <strong>Выберите сотрудника</strong>
+              <span>Здесь появятся сводка, журнал, график и нормы.</span>
+            </aside>
+          )}
+        </div>
+      )}
     </section>
   );
 }
