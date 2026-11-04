@@ -24,7 +24,7 @@ function parseBoxActionJournal(rows, action) {
 export function parseBoxJournal(rows) { return parseBoxActionJournal(rows, 'Печать'); }
 export function parseBoxCutJournal(rows) { return parseBoxActionJournal(rows, 'Порезка'); }
 
-function boxOperationEvents(rows, orders, action) {
+function boxOperationEvents(rows, orders, action, history = null) {
   const operationName=action==='Порезка'?'порезки':'печати';
   return parseBoxActionJournal(rows, action).map(e=>{
     if(!e.employee.trim()||!Number.isFinite(Date.parse(e.date))||!Number.isFinite(e.quantity)||e.quantity<=0||e.sheets!==null&&(!Number.isFinite(e.sheets)||e.sheets<=0)) throw new Error('Некорректная запись '+operationName+' бокса');
@@ -33,17 +33,16 @@ function boxOperationEvents(rows, orders, action) {
     const machine=machines.size===1?[...machines][0]:null;
     const xerox=machine!==null&&/^(xerox|ксерокс|x|х)$/.test(machine);
     const physicalSheets=xerox?e.sheets:null;
-    // K is the full planned artwork area; allocate it to the employee's
-    // recorded product quantity. Never infer an area from an ambiguous row.
-    const order=matches.length===1?matches[0]:null;
-    const area=order&&order.areaKnown===true&&Number.isFinite(order.plannedArea)&&order.plannedArea>=0&&Number.isFinite(order.quantity)&&order.quantity>0
-      ? order.plannedArea*e.quantity/order.quantity : null;
+    // Older records used a different area formula. Their separately preserved
+    // snapshot takes precedence; later records use the area saved at creation.
+    const area=history?.areas.has(e.id)?history.areas.get(e.id)
+      : history && Date.parse(e.date)<=history.cutoff ? null : e.area;
     if(area!==null&&(!Number.isFinite(area)||area<0))throw new Error('Некорректная площадь бокса');
     return {...e,area,sheets:physicalSheets,operation:action==='Порезка'?'cut':'print',sourceId:'box-printing',date:new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(e.date))};
   });
 }
-export function boxPrintingEvents(rows, orders = []) { return boxOperationEvents(rows, orders, 'Печать'); }
-export function boxCuttingEvents(rows, orders = []) { return boxOperationEvents(rows, orders, 'Порезка'); }
+export function boxPrintingEvents(rows, orders = [], history = null) { return boxOperationEvents(rows, orders, 'Печать', history); }
+export function boxCuttingEvents(rows, orders = [], history = null) { return boxOperationEvents(rows, orders, 'Порезка', history); }
 export function boxJournalExceptions(rows) {
   return activeBoxJournalRows(rows).filter(row=>['Брак','Излишек'].includes(String(row[10]).trim())).map(row=>{
     const timestamp=String(row[2]??'').trim(), quantity=Number(row[12]);
@@ -66,7 +65,24 @@ export async function loadBoxPrinting(reader, printing, {journalId,signal}={}) {
     const grid=await reader.grid(journalId,[`'Журнал'!A1:X${count}`],signal,5);
     const block=grid.sheets?.find(s=>s.properties?.sheetId===sheet.properties.sheetId)?.data?.[0];
     if(grid.spreadsheetId!==journalId||!block||block.startRow||block.startColumn||!Array.isArray(block.rowData))throw new Error('grid');
-    const rows=block.rowData.map(r=>(r.values||[]).map(c=>c.effectiveValue?.stringValue??c.effectiveValue?.numberValue??c.userEnteredValue?.stringValue??c.userEnteredValue?.numberValue??''));
-    return {...printing,boxPrinting:{status:'available',events:boxPrintingEvents(rows,printing.supplies||[]),cutEvents:boxCuttingEvents(rows,printing.supplies||[]),exceptions:boxJournalExceptions(rows),reason:null}};
+    const values=r=>(r.values||[]).map(c=>c.effectiveValue?.stringValue??c.effectiveValue?.numberValue??c.userEnteredValue?.stringValue??c.userEnteredValue?.numberValue??'');
+    const rows=block.rowData.map(values);
+    const daily=metadata.sheets?.find(s=>s.properties?.title==='По дням');
+    if(!daily || daily.properties.gridProperties?.columnCount<22 || daily.properties.gridProperties?.rowCount<2)throw new Error('Нет исторических площадей');
+    const historyGrid=await reader.grid(journalId,[`'По дням'!U2:V${daily.properties.gridProperties.rowCount}`],signal,5);
+    const historyBlock=historyGrid.sheets?.find(s=>s.properties?.sheetId===daily.properties.sheetId)?.data?.[0];
+    if(historyGrid.spreadsheetId!==journalId||!historyBlock||historyBlock.startRow!==1||historyBlock.startColumn!==20||!Array.isArray(historyBlock.rowData))throw new Error('Исторические площади недоступны');
+    const areas=new Map();
+    for(const row of historyBlock.rowData.map(values)) {
+      if(!row[0] && (row[1]===''||row[1]==null))continue;
+      const id=String(row[0]??'').trim(), area=row[1];
+      if(!id || areas.has(id) || typeof area!=='number' || !Number.isFinite(area) || area<0)throw new Error('Историческая площадь не подтверждена');
+      areas.set(id,area);
+    }
+    if(!areas.size)throw new Error('Исторические площади отсутствуют');
+    const dated=rows.slice(1).filter(r=>areas.has(String(r[0]??'').trim())).map(r=>Date.parse(String(r[2])));
+    if(dated.length!==areas.size||dated.some(t=>!Number.isFinite(t)))throw new Error('Исторические записи не подтверждены');
+    const history={areas,cutoff:Math.max(...dated)};
+    return {...printing,boxPrinting:{status:'available',events:boxPrintingEvents(rows,printing.supplies||[],history),cutEvents:boxCuttingEvents(rows,printing.supplies||[],history),exceptions:boxJournalExceptions(rows),reason:null}};
   } catch(error) {if(signal?.aborted)throw error;return unavailable('Журнал бокса недоступен или содержит неподтверждённые записи.');}
 }
