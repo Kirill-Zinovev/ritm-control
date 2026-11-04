@@ -86,7 +86,7 @@ export function BoxPrintingStats({
     shipment: string;
     employee: string;
   }) =>
-    e.employee.trim().toLocaleLowerCase("ru-RU") !== "евгений" &&
+    !["евгений", "алексей"].includes(e.employee.trim().toLocaleLowerCase("ru-RU")) &&
     inPeriod(e.date, date, period) &&
     (supplyFilter === "all" ||
       supplyFilter === `box-printing::${e.sheetId}` ||
