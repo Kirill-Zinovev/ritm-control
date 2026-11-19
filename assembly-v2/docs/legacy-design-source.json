@@ -1,0 +1,6 @@
+{
+  "source": "apps-script/assembly-live/Index.html",
+  "sha256": "14e1c951251c697a6fcb5a976773405b9a1edd24dace87330a7d6291a969d36a",
+  "importedAt": "2026-11-13T09:54:14.141Z",
+  "decision": "Keep the existing Assembly visual system and collector flow; move supplies to the right as explicitly requested. No legacy source writes."
+}

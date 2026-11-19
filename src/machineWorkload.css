@@ -405,14 +405,29 @@
 .mw-articles {
   min-width: 0;
 }
+.mw-article-filter {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 15px;
+}
+.mw-article-filter .button { min-height: 34px; }
+.mw-article-filter small { color: var(--muted); }
 .mw-article-table-scroll {
   overflow-x: auto;
   max-width: 100%;
   overscroll-behavior-inline: contain;
 }
 .mw-articles table {
-  min-width: 830px;
+  min-width: 1050px;
   font-size: 14px;
+}
+.mw-articles th:first-child,
+.mw-articles td:first-child {
+  min-width: 300px;
+  width: 32%;
+  white-space: normal;
 }
 .mw-articles th {
   padding: 12px 15px;
@@ -435,11 +450,13 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  min-width: 260px;
+  min-width: 0;
   max-width: 360px;
 }
 .mw-product > div {
   min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 .mw-product strong {
   font-size: 15px;

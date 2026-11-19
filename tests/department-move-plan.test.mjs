@@ -1,0 +1,22 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {prepareDepartmentMove,prepareDepartmentMoveGroup} from '../agent/departmentMovePlan.js';
+function fixture(){
+ const cell=x=>({userEnteredValue:typeof x==='number'?{numberValue:x}:{stringValue:x},effectiveValue:typeof x==='number'?{numberValue:x}:{stringValue:x}});
+ const h=Array(30).fill(null);h[20]=cell('Дата взятия в работу');h[27]=cell('Напечатано годных');
+ const r=Array(30).fill(null);r[4]=cell('SKU');r[15]=cell(32);r[29]=cell('original');
+ const writers=Object.fromEntries(['box','roll'].map((department,i)=>[department,{documentId:department,layout:{article:5,quantity:16,uid:30,remainingPrint:18},metadata:async()=>[{sheetId:i+1,title:'OZON Test',gridProperties:{rowCount:10}}],manifest:async()=>({id:'shipment',ready:true}),grid:async()=>({data:[{rowData:[{},{},{},{values:h},...(department==='box'?[{values:r}]:[])]}]}),prepareAppend:async x=>({preserveExistingRows:x.preserveExistingRows,startRow:5,uids:[{uid:'generated'}],lines:x.lines,formulaRepairs:[]})}]));
+ return {input:{shipmentId:'shipment',operationId:'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',uid:'original',article:'SKU',quantity:32,machine:'2-GO',extension:'U3'},writers,registry:[{id:'shipment',name:'OZON Test',parts:[{department:'box',sheetId:1},{department:'roll',sheetId:2}]}],readBoxJournal:async()=>[]};
+}
+test('prepares both sides and archives source inputs without writing',async()=>{const p=await prepareDepartmentMove(fixture());assert.equal(p.destination.preserveExistingRows,true);assert.equal(p.audit.sourceUid,'original');assert.equal(p.audit.destinationUid,'generated');assert.equal(p.destination.lines[0].quantity,32);assert.deepEqual(p.sourceRequests.map(r=>r.updateCells.start.columnIndex+1),[5,6,16,18,30]);assert.equal(p.destination.formulaRepairs.find(r=>r.column===4).formula,'="2-GO"');});
+test('a box machine cannot be transferred as a roll machine',async()=>{const f=fixture();f.input.machine='XEROX';await assert.rejects(prepareDepartmentMove(f),/станок/);});
+test('missing extension prevents any preparation',async()=>{const f=fixture();f.input.extension='';await assert.rejects(prepareDepartmentMove(f),/расширение/);});
+
+test('reverse plan appends to box and overrides the machine',async()=>{const f=fixture();const boxGrid=f.writers.box.grid,rollGrid=f.writers.roll.grid;f.writers.box.grid=rollGrid;f.writers.roll.grid=boxGrid;f.input.sourceDepartment='roll';f.input.machine='XEROX';const p=await prepareDepartmentMove(f);assert.equal(p.destination.preserveExistingRows,true);assert.equal(p.proof.from,'roll');assert.equal(p.proof.to,'box');assert.equal(p.destination.formulaRepairs.find(r=>r.column===4).formula,'="XEROX"');});
+test('ten-position preflight reads and parses each source once and keeps a distinct audited UID for every destination',async()=>{
+ const f=fixture(),metadataReads={box:0,roll:0},gridReads={box:0,roll:0};let journals=0;
+ f.input.sourceDepartment='box';f.input.items=Array.from({length:10},(_,i)=>({...f.input,operationId:i?crypto.randomUUID():f.input.operationId,uid:i?'original-'+i:'original',article:i?'SKU-'+i:'SKU',quantity:32+i}));
+ for(const department of ['box','roll']){const writer=f.writers[department],meta=writer.metadata,grid=writer.grid;writer.metadata=async()=>{metadataReads[department]++;return meta();};writer.grid=async()=>{gridReads[department]++;const result=await grid();if(department==='box'){const rows=result.data[0].rowData,first=rows[4];rows.splice(4,1,...f.input.items.map(item=>{const row=structuredClone(first);row.values[4]={effectiveValue:{stringValue:item.article},userEnteredValue:{stringValue:item.article}};row.values[15]={effectiveValue:{numberValue:item.quantity},userEnteredValue:{numberValue:item.quantity}};row.values[29]={effectiveValue:{stringValue:item.uid},userEnteredValue:{stringValue:item.uid}};return row;}));}return result;};}
+ f.readBoxJournal=async()=>{journals++;return [];};f.writers.roll.prepareAppend=async req=>({startRow:5,uids:req.lines.map((_,i)=>({uid:'destination-'+i})),lines:req.lines,formulaRepairs:[]});
+ const plan=await prepareDepartmentMoveGroup(f);assert.deepEqual(metadataReads,{box:1,roll:1});assert.deepEqual(gridReads,{box:1,roll:1});assert.equal(journals,1);assert.equal(plan.proof.sources.length,10);assert.equal(new Set(plan.audit.positions.map(p=>p.destinationUid)).size,10);assert.deepEqual(plan.destination.lines.map(l=>l.quantity),Array.from({length:10},(_,i)=>32+i));assert.equal(plan.sourceRequests.length,50);
+});

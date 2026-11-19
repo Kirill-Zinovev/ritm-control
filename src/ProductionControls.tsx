@@ -88,10 +88,12 @@ export function ProductionControls({
   shipmentIds,
   shipmentName,
   articles,
+  onLocksChanged,
 }: {
   shipmentIds: string[];
   shipmentName: string;
   articles: string[];
+  onLocksChanged?: (locks: ShipmentLock[]) => void;
 }) {
   const shipmentIdsKey = Array.from(new Set(shipmentIds.filter(Boolean))).join(",");
   const activeShipmentIds = useMemo(() => shipmentIdsKey ? shipmentIdsKey.split(",") : [], [shipmentIdsKey]);
@@ -142,7 +144,9 @@ export function ProductionControls({
         setError("");
       } else setError(controlsResult.reason instanceof Error ? controlsResult.reason.message : "Не удалось прочитать контроль поставки.");
       if (locksResult.status === "fulfilled") {
-        setShipmentLocks(Array.isArray(locksResult.value.locks) ? locksResult.value.locks : []);
+        const locks = Array.isArray(locksResult.value.locks) ? locksResult.value.locks : [];
+        setShipmentLocks(locks);
+        onLocksChanged?.(locks);
         setLocksForKey(shipmentIdsKey);
         setLockError("");
       } else setLockError(locksResult.reason instanceof Error ? locksResult.reason.message : "Не удалось проверить замок поставки.");
@@ -151,7 +155,7 @@ export function ProductionControls({
     } finally {
       if (sequence === refreshSequence.current && activeKeyRef.current === shipmentIdsKey) setLoading(false);
     }
-  }, [shipmentIdsKey]);
+  }, [shipmentIdsKey, onLocksChanged]);
 
   const lockKnown = !!shipmentIdsKey && locksForKey === shipmentIdsKey && !lockError && shipmentLocks.length === activeShipmentIds.length && activeShipmentIds.every((id) => shipmentLocks.some((lock) => lock.shipmentId === id));
   const pendingLock = lockKnown ? shipmentLocks.find((lock) => lock.pending) : undefined;

@@ -28,11 +28,15 @@ test("source machine is read by header, with safe optional photo and unchanged R
     },
   ]).orders[0];
   assert.equal(order.machine, "XEROX");
+  assert.equal(order.sourceMachine, "XEROX");
   assert.equal(order.machineSource, "supply");
   assert.equal(order.photoUrl, "");
   assert.equal(order.printProgress, 300);
   assert.equal(order.cutProgress, 0);
   assert.equal(rows[4][17], "TRUE");
+  assignWorkloadDetails([order], { OZON: [["Артикул", "Станок"], ["SKU", "2-GO"]] });
+  assert.equal(order.machine, "2-GO");
+  assert.equal(order.sourceMachine, "XEROX");
 });
 test("catalog details stay within the shipment marketplace and replace stale source equipment", () => {
   const catalog = {

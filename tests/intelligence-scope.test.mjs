@@ -58,9 +58,10 @@ test("active roll-order calculation errors are shown for review, not as formula 
       rows[row - 1].values.push({});
     rows[row - 1].values[column] = value;
   };
-  put(1, "AC", { userEnteredValue: { stringValue: "UID" } });
+  put(1, "AD", { userEnteredValue: { stringValue: "UID" } });
   put(4, "E", { userEnteredValue: { stringValue: "Артикул" } });
-  put(4, "O", { userEnteredValue: { stringValue: "Кол-во" } });
+  put(4, "F", { userEnteredValue: { stringValue: "расширения" } });
+  put(4, "P", { userEnteredValue: { stringValue: "Кол-во" } });
   put(6, "E", { effectiveValue: { stringValue: "NT0006.A4692" } });
   put(6, "F", { effectiveValue: { numberValue: 1 } });
   put(6, "H", { effectiveValue: { numberValue: 0.42 } });
@@ -69,14 +70,14 @@ test("active roll-order calculation errors are shown for review, not as formula 
     userEnteredValue: { formulaValue: "=F6*H6*I6*O6" },
     effectiveValue: { numberValue: 7.56 },
   });
-  put(6, "O", { effectiveValue: { numberValue: 60 } });
-  put(6, "P", {
+  put(6, "P", { effectiveValue: { numberValue: 60 } });
+  put(6, "Q", {
     userEnteredValue: { formulaValue: "=J6/K6" },
     effectiveValue: {
       errorValue: { type: "DIVIDE_BY_ZERO", message: "Division by zero" },
     },
   });
-  put(6, "AC", { effectiveValue: { stringValue: "uid-6" } });
+  put(6, "AD", { effectiveValue: { stringValue: "uid-6" } });
   const result = inspectDocument(doc, {
     sheets: [
       {
@@ -89,7 +90,7 @@ test("active roll-order calculation errors are shown for review, not as formula 
       },
     ],
   });
-  const issue = result.findings.find((finding) => finding.cell === "P6");
+  const issue = result.findings.find((finding) => finding.cell === "Q6");
   assert.equal(issue.type, "calculation_error");
   assert.equal(issue.verification, "needs_review");
   assert.match(issue.cause, /активной строке|назначения столбца/);

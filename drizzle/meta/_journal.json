@@ -22,6 +22,20 @@
       "when": 1793004020918,
       "tag": "0002_red_ezekiel",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1794640899863,
+      "tag": "0003_jittery_tomas",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1794647916967,
+      "tag": "0004_fat_firedrake",
+      "breakpoints": true
     }
   ]
 }

@@ -1,0 +1,163 @@
+.legacy-assembly .head-tools:has(.supply-search) {
+  position: relative;
+}
+.legacy-assembly .supply-search {
+  min-width: 0;
+}
+.legacy-assembly .supply-search .search:focus-within {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 1px #2563eb;
+}
+.legacy-assembly .supply-search-popover {
+  position: absolute;
+  z-index: 20;
+  inset: calc(100% + 8px) 0 auto auto;
+  width: min(510px, calc(100vw - 28px));
+  max-height: min(56dvh, 460px);
+  padding: 8px 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid #cedbea;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 10px 26px #18345120, 0 2px 4px #18345112;
+  color: var(--ink);
+}
+.legacy-assembly .supply-search-popover h2 {
+  margin: 0;
+  padding: 6px 4px;
+  color: var(--ink-soft);
+  font-size: 14px;
+  font-weight: 750;
+}
+.legacy-assembly .supply-search-section,
+.legacy-assembly .supply-search-result,
+.legacy-assembly .supply-search-more {
+  width: 100%;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.legacy-assembly .supply-search-section {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 10px 4px 7px;
+  border-top: 1px solid var(--line);
+  font-size: 14px;
+  font-weight: 750;
+}
+.legacy-assembly .supply-search-section[aria-expanded="false"] svg {
+  transform: rotate(-90deg);
+}
+.legacy-assembly .supply-search-result {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto 17px;
+  align-items: center;
+  gap: 10px;
+  min-height: 53px;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+  border-radius: 7px;
+}
+.legacy-assembly .supply-search-result:enabled:hover,
+.legacy-assembly .supply-search-result:focus-visible {
+  background: #e8f0ff;
+}
+.legacy-assembly .supply-search-result:disabled {
+  cursor: wait;
+  opacity: .65;
+}
+.legacy-assembly .supply-search-result .catalog-photo {
+  width: 37px;
+  height: 42px;
+  border-radius: 6px;
+  font-size: 9px;
+}
+.legacy-assembly .supply-search-result .shipment-market {
+  min-width: 0;
+  height: 22px;
+  padding: 0 5px;
+  border-radius: 6px;
+  font-size: 10px;
+}
+.legacy-assembly .supply-search-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.legacy-assembly .supply-search-copy > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.legacy-assembly .supply-search-copy strong {
+  font-size: 14px;
+}
+.legacy-assembly .supply-search-copy > span,
+.legacy-assembly .supply-search-packing,
+.legacy-assembly .supply-search-message,
+.legacy-assembly .supply-search-more {
+  font-size: 12px;
+}
+.legacy-assembly .supply-search-copy > span,
+.legacy-assembly .supply-search-message {
+  color: var(--ink-soft);
+}
+.legacy-assembly .supply-search-packing {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.legacy-assembly .supply-search-message,
+.legacy-assembly .supply-search-more {
+  margin: 0;
+  padding: 9px 4px;
+}
+.legacy-assembly .supply-search-more {
+  color: var(--primary);
+  font-weight: 650;
+}
+.legacy-assembly .article.is-search-target {
+  border-color: #5289f6;
+  box-shadow: 0 0 0 2px #2563eb26;
+  background: #edf5ff;
+}
+@media (761px <= width <= 1200px) {
+  .legacy-assembly .supply-search-popover {
+    width: min(510px, calc(100vw - 270px));
+  }
+}
+@media (max-width: 760px) {
+  .legacy-assembly .supply-search {
+    flex: 1 1 130px;
+  }
+  .legacy-assembly .supply-search-popover {
+    left: 0;
+    right: auto;
+    max-height: 42dvh;
+  }
+  .legacy-assembly .supply-search-popover.is-above {
+    top: auto;
+    bottom: calc(100% + 8px);
+  }
+  .legacy-assembly .supply-search-result {
+    grid-template-columns: 36px minmax(0, 1fr) 16px;
+    gap: 4px 8px;
+  }
+  .legacy-assembly .supply-search-result > :first-child,
+  .legacy-assembly .supply-search-result > svg {
+    grid-row: span 2;
+  }
+  .legacy-assembly .supply-search-result > svg {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+  }
+  .legacy-assembly .supply-search-packing {
+    grid-column: 2;
+  }
+}

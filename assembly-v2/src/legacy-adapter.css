@@ -1,0 +1,648 @@
+/* Supplies on the LEFT, as explicitly corrected by the owner on 13 November.
+   Everything else inherits the original Assembly stylesheet, not a redesign. */
+.legacy-assembly {
+  font-family: "Segoe UI", Arial, sans-serif;
+}
+.legacy-assembly .app-shell {
+  grid-template-columns: 270px minmax(0, 1fr);
+}
+.legacy-assembly .sidebar {
+  grid-column: 1;
+  grid-row: 1;
+  border-right: 1px solid #d7e4f3;
+  border-left: 0;
+  min-width: 0;
+}
+.legacy-assembly .legacy-main {
+  grid-column: 2;
+  grid-row: 1;
+}
+.legacy-assembly .brand {
+  text-decoration: none;
+  color: var(--ink);
+}
+.legacy-assembly .brand:hover {
+  text-decoration: none;
+}
+.legacy-assembly .shipment-title-block {
+  min-width: 0;
+}
+.legacy-assembly .shipment-heading h1 {
+  overflow-wrap: anywhere;
+}
+.legacy-assembly .head-tools {
+  margin-right: 130px;
+  flex-shrink: 0;
+}
+.legacy-assembly .search {
+  width: min(300px, 22vw);
+}
+.legacy-assembly .open-boxes-button {
+  background: #173965;
+  color: #fff;
+  border-color: #173965;
+}
+.legacy-assembly .open-boxes-button:hover:enabled {
+  background: #24548b;
+}
+.legacy-assembly .button.primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+.legacy-assembly .button.danger {
+  color: var(--red);
+  border-color: var(--red);
+}
+.legacy-assembly .button:enabled:hover {
+  filter: brightness(0.97);
+}
+.legacy-assembly .button:disabled {
+  cursor: not-allowed;
+}
+.legacy-assembly .sidebar-bottom {
+  margin-top: auto;
+  display: grid;
+  gap: 16px;
+}
+.legacy-assembly .sidebar-foot {
+  margin-top: 0;
+  position: static;
+}
+.legacy-assembly .shipment-list {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll-thumb) var(--scroll-track);
+}
+.legacy-assembly .shipment-list::-webkit-scrollbar {
+  display: block;
+}
+.legacy-assembly .review-navigation {
+  font-size: 12px;
+  color: var(--ink-soft);
+  padding: 0 12px;
+}
+.legacy-assembly .review-navigation summary {
+  padding: 8px 0;
+  cursor: pointer;
+}
+.legacy-assembly .review-navigation nav {
+  display: grid;
+  gap: 3px;
+}
+.legacy-assembly .review-navigation button {
+  text-align: left;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  padding: 8px;
+}
+.legacy-assembly .review-navigation button:hover {
+  background: var(--primary-soft);
+}
+.legacy-assembly .legacy-source-description {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  overflow-wrap: anywhere;
+}
+.legacy-assembly .direction-jobs {
+  max-width: 100%;
+  margin-left: 0;
+}
+.legacy-assembly .list-toolbar {
+  flex-wrap: wrap;
+}
+.legacy-assembly .list-toolbar-main {
+  width: auto;
+  flex: 1;
+}
+.legacy-assembly .type-filter select:disabled {
+  cursor: not-allowed;
+  color: var(--ink-soft);
+  opacity: 0.65;
+}
+.legacy-assembly .advanced-filters > div {
+  z-index: 20;
+}
+.legacy-assembly .advanced-filters select {
+  min-height: 36px;
+  border: 1px solid var(--line-dark);
+  border-radius: 8px;
+}
+.legacy-assembly .expand-button {
+  justify-self: end;
+}
+.legacy-assembly .article.expanded .expand-button {
+  transform: rotate(180deg);
+}
+.legacy-assembly .article .item-source-label {
+  white-space: normal;
+}
+.legacy-assembly .worker-operation-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+  gap: 8px;
+}
+.legacy-assembly .worker-operation {
+  display: grid;
+  gap: 5px;
+}
+.legacy-assembly .history-event-meta {
+  display: block;
+}
+.legacy-assembly .inline-box-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+}
+.legacy-assembly .legacy-status {
+  position: fixed;
+  left: 290px;
+  right: 18px;
+  bottom: 18px;
+  z-index: var(--z-toast);
+  max-width: min(680px, calc(100vw - 32px));
+}
+.legacy-assembly .legacy-status .status-region {
+  margin: 0;
+}
+.legacy-assembly .legacy-status .status-success {
+  border: 1px solid #b9ddce;
+  box-shadow: 0 5px 20px #183d6720;
+}
+.legacy-assembly .dialog {
+  max-width: calc(100vw - 24px);
+  padding: 0;
+  color: var(--ink);
+}
+.legacy-assembly .dialog .dialog-header {
+  padding: 24px 26px 0;
+  margin: 0;
+  border-bottom: 0;
+}
+.legacy-assembly .dialog .dialog-body {
+  padding: 20px 26px 26px;
+}
+.legacy-assembly .legacy-work-modal .dialog-body {
+  padding: 0;
+}
+.legacy-assembly .label-modal > .dialog-body {
+  padding: 0;
+}
+.legacy-assembly .label-modal .label-modal-body {
+  min-width: 0;
+}
+.legacy-assembly .label-modal .label-details .sku {
+  overflow-wrap: anywhere;
+}
+.legacy-assembly .label-load-error,
+.legacy-assembly .label-print-note {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.legacy-assembly .label-load-error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  color: var(--danger, #af3646);
+}
+.legacy-assembly .label-batch-footer {
+  grid-column: 1 / -1;
+}
+.legacy-assembly .label-batch-row .field-wrap {
+  min-width: 0;
+}
+.legacy-assembly .legacy-work-modal .modal-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  gap: 18px;
+  padding: 20px 26px 26px;
+}
+.legacy-assembly .field-wrap {
+  margin: 0;
+}
+.legacy-assembly .label,
+.legacy-assembly .operation-fieldset legend {
+  display: block;
+  color: var(--ink);
+  font-size: 14px;
+  margin-bottom: 7px;
+  font-weight: 600;
+}
+.legacy-assembly .field,
+.legacy-assembly .form-field input {
+  width: 100%;
+  min-width: 0;
+  background: #fff;
+  color: var(--ink);
+  min-height: 46px;
+  border: 1px solid var(--line-dark);
+  border-radius: 9px;
+  padding: 10px 12px;
+}
+.legacy-assembly .form-field {
+  margin: 0;
+}
+.legacy-assembly .operation-fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.legacy-assembly .operation-choices {
+  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+}
+.legacy-assembly .form-error:empty {
+  display: none;
+}
+.legacy-assembly .form-error:not(:empty) {
+  display: block;
+  color: #a82d3d;
+}
+.legacy-assembly .legacy-work-modal .work-product {
+  display: grid;
+  gap: 4px;
+}
+.legacy-assembly .legacy-work-modal .work-remaining {
+  margin: 0;
+}
+.legacy-assembly .work-remaining-preview {
+  min-height: 44px;
+}
+.legacy-assembly .modal-actions .button {
+  min-width: 110px;
+}
+.legacy-assembly .legacy-work-modal .modal-actions {
+  bottom: 0;
+}
+.legacy-assembly .legacy-box-drawer[open] {
+  margin: 0 0 0 auto;
+  border-radius: 0;
+  max-width: 100vw;
+  width: min(760px, 100vw);
+}
+.legacy-assembly .legacy-box-drawer > .dialog-header {
+  flex: 0 0 auto;
+  padding: 20px 24px 12px;
+  background: #fff;
+  border-bottom: 1px solid var(--line);
+}
+.legacy-assembly .legacy-box-drawer > .dialog-body {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+.legacy-assembly .legacy-box-drawer .drawer-content {
+  min-height: 0;
+  overflow-y: auto;
+  flex: 1;
+}
+.legacy-assembly .box-photo-slot {
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  color: var(--ink-soft);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+.legacy-assembly .box-cards {
+  display: grid;
+  max-height: none;
+  overflow: visible;
+}
+.legacy-assembly .box-card-progress > span {
+  display: block;
+  height: 100%;
+  background: var(--cut);
+  border-radius: inherit;
+}
+.legacy-assembly .box-composition summary {
+  font-size: 12px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  min-height: 28px;
+}
+.legacy-assembly .box-composition .box-content-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+.legacy-assembly .box-composition .box-content-row strong {
+  white-space: nowrap;
+}
+.legacy-assembly .warehouse-stock-view > .search {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+}
+.legacy-assembly .warehouse-stock-view > .search input {
+  width: 100%;
+  flex: 1;
+  min-width: 0;
+}
+.legacy-assembly .box-list-tools .search {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+.legacy-assembly .box-quantity-field {
+  grid-template-columns: minmax(0, 1fr) 95px 130px;
+}
+.legacy-assembly .box-capacity-preview {
+  flex-wrap: wrap;
+}
+.legacy-assembly .box-action-footer .form-error {
+  margin: 6px 0;
+}
+.legacy-assembly .legacy-carton-details > .dialog-header {
+  padding: 22px 26px 16px;
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+}
+.legacy-assembly .legacy-carton-details > .dialog-body {
+  display: block;
+  flex: initial;
+  padding: 20px 26px 26px;
+  overflow-y: auto;
+}
+.legacy-assembly .legacy-carton-details .box-summary {
+  margin: 18px 0;
+}
+.legacy-assembly .legacy-carton-details .table-scroll {
+  margin: 16px 0 20px;
+}
+.legacy-assembly .legacy-carton-details table small {
+  overflow-wrap: anywhere;
+}
+.legacy-assembly .work-box-shortcut {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  cursor: pointer;
+}
+.legacy-assembly .work-box-shortcut input {
+  width: 17px;
+  height: 17px;
+}
+.legacy-assembly .box-guidance {
+  margin: 8px 0;
+  line-height: 1.45;
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+.legacy-assembly .box-work-shortcut {
+  margin-bottom: 10px;
+}
+.legacy-assembly .box-quantity-field .field {
+  text-align: center;
+  border: 1px solid var(--line-dark);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--ink);
+}
+.carton-product {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.carton-product .carton-content-photo {
+  width: 48px;
+  height: 56px;
+  object-fit: contain;
+  padding: 3px;
+  background: #fff;
+  border: 1px solid #d8e4f2;
+  border-radius: 9px;
+  font-size: 10px;
+}
+.carton-product-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.carton-product-sku {
+  color: #173a6b;
+  font-size: 14px;
+}
+.carton-product-name {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.4;
+  color: #536b89;
+}
+.carton-product-supply {
+  color: #7087a4;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.carton-item-quantity {
+  display: inline-block;
+  align-self: center;
+  min-width: 68px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  background: #edf5ff;
+  border: 1px solid #d8e4f2;
+  color: #173a6b;
+  text-align: center;
+  font-size: 14px;
+  white-space: nowrap;
+}
+.legacy-assembly .legacy-box-drawer .empty {
+  padding: 16px;
+}
+@media (max-width: 1500px) {
+  .legacy-assembly .app-shell {
+    grid-template-columns: 235px minmax(0, 1fr);
+  }
+  .legacy-assembly .legacy-status {
+    left: 255px;
+  }
+}
+@media (max-width: 1200px) {
+  .legacy-assembly .head-tools {
+    margin-right: 0;
+  }
+  .legacy-assembly .page-head::after {
+    opacity: 0.3;
+  }
+  .legacy-assembly .page-head {
+    flex-wrap: wrap;
+  }
+}
+@media (max-width: 900px) and (min-width: 761px) {
+  .legacy-assembly .sidebar {
+    height: 100dvh;
+    position: sticky;
+    flex-direction: column;
+    padding: 25px 12px 16px;
+  }
+  .legacy-assembly .shipment-list {
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  .legacy-assembly .brand {
+    display: flex;
+  }
+  .legacy-assembly .sidebar-foot {
+    display: flex;
+  }
+}
+@media (max-width: 760px) {
+  .legacy-assembly .app-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .legacy-assembly .sidebar {
+    grid-column: 1;
+    grid-row: 1;
+    border-left: 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    height: auto;
+    position: static;
+    padding: 16px;
+    gap: 12px;
+    display: flex;
+    flex-direction: column;
+  }
+  .legacy-assembly .legacy-main {
+    grid-column: 1;
+    grid-row: 2;
+    padding: 20px 14px;
+  }
+  .legacy-assembly .brand {
+    display: flex;
+  }
+  .legacy-assembly .shipments-navigation {
+    min-width: 0;
+    width: 100%;
+  }
+  .legacy-assembly .shipment-search {
+    max-width: none;
+  }
+  .legacy-assembly .shipment-list {
+    display: flex;
+    flex-direction: row;
+    overflow-x: auto;
+    gap: 8px;
+  }
+  .legacy-assembly .shipment-button {
+    min-width: 235px;
+    width: 235px;
+    flex: 0 0 235px;
+    white-space: normal;
+  }
+  .legacy-assembly .sidebar-bottom {
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+  }
+  .legacy-assembly .review-navigation {
+    padding: 0;
+  }
+  .legacy-assembly .sidebar-foot {
+    display: flex;
+    padding: 0;
+  }
+  .legacy-assembly .head-tools {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .legacy-assembly .head-tools .search {
+    flex: 1;
+    width: auto;
+    min-width: 130px;
+  }
+  .legacy-assembly .head-tools .button {
+    padding: 0 10px;
+  }
+  .legacy-assembly .shipment-heading h1 {
+    font-size: 23px;
+  }
+  .legacy-assembly .list-toolbar {
+    padding: 12px;
+  }
+  .legacy-assembly .list-toolbar-main {
+    width: 100%;
+  }
+  .legacy-assembly .list-toolbar .type-filter {
+    min-width: 100px;
+  }
+  .legacy-assembly .completion-tabs {
+    min-width: 0;
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+  .legacy-assembly .direction-button .shipment-name {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .legacy-assembly .completion-tabs button {
+    padding: 9px 6px;
+    font-size: 12px;
+  }
+  .legacy-assembly .article .remaining-cell {
+    text-align: right;
+  }
+  .legacy-assembly .history-event {
+    flex-wrap: wrap;
+  }
+  .legacy-assembly .legacy-status {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+  }
+  .legacy-assembly .dialog .dialog-header {
+    padding: 20px 18px 0;
+  }
+  .legacy-assembly .legacy-work-modal .modal-form {
+    padding: 18px;
+    gap: 14px;
+  }
+  .legacy-assembly .legacy-work-modal .modal-title {
+    font-size: 24px;
+  }
+  .legacy-assembly .modal-actions .button {
+    min-width: 0;
+    flex: 1;
+    padding: 0 8px;
+    font-size: 14px;
+    white-space: normal;
+  }
+  .legacy-assembly .legacy-box-drawer .dialog-header {
+    padding: 16px 14px 12px;
+  }
+  .legacy-assembly .box-quantity-field {
+    grid-template-columns: minmax(0, 1fr) 130px;
+  }
+  .legacy-assembly .box-quantity-field label {
+    grid-column: 1/-1;
+  }
+}
+.legacy-assembly .stock-item-actions { margin-top: 5px; flex-wrap: wrap; }
+.legacy-assembly .stock-item-actions .button { white-space: normal; }
+.legacy-assembly .stock-add-operation { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.legacy-assembly .stock-add-operation .button { flex: none; }
+.legacy-assembly .stock-extra-operation { padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--canvas); }
+.legacy-assembly .stock-extra-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.legacy-assembly .stock-extra-operation .readonly-note { margin: 10px 0 0; }
+.legacy-assembly .stock-extra-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) 125px; gap: 10px 14px; align-items: end; }
+@media (max-width: 560px) { .legacy-assembly .stock-extra-grid { grid-template-columns: 1fr; } }

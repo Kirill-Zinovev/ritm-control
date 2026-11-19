@@ -255,14 +255,14 @@
         background: #fff;
       }
       .batch-item-head {
-        display: flex;
-        justify-content: space-between;
-        gap: 8px;
-        align-items: baseline;
+        display: block;
       }
+      .batch-item-head .muted { display: block; margin-top: 5px; padding-left: 25px; }
+      .batch-quantity-label { margin: 10px 0 0; font-weight: 600; }
       .batch-item .article {
         font-size: 16px;
-        overflow-wrap: anywhere;
+        white-space: nowrap;
+        overflow-wrap: normal;
       }
       .batch-item input[type="number"] {
         margin-top: 8px;
@@ -292,11 +292,12 @@
     <h1>Учёт бокса</h1>
     <p class="muted">Выберите строки вручную или найдите товары по станку. Все действия сохраняются с именем и временем.</p>
     <label for="selectionMode">Выбор артикулов</label>
-    <select id="selectionMode"><option value="manual">Выделить в таблице</option><option value="machine">По станку</option></select>
+    <select id="selectionMode"><option value="manual">Выделить в таблице</option><option value="machine">По станку</option><option value="personal">Мой фильтр в панели</option></select>
     <div id="machinePicker" class="hidden">
       <label for="machineSelect">Станок</label>
       <select id="machineSelect"><option value="">Выберите станок</option></select>
       <p class="muted" id="machineHint">Учитываются видимые строки открытого листа.</p>
+      <div id="personalFilter" class="hidden"><label for="personalSearch">Поиск по артикулу</label><input id="personalSearch" type="search" placeholder="Введите артикул"><div class="footer"><button type="button" class="secondary" id="personalSelect">Выбрать найденные</button><button type="button" class="secondary" id="personalClear">Снять выбор</button></div><p class="muted">Фильтр действует внутри панели. Отметьте товары для записи; фильтр таблицы здесь не применяется.</p></div>
     </div>
     <div id="message" role="status" aria-live="polite"></div>
     <div class="footer">
@@ -310,6 +311,7 @@
         <div class="shipment" id="shipment"></div>
         <div class="article" id="article"></div>
         <p id="plan" class="muted"></p>
+        <p id="sheetPlan" class="muted"></p>
         <div class="factor" id="factor"></div>
       </div>
       <div class="tabs" id="actions">
@@ -330,7 +332,7 @@
           <button id="sheets" class="active">Листы</button
           ><button id="kits">Шт. товара</button>
         </div>
-        <label for="quantity">Количество</label
+        <label id="quantityLabel" for="quantity">Количество товара, шт.</label
         ><input
           id="quantity"
           type="number"
@@ -380,7 +382,14 @@
       <div class="card">
         <div class="shipment" id="batchShipment"></div>
         <div class="article"><span id="batchCount" class="batch-count"></span> артикулов выбрано</div>
-        <p class="muted">Одно действие для выделенных видимых строк одного листа. Укажите количество отдельно. Для действий «В работу», «Готовность печати» и «Готовность порезки» пустое поле означает весь остаток до плана; выполненные позиции пропускаются.</p>
+        <p class="muted" id="batchFound"></p>
+        <p class="muted" id="batchSelectionPreview"></p>
+        <div class="footer">
+          <button type="button" class="primary" id="batchSelectFound">Выбрать найденные</button>
+          <button type="button" class="secondary" id="batchClearSelection">Снять выбор</button>
+        </div>
+        <p class="muted" id="batchSelectionHint" role="status" aria-live="polite"></p>
+        <p class="muted">Личный фильтр Google может скрывать строки — проверьте список перед записью. Пустое количество для основных действий означает остаток до плана.</p>
         <a id="batchJournal" target="_blank" rel="noopener">Журнал и сотрудники ↗</a>
       </div>
       <div class="tabs" id="batchActions">
@@ -413,7 +422,7 @@
       <div class="summary">
         <h2>Проверка перед сохранением</h2>
         <div class="metric"><span>Артикулов с количеством</span><strong id="batchReady">0</strong></div>
-        <div class="metric"><span>Всего (листы Xerox / штуки остальных)</span><strong id="batchTotalSheets">0</strong></div>
+        <div class="metric"><span>Всего товаров / листов Xerox</span><strong id="batchTotalSheets">0</strong></div>
       </div>
       <button class="primary" id="batchSave">Сохранить для выбранных</button>
       <div id="batchResult" class="message hidden" role="status" aria-live="polite"></div>
@@ -427,13 +436,13 @@
       let lastSelection = "";
       let context = null,
         action = "print",
-        unit = "sheets",
+        unit = "kits",
         busy = false,
         pending = null,
         batchPending = null,
         batchContext = null,
         batchAction = "print",
-        batchUnit = "sheets",
+        batchUnit = "kits",
         batchValues = {},
         undoTarget = null,
         loading = false,
@@ -482,7 +491,17 @@
             .join("-")
         );
       }
-      function call(name, ...args) {
+      async function call(name, ...args) {
+        for (let attempt = 0; ; attempt++) {
+          try { return await callOnce(name, ...args); }
+          catch (error) {
+            if (!String(error && error.message || error).includes('BOX_BUSY:') || attempt >= 5) throw error;
+            msg('Другой сотрудник сохраняет запись. Ждём своей очереди…', 'success');
+            await new Promise(resolve => setTimeout(resolve, 800 + Math.random() * 700));
+          }
+        }
+      }
+      function callOnce(name, ...args) {
         return new Promise((resolve, reject) => {
           const timer = setTimeout(
             () =>
@@ -508,7 +527,7 @@
       }
       async function load(force = false) {
         if (loading || busy || pending) return;
-        if (selectionMode === "machine") { if (force) await loadMachines(); return; }
+        if (selectionMode !== "manual") { if (force) await loadMachines(); return; }
         loading = true;
         try {
           const r = await call(
@@ -526,7 +545,7 @@
           msg(e.message || String(e));
         } finally {
           loading = false;
-          if (selectionMode === "machine" && !machineSheetId && !busy && !batchPending) void loadMachines();
+          if (selectionMode !== "manual" && !machineSheetId && !busy && !batchPending) void loadMachines();
         }
       }
       function applyContext(r) {
@@ -540,6 +559,7 @@
             $("batchReason").value = "";
             batchValues = {};
             batchExcluded = {};
+            if (r.batch) r.items.forEach(item => { batchExcluded[item.positionId] = true; });
             undoTarget = null;
             action = "print";
             batchAction = "print";
@@ -570,26 +590,26 @@
         $("machineSelect").disabled = true;
         msg("Загружаем список станков…", "success");
         try {
-          const result = await call("getBoxMachineList");
-          if (selectionMode !== "machine") return;
+          const result = await call("getBoxMachineList", selectionMode === "personal");
+          if (selectionMode === "manual") return;
           machineSheetId = result.sheetId;
           const select = $("machineSelect"), previous = select.value;
           select.replaceChildren(new Option("Выберите станок", ""));
           result.machines.forEach(m => select.add(new Option(m.name + " · " + m.count, m.key)));
           select.value = result.machines.some(m => m.key === previous) ? previous : "";
-          $("machineHint").textContent = result.shipment + " · только видимые строки";
+          $("machineHint").textContent = selectionMode === "personal" ? result.shipment + " · выбор по станку в панели" : result.shipment + " · фильтр таблицы может не учитываться";
           context = batchContext = null;
           $("content").classList.add("hidden"); $("batchContent").classList.add("hidden");
-          if (select.value) { const selected = await loadMachineArticles(machineSheetId, select.value); if (selectionMode === "machine") applyContext(selected); }
+          if (select.value) { const selected = await loadMachineArticles(machineSheetId, select.value); if (selectionMode !== "manual") applyContext(selected); }
           else msg("");
-        } catch(e) { if(selectionMode === "machine"){ context = batchContext = null; $("content").classList.add("hidden"); $("batchContent").classList.add("hidden"); msg(e.message || String(e)); } }
+        } catch(e) { if(selectionMode !== "manual"){ context = batchContext = null; $("content").classList.add("hidden"); $("batchContent").classList.add("hidden"); msg(e.message || String(e)); } }
         finally { loading = false; $("machineSelect").disabled = false; if(selectionMode === "manual") void load(true); }
       }
       async function loadMachineArticles(sheetId, machine) {
         let result = null, offset = 0, signature = "";
         do {
           msg("Загружаем артикулы станка: " + offset + "…", "success");
-          const page = await call("getBoxMachineContext", sheetId, machine, offset, 10);
+          const page = await call("getBoxMachineContext", sheetId, machine, offset, 20, selectionMode === "personal");
           if (!page || !page.machinePage || !Array.isArray(page.items) || page.machinePage.next <= offset) throw new Error("Не удалось получить список станка. Обновите панель.");
           if (signature && signature !== page.machinePage.signature) throw new Error("Данные или фильтр изменились при загрузке. Обновите список станка.");
           signature = page.machinePage.signature;
@@ -607,8 +627,8 @@
         if (!$("machineSelect").value) return;
         loading = true;
         $("machineSelect").disabled = true;
-        try { const selected = await loadMachineArticles(machineSheetId, $("machineSelect").value); if(selectionMode === "machine") applyContext(selected); }
-        catch(e) { if(selectionMode === "machine") msg(e.message || String(e)); }
+        try { const selected = await loadMachineArticles(machineSheetId, $("machineSelect").value); if(selectionMode !== "manual") applyContext(selected); }
+        catch(e) { if(selectionMode !== "manual") msg(e.message || String(e)); }
         finally { loading = false; $("machineSelect").disabled = false; if(selectionMode === "manual") void load(true); }
       }
       function amountUnit(item) { return item.xerox ? "листов" : "шт."; }
@@ -616,8 +636,8 @@
         $("content").classList.remove("hidden");
         $("shipment").textContent = context.shipment;
         $("article").textContent = context.article;
-        $("plan").textContent =
-          "План: " + fmt(context.planKits) + " шт." + (context.xerox ? " · " + fmt(context.planSheets) + " листов Xerox" : "");
+        $("plan").textContent = "План товара: " + fmt(context.planKits) + " шт.";
+        $("sheetPlan").textContent = context.xerox ? "Для печати: " + fmt(context.planSheets) + " физических листов Xerox" : "";
         $("factor").textContent =
           context.xerox ? "Xerox: количество ÷ кратность " + fmt(context.multiplicity) + " × листов на товар " + fmt(context.sheetsPerKit) : "Учёт работы, брака и излишка в штуках товара.";
         if (!context.xerox) unit = "pieces"; else if (unit === "pieces") unit = "kits";
@@ -674,15 +694,29 @@
       }
       function batchInputAmount(item, raw, action, selectedUnit) {
         const automatic = String(raw).trim() === "" && ["take", "print", "cut"].includes(action);
-        const unit = !item.xerox ? "pieces" : automatic ? "sheets" : selectedUnit;
+        let unit = !item.xerox ? "pieces" : automatic ? "sheets" : selectedUnit;
         const key = {take:"taken",print:"printed",cut:"cut"}[action];
-        const quantity = automatic ? Math.max(0, item.planSheets - Number(item.totals?.[key] || 0)) : Number(raw);
+        let quantity = automatic ? Math.max(0, item.planSheets - Number(item.totals?.[key] || 0)) : Number(raw);
+        // Blank means all remaining goods, including a fractional calculated sheet equivalent.
+        if (automatic && item.xerox && item.sheetsPerKit > 0 && item.multiplicity > 0) {
+          const goods = quantity * item.multiplicity / item.sheetsPerKit;
+          if (Math.abs(goods - Math.round(goods)) < 1e-8) {
+            unit = "kits";
+            quantity = Math.round(goods);
+          }
+        }
         return {automatic, unit, quantity, complete: automatic && quantity === 0 && item.planSheets > 0};
+      }
+      function singleInputAmount(item, raw, action, selectedUnit) {
+        const planSheets = action === "cut" ? Math.min(item.planSheets, Number(item.totals?.printed || 0)) : item.planSheets;
+        return batchInputAmount({...item, planSheets}, raw, action, selectedUnit);
       }
       function renderBatch() {
         if (!batchContext?.batch) return;
         if (!batchContext.items.some(item=>item.xerox)) batchUnit = "kits";
         $("batchShipment").textContent = batchContext.shipment;
+        $("batchSelectionPreview").textContent = batchContext.items.slice(0, 4).map(item => item.article).join(" · ")
+          + (batchContext.items.length > 4 ? " · ещё " + (batchContext.items.length - 4) + " в списке ниже" : "");
         $("batchCount").textContent = String(batchContext.items.length);
         $("batchSheets").classList.toggle("hidden", !batchContext.items.some(item => item.xerox));
         const employee = $("batchEmployee"), prior = employee.value || remembered("employee") || "";
@@ -698,6 +732,8 @@
         batchContext.items.forEach((item, index) => {
           const card = document.createElement("div");
           card.className = "batch-item";
+          card.dataset.article = item.article.toLocaleUpperCase("ru-RU");
+          card.dataset.positionId = item.positionId;
           const head = document.createElement("div");
           head.className = "batch-item-head";
           const article = document.createElement("strong");
@@ -712,7 +748,8 @@
           selectLabel.append(selected, article);
           const plan = document.createElement("span");
           plan.className = "muted";
-          plan.textContent = "План " + fmt(item.planKits) + " шт.";
+          plan.style.whiteSpace = "pre-line";
+          plan.textContent = "План товара: " + fmt(item.planKits) + " шт." + (item.xerox ? "\nДля печати: " + fmt(item.planSheets) + " листов Xerox" : "");
           head.append(selectLabel, plan);
           const input = document.createElement("input");
           input.type = "number";
@@ -723,6 +760,11 @@
           input.setAttribute("aria-describedby", "batch-conversion-" + index);
           input.placeholder = ["take", "print", "cut"].includes(batchAction) ? "Пусто — весь остаток до плана" : item.xerox ? "Количество листов" : "Количество товара, шт.";
           input.dataset.positionId = item.positionId;
+          input.id = "batch-quantity-" + index;
+          const quantityLabel = document.createElement("label");
+          quantityLabel.htmlFor = input.id;
+          quantityLabel.className = "batch-quantity-label";
+          quantityLabel.textContent = item.xerox && batchUnit === "sheets" ? "Количество листов" : "Количество товара, шт.";
           input.value = batchValues[item.positionId] || "";
           input.oninput = () => {
             batchValues[item.positionId] = input.value;
@@ -732,9 +774,10 @@
           conversion.id = "batch-conversion-" + index;
           conversion.className = "muted batch-conversion";
           conversion.setAttribute("aria-live", "polite");
-          card.append(head, input, conversion);
+          card.append(head, quantityLabel, input, conversion);
           list.append(card);
         });
+        filterPersonalItems();
         $("batchActions").querySelectorAll("button").forEach((button) => {
           button.classList.toggle("active", button.dataset.action === batchAction);
         });
@@ -746,16 +789,26 @@
       }
       function updateBatch() {
         if (!batchContext?.batch) return;
-        $("batchCount").textContent = String(batchContext.items.filter(item => !batchExcluded[item.positionId]).length);
+        const selectedCount = batchContext.items.filter(item => !batchExcluded[item.positionId]).length;
+        const visibleCards = Array.from($("batchItems").querySelectorAll(".batch-item")).filter(card => !card.hidden);
+        $("batchCount").textContent = String(selectedCount);
+        $("batchFound").textContent = "Найдено товаров: " + batchContext.items.length;
+        $("batchSelectFound").textContent = "Выбрать найденные (" + visibleCards.length + ")";
+        $("batchSelectFound").disabled = busy || !!batchPending || !!pending || !visibleCards.some(card => batchExcluded[card.dataset.positionId]);
+        $("batchClearSelection").disabled = busy || !!batchPending || !!pending || !visibleCards.some(card => !batchExcluded[card.dataset.positionId]);
+        $("batchSelectionHint").textContent = selectedCount
+          ? "Выбрано для записи: " + selectedCount + ". Теперь выберите действие и сотрудника."
+          : "Товары найдены, но пока не выбраны. Нажмите «Выбрать найденные» или отметьте нужные товары в списке ниже.";
         const inputs = Array.from($("batchItems").querySelectorAll("input[type=number]"));
         let ready = 0, total = 0, allValid = inputs.length > 0;
+        const validPositions = new Set();
         inputs.forEach((input, index) => {
           const item = batchContext.items[index], resolved = batchInputAmount(item, input.value, batchAction, batchUnit), quantity = resolved.quantity;
           if (batchExcluded[item.positionId]) { $("batch-conversion-" + index).textContent = "Исключён из записи."; return; }
           const numerator = quantity * item.sheetsPerKit;
           const whole = resolved.unit !== "kits"
             ? Number.isSafeInteger(quantity)
-            : Number.isSafeInteger(numerator) && numerator % item.multiplicity === 0;
+            : Number.isSafeInteger(numerator) && item.multiplicity > 0;
           const sheets = resolved.unit !== "kits" ? quantity : numerator / item.multiplicity;
           const totals = item.totals || {};
           const totalKey = keys[batchAction];
@@ -764,19 +817,19 @@
           const projected = current + sheets;
           const withinPlan = ["defect", "surplus"].includes(batchAction) || projected <= limit;
           const valid = Number.isSafeInteger(quantity) && quantity > 0 && quantity <= 1000000 && whole && withinPlan;
-          if (valid) { ready++; total += sheets; } else if (!resolved.complete) allValid = false;
+          if (valid) { ready++; total += sheets; validPositions.add(item.positionId); } else if (!resolved.complete) allValid = false;
           const conversion = $("batch-conversion-" + index);
           conversion.textContent = resolved.complete ? (batchAction === "take" ? "Уже взято в работу на весь план. Для фиксации печати или порезки выберите соответствующее действие." : "Этот этап уже выполнен на весь план — повторная запись не создаётся.") : quantity > 0
             ? (resolved.unit !== "kits"
               ? fmt(quantity) + " " + amountUnit(item)
-              : fmt(quantity) + " шт. → " + fmt(sheets) + " " + amountUnit(item) + (whole ? "" : " · результат должен быть целым числом листов"))
+              : fmt(quantity) + " шт. → " + fmt(sheets) + " " + amountUnit(item) + " (расчёт)")
               + (resolved.automatic ? " · весь остаток до плана" : "") + " · уже " + fmt(current) + " " + amountUnit(item)
               + (withinPlan ? " · после записи " + fmt(projected) : " · превышает доступный лимит " + fmt(limit))
             : item.xerox ? "Xerox: количество ÷ кратность " + fmt(item.multiplicity) + " × листов на товар " + fmt(item.sheetsPerKit) : "Укажите количество товара в штуках.";
         });
-        $("batchReady").textContent = ready + " / " + inputs.length;
-        const readyItems = batchContext.items.map((item, i) => ({item, ...batchInputAmount(item, inputs[i].value, batchAction, batchUnit)})).filter(x => !batchExcluded[x.item.positionId]);
-        const pieces = readyItems.filter(x=>!x.item.xerox).reduce((n,x)=>n+(Number.isSafeInteger(x.quantity)?x.quantity:0),0);
+        $("batchReady").textContent = ready + " / " + selectedCount;
+        const readyItems = batchContext.items.map((item, i) => ({item, ...batchInputAmount(item, inputs[i].value, batchAction, batchUnit)})).filter(x => validPositions.has(x.item.positionId));
+        const pieces = readyItems.reduce((n,x)=>n+(!x.item.xerox || x.unit === "kits" ? x.quantity : x.quantity * x.item.multiplicity / x.item.sheetsPerKit),0);
         const sheetTotal = readyItems.filter(x=>x.item.xerox).reduce((n,x)=>n+(Number.isSafeInteger(x.quantity)?(x.unit !== "kits"?x.quantity:x.quantity*x.item.sheetsPerKit/x.item.multiplicity):0),0);
         $("batchTotalSheets").textContent = fmt(pieces) + " шт. / " + fmt(sheetTotal) + " листов";
         $("batchSave").textContent = batchPending ? "Проверить и завершить сохранение" : busy ? "Сохраняем…" : "Сохранить для выбранных";
@@ -805,7 +858,9 @@
       function chooseBatch(next) {
         if (busy || batchPending) return;
         batchAction = next;
-        if (["defect", "surplus"].includes(next)) batchUnit = "sheets";
+        const nextUnit = ["defect", "surplus"].includes(next) ? "sheets" : next === "take" ? "kits" : batchUnit;
+        if (nextUnit !== batchUnit) batchValues = {};
+        batchUnit = nextUnit;
         renderBatch();
       }
       function setBatchUnit(next) {
@@ -830,6 +885,7 @@
               requestId: requestId(), positionId: item.positionId,
               sheetId: item.sheetId, fingerprint: item.fingerprint,
               article: item.article,
+              personalSelection: selectionMode === "personal",
               employeeId, action: batchAction, unit: resolved.unit, quantity,
               stage: $("batchStage").value, reason, reverses: "",
             };
@@ -847,7 +903,8 @@
           const messages = [];
           let saved = 0;
           while (batchPending && batchPending.length) {
-          const sent = batchPending.slice(0, 20);
+          // Release the shared writer lock frequently so other employees can save.
+          const sent = batchPending.slice(0, 3);
           const response = await call("saveBoxWorkBatch", sent);
           if (!response || !Array.isArray(response.results) || response.results.length !== sent.length)
             throw new Error("Сервер не вернул полный результат. Повторная проверка использует те же ID.");
@@ -903,6 +960,7 @@
             b.classList.toggle("active", b.dataset.action === action),
           );
         if (["defect", "surplus"].includes(action)) setUnit("sheets");
+        else if (action === "take") { if (unit === "sheets") $("quantity").value = ""; setUnit("kits"); }
         $("stageField").classList.toggle("hidden", action !== "defect");
         update();
       }
@@ -927,12 +985,13 @@
       }
       function update() {
         if (!context) return;
-        const n = Number($("quantity").value),
+        const resolved = singleInputAmount(context, $("quantity").value, action, unit),
+          n = resolved.quantity, effectiveUnit = resolved.unit,
           conversionNumerator = n * context.sheetsPerKit,
-          wholeSheets = unit === "kits"
-            ? Number.isSafeInteger(conversionNumerator) && conversionNumerator % context.multiplicity === 0
+          wholeSheets = effectiveUnit === "kits"
+            ? Number.isSafeInteger(conversionNumerator) && context.multiplicity > 0
             : Number.isSafeInteger(n),
-          sheets = unit === "kits"
+          sheets = effectiveUnit === "kits"
             ? conversionNumerator / context.multiplicity
             : n,
           total = context.totals[keys[action]] || 0;
@@ -945,14 +1004,16 @@
             : total + (Number.isSafeInteger(n) && n > 0 ? sheets : 0);
         $("conversion").textContent =
           n > 0
-            ? (unit === "kits"
-              ? fmt(n) + " шт. → " + fmt(sheets) + " " + amountUnit(context) + (wholeSheets ? "" : " · введите фактическое количество листов")
-              : fmt(sheets) + " " + amountUnit(context))
+            ? (effectiveUnit === "kits"
+              ? fmt(n) + " шт. → " + fmt(sheets) + " " + amountUnit(context) + " (расчёт)"
+              : fmt(sheets) + " " + amountUnit(context)) + (resolved.automatic ? " · весь доступный остаток" : "")
             : "";
+        $("quantityLabel").textContent = context.xerox && unit === "sheets" ? "Количество листов" : "Количество товара, шт.";
+        $("quantity").placeholder = ["take", "print", "cut"].includes(action) ? "Пусто — весь остаток" : "Введите количество";
         $("metricLabel").textContent =
           action === "cancel"
             ? "После отмены · " + names[undoTarget.action]
-            : names[action];
+            : names[action] + (context.xerox && !["defect", "surplus"].includes(action) ? " · расчёт в листах" : "");
         $("metricValue").textContent =
           fmt(value) + " / " + fmt(context.planSheets) + " " + amountUnit(context);
         $("progress").style.width =
@@ -996,8 +1057,8 @@
           fingerprint: context.fingerprint,
           employeeId: $("employee").value,
           action,
-          unit,
-          quantity: Number($("quantity").value),
+          unit: singleInputAmount(context, $("quantity").value, action, unit).unit,
+          quantity: singleInputAmount(context, $("quantity").value, action, unit).quantity,
           stage: $("stage").value,
           reason: $("reason").value.trim(),
           reverses: undoTarget?.id || "",
@@ -1055,11 +1116,33 @@
         if (busy || pending || batchPending) { $("selectionMode").value = selectionMode; return; }
         selectionMode = $("selectionMode").value;
         lastSelection = ""; machineSheetId = null; context = batchContext = null; batchExcluded = {}; batchValues = {};
-        $("machinePicker").classList.toggle("hidden", selectionMode !== "machine");
+        $("machinePicker").classList.toggle("hidden", selectionMode === "manual");
+        $("personalFilter").classList.toggle("hidden", selectionMode === "manual");
         $("content").classList.add("hidden"); $("batchContent").classList.add("hidden");
         if (loading) { msg("Переключаем режим…", "success"); return; }
-        if (selectionMode === "machine") await loadMachines(); else await load(true);
+        if (selectionMode !== "manual") await loadMachines(); else await load(true);
       };
+      function filterPersonalItems() {
+        const query = selectionMode !== "manual" ? $("personalSearch").value.trim().toLocaleUpperCase("ru-RU") : "";
+        $("batchItems").querySelectorAll(".batch-item").forEach(card => {
+          card.hidden = !!query && !card.dataset.article.includes(query);
+          if (selectionMode !== "manual" && card.hidden) { batchExcluded[card.dataset.positionId] = true; const check = card.querySelector('input[type="checkbox"]'); if (check) check.checked = false; }
+        });
+      }
+      $("personalSearch").oninput = () => { filterPersonalItems(); updateBatch(); };
+      function choosePersonalVisible(checked) {
+        if (!batchContext || busy || batchPending || pending) return;
+        $("batchItems").querySelectorAll(".batch-item").forEach(card => {
+          if (card.hidden) return;
+          const check = card.querySelector('input[type="checkbox"]');
+          if (check) { check.checked = checked; batchExcluded[card.dataset.positionId] = !checked; }
+        });
+        updateBatch();
+      }
+      $("personalSelect").onclick = () => choosePersonalVisible(true);
+      $("personalClear").onclick = () => choosePersonalVisible(false);
+      $("batchSelectFound").onclick = () => choosePersonalVisible(true);
+      $("batchClearSelection").onclick = () => choosePersonalVisible(false);
       $("machineSelect").onchange = selectMachine;
       $("batchActions").onclick = (e) => {
         const button = e.target.closest("[data-action]");

@@ -7,7 +7,7 @@ const source = new URL('../apps-script/assembly/Index.html', import.meta.url);
 const shipments = [
   { id: 'demo-kostroma', name: 'OZON Кострома', itemCount: 8 },
   { id: 'demo-moscow', name: 'WB МОСКВА', itemCount: 6 },
-  { id: 'demo-spb', name: 'OZON Санкт-Петербург', itemCount: 4 },
+  { id: 'demo-spb', name: 'OZON Кострома XEROX', itemCount: 4 },
   { id: 'demo-novosib', name: 'OZON Новосибирск', itemCount: 5 },
 ].map((row) => ({ ...row, environment: 'TEST ONLY', sourceAvailable: true }));
 const employees = [
@@ -109,6 +109,8 @@ const data = new Map(
         const values = { cut, assembly, packing };
         const item = {
           sku,
+          storeNumbers: ['1'],
+          workFactsAvailable: true,
           productName,
           productType,
           shipmentId: shipment.id,
@@ -260,6 +262,8 @@ function publicCarton(carton) {
     remaining: spaceKnown ? Math.max(0, 1 - fillRatio) : null,
     fillRatio: spaceKnown ? fillRatio : null,
     spaceKnown,
+    spaceUsed: spaceKnown ? fillRatio : null,
+    spaceRemaining: spaceKnown ? 1-fillRatio : null,
     blockedReason,
     skuCount: new Set(contents.map((row) => row.sku)).size,
     status: carton.status,
@@ -307,7 +311,7 @@ function getBoxOverview(shipmentId, positionId) {
   const snapshot = data.get(shipmentId);
   const item = snapshot?.items.find((row) => row.positionId === positionId);
   if (!snapshot || !item) throw Error('Тест: товар для коробов не найден');
-  const boxes = cartons.filter((box) => box.shipmentId === shipmentId && box.directionId === item.directionId).map(publicCarton);
+  const boxes = cartons.filter((box) => box.shipmentId === shipmentId && box.directionId === item.directionId).map(box=>({...publicCarton(box),itemQuantity:cartonContents.filter(row=>row.cartonId===box.cartonId&&row.positionId===positionId).reduce((sum,row)=>sum+row.quantity,0)}));
   const itemBoxes = boxes.filter((box) => box.contents.some((row) => row.shipmentId === shipmentId && row.positionId === positionId));
   const assigned = cartonContents.filter((row) => row.shipmentId === shipmentId && row.positionId === positionId).reduce((sum, row) => sum + row.quantity, 0);
   const numbers = boxes.map((box) => Number(box.number.match(/(\d+)\s*$/)?.[1] || 0));
@@ -336,7 +340,23 @@ function svgPhoto(key) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="80" height="96" viewBox="0 0 80 96"><rect x="8" y="5" width="64" height="86" rx="5" fill="white" stroke="#d3dce6"/><rect x="13" y="11" width="54" height="14" rx="2" fill="${colors[index % 4]}"/><text x="40" y="21" font-family="sans-serif" font-size="7" font-weight="bold" text-anchor="middle" fill="#24405d">RITM · ТЕСТ</text><circle cx="29" cy="43" r="10" fill="${colors[(index + 1) % 4]}"/><rect x="44" y="34" width="16" height="19" rx="4" fill="${colors[(index + 2) % 4]}"/><rect x="19" y="60" width="18" height="19" rx="5" fill="${colors[index % 4]}"/><circle cx="52" cy="70" r="10" fill="${colors[(index + 3) % 4]}"/></svg>`;
   return 'data:image/svg+xml;base64,' + Buffer.from(svg).toString('base64');
 }
+const warehouseFixture=[{cartonId:'carton-stock-demo',number:'1скл1',current:true,marketplace:'OZON',storeNumber:'1',shipment:'OZON Кострома · тестовые данные',contents:[{allocationId:'stock-demo-1',sku:'KT0064.A7697',productName:'Ёлочные украшения · тест',photoUrl:'https://basket-33.wbbasket.ru/vol6814/part681428/681428847/images/big/1.webp',quantity:20,employee:'Анна',createdAt:'2026-11-11T08:00:00.000Z'},{allocationId:'stock-demo-2',sku:'KT0064.A7698',productName:'Наклейки Новогодние · тест',photoUrl:'',quantity:10,employee:'',createdAt:'2026-11-10T08:00:00.000Z'}]}];
+const warehouseCreations=new Map();
 function rpc(method, args, mode) {
+  if (method === 'getWarehouseStock') return {ok:true,cartons:mode==='stock-empty'?[]:warehouseFixture};
+  if (method === 'createWarehouseCarton') {
+    const input=args[0];if(warehouseCreations.has(input.idempotencyKey))return warehouseCreations.get(input.idempotencyKey);
+    warehouseFixture.forEach(box=>{box.current=false;});const n=warehouseFixture.length+1;
+    const box={cartonId:'carton-stock-demo-'+n,number:'1скл'+n,current:true,marketplace:'OZON',storeNumber:'1',shipment:'OZON Кострома · тест',contents:[]};warehouseFixture.push(box);
+    const result={ok:true,cartonId:box.cartonId,number:box.number};warehouseCreations.set(input.idempotencyKey,result);return result;
+  }
+  if (method === 'getAssemblyDirections') return {groups:[
+    {id:'ozon-kostroma|store:1',name:'OZON КОСТРОМА',marketplace:'OZON',store:'1',directionKey:'ozon-kostroma',sources:[shipments[0],shipments[2]].map(s=>({...s,positionIds:data.get(s.id).items.map(i=>i.positionId)}))},
+    ...[shipments[1],shipments[3]].map(s=>({id:s.id,name:s.name,marketplace:s.name.startsWith('WB')?'WB':'OZON',store:'1',sources:[{...s,positionIds:data.get(s.id).items.map(i=>i.positionId)}]}))
+  ],errors:[],revision:'test',updatedAt:new Date().toISOString()};
+  if (method === 'getShipmentLockIndicators') return Object.fromEntries(shipments.map(s=>[s.id,'unlocked']));
+  if (method === 'getAssemblyControlTasks') return {ok:true,available:true,controls:[],shipmentLock:{shipmentId:args[0],locked:false,status:'unlocked'}};
+
   if (method === 'getAssemblyPreview') {
     const snapshot = rpc('getInitialData', args, mode);
     snapshot.referenceIncomplete = true;

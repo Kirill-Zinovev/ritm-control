@@ -77,6 +77,44 @@ test('progress references physical-sheet plan and independent good print/cut tot
  test('non Xerox rejects stale sheet-mode requests',()=>{const f=fixture();f.p.xerox=false;assert.throws(()=>f.c.saveBoxWork(f.req()),/штуки товара/);assert.equal(f.data.length,0);});
  test('historical non Xerox events use stored product quantity, not old physical sheets',()=>{const f=fixture();const state=f.c.boxTotals_(f.base,[{eventId:'old',action:'print',sheets:40,kits:20,at:'2026-11-01'}],{xerox:false});assert.equal(state.totals.printed,20);});
 
-test('live position rules: non Xerox needs no multiplicity, Xerox still validates conversion',()=>{const f=fixture();vm.runInContext(code,f.c);let machine='УФ планшет';const values=Array(35).fill('');values[4]='ND0126.A4679';values[6]=2;values[15]=20;f.c.boxSchema_=()=>({article:5,plan:16,factor:7,multiplicity:14,machine:4,printed:19,cut:20});f.c.boxCompact_=()=>true;const sh={getMaxColumns:()=>35,getSheetId:()=>7,getName:()=>'OZON Test',getRange:()=>({getValues:()=>{values[3]=machine;return [values];}})};let p=f.c.boxPosition_(sh,5);assert.equal(p.planKits,20);assert.equal(p.planSheets,20);assert.equal(p.xerox,false);machine='XEROX';assert.throws(()=>f.c.boxPosition_(sh,5),/кратность/);values[13]=4;p=f.c.boxPosition_(sh,5);assert.equal(p.planKits,20);assert.equal(p.planSheets,10);assert.equal(p.xerox,true);});
-test('Xerox quantity uses multiplicity and rejects fractional physical sheets',()=>{const f=fixture();f.p.multiplicity=4;f.p.planSheets=10;assert.equal(f.c.saveBoxWork(f.req({unit:'kits',quantity:6})).totals.printed,3);assert.throws(()=>f.c.saveBoxWork(f.req({unit:'kits',quantity:1})),/целое число/);assert.equal(f.data.length,1);});
+test('live position rules: non Xerox needs no multiplicity, Xerox still validates conversion',()=>{const f=fixture();vm.runInContext(code,f.c);let machine='УФ планшет';const values=Array(35).fill('');values[4]='ND0126.A4679';values[6]=2;values[15]=20;f.c.boxSchema_=()=>({article:5,plan:16,factor:7,multiplicity:14,machine:4,printed:19,cut:20});f.c.boxCompact_=()=>true;const sh={getMaxColumns:()=>35,getSheetId:()=>7,getName:()=>'OZON Test',getRange:()=>({getDeveloperMetadata:()=>[],getValues:()=>{values[3]=machine;return [values];}})};let p=f.c.boxPosition_(sh,5);assert.equal(p.planKits,20);assert.equal(p.planSheets,20);assert.equal(p.xerox,false);machine='XEROX';assert.throws(()=>f.c.boxPosition_(sh,5),/кратность/);values[13]=4;p=f.c.boxPosition_(sh,5);assert.equal(p.planKits,20);assert.equal(p.planSheets,10);assert.equal(p.xerox,true);});
+test('whole Xerox goods accept a fractional calculated sheet equivalent; direct sheets stay whole',()=>{const f=fixture();f.p.multiplicity=4;f.p.planSheets=10;assert.equal(f.c.saveBoxWork(f.req({unit:'kits',quantity:6})).totals.printed,3);assert.equal(f.c.saveBoxWork(f.req({unit:'kits',quantity:1})).totals.printed,3.5);assert.equal(f.data[1][14],1);assert.throws(()=>f.c.saveBoxWork(f.req({unit:'sheets',quantity:0.5})),/целое количество/);assert.equal(f.data.length,2);});
+test('screenshot articles take the full goods plan, then print and cut without duplicate work',()=>{
+ for(const [article,factor,planSheets] of [['NC0005.A5121',2,5],['SD0005.A8018',5,12.5]]){
+  const f=fixture();Object.assign(f.p,{article,sheetsPerKit:factor,multiplicity:4,planKits:10,planSheets,planArea:3.5});
+  const take=f.req({action:'take',unit:'kits',quantity:10});assert.equal(f.c.saveBoxWork(take).totals.taken,planSheets);assert.equal(f.c.saveBoxWork(take).repeated,true);assert.equal(f.data.length,1);
+  const print=f.req({action:'print',unit:'kits',quantity:10});assert.equal(f.c.saveBoxWork(print).totals.printed,planSheets);assert.equal(f.data[1][14],10);assert.equal(f.data[1][15],3.5);
+  const cut=f.req({action:'cut',unit:'kits',quantity:6});assert.equal(f.c.saveBoxWork(cut).totals.cut,6*factor/4);
+  assert.throws(()=>f.c.saveBoxWork(f.req({action:'cut',unit:'kits',quantity:5})),/Порезка превышает/);
+  const undo=f.req({action:'cancel',reverses:cut.requestId,reason:'Исправить количество'});assert.equal(f.c.saveBoxWork(undo).totals.cut,0);assert.equal(f.c.saveBoxWork(undo).repeated,true);assert.equal(f.data.length,4);
+ }
+});
+test('blank Xerox quantity resolves fractional sheet plan as whole goods',()=>{
+ const html=readFileSync(new URL('../apps-script/box-worklog/BoxPanel.html',import.meta.url),'utf8');const source=html.slice(html.indexOf('function batchInputAmount('),html.indexOf('function renderBatch()'));const c=vm.createContext({});vm.runInContext(source,c);
+ const item={xerox:true,planSheets:12.5,multiplicity:4,sheetsPerKit:5,totals:{taken:0,printed:5}};
+ assert.deepEqual(JSON.parse(JSON.stringify(c.batchInputAmount(item,'','take','sheets'))),{automatic:true,unit:'kits',quantity:10,complete:false});
+ assert.equal(c.batchInputAmount(item,'','print','kits').quantity,6);
+ assert.equal(c.batchInputAmount(item,'10','take','kits').quantity,10);
+ assert.equal(c.batchInputAmount(item,'10','take','kits').unit,'kits');
+});
 test('batch empty quantities resolve remaining plan in the correct machine unit',()=>{const html=readFileSync(new URL('../apps-script/box-worklog/BoxPanel.html',import.meta.url),'utf8');const source=html.slice(html.indexOf('function batchInputAmount('),html.indexOf('function renderBatch()'));const c=vm.createContext({});vm.runInContext(source,c);const item={xerox:false,planSheets:20,totals:{taken:5,printed:8,cut:3}};assert.equal(c.batchInputAmount(item,'','take','kits').quantity,15);assert.equal(c.batchInputAmount(item,'','print','kits').quantity,12);assert.equal(c.batchInputAmount(item,'','cut','kits').quantity,17);assert.equal(c.batchInputAmount(item,'','print','kits').unit,'pieces');assert.equal(c.batchInputAmount({...item,xerox:true},'','print','kits').unit,'sheets');assert.equal(c.batchInputAmount(item,'7','print','kits').quantity,7);assert.equal(c.batchInputAmount(item,'','defect','kits').automatic,false);assert.equal(c.batchInputAmount({...item,totals:{printed:20}},'','print','kits').complete,true);});
+
+test('position with a transfer lock refuses new work',()=>{const f=fixture();vm.runInContext(code,f.c);f.c.boxSchema_=()=>({});const sh={getRange:()=>({getDeveloperMetadata:()=>[{getKey:()=> 'RITM_BOX_MOVE',getValue:()=> 'operation'}]})};assert.throws(()=>f.c.boxPosition_(sh,5),/переносится/);});
+
+test('manual selection excludes filtered, manually hidden and empty rows before the panel can select them',()=>{
+ const f=fixture();
+ const sheet={getSheetId:()=>7,isRowHiddenByFilter:r=>r===6,isRowHiddenByUser:r=>r===7,getRange:(row,col,count)=>{
+  assert.deepEqual([row,col,count],[5,5,5]);return {getDisplayValues:()=>[['A'],['HIDDEN-FILTER'],['HIDDEN-USER'],[''],['B']]};
+ }};
+ const range={getSheet:()=>sheet,getRow:()=>5,getLastRow:()=>9},duplicate={getSheet:()=>sheet,getRow:()=>9,getLastRow:()=>9};
+ f.c.boxEligible_=()=>true;f.c.boxSchema_=()=>({article:5});
+ f.c.SpreadsheetApp={getActiveSpreadsheet:()=>({getActiveRange:()=>range,getActiveRangeList:()=>({getRanges:()=>[range,duplicate]})})};
+ assert.deepEqual(Array.from(f.c.boxSelection_().rows),[5,9]);
+});
+
+test('a non-Xerox article with N/A multiplicity remains available as product pieces',()=>{
+ const f=fixture();vm.runInContext(code,f.c);f.c.boxSchema_=()=>({article:5,plan:16,factor:7,multiplicity:14,machine:4,printed:19,cut:20});f.c.boxCompact_=()=>true;
+ const values=Array(35).fill('');values[3]='УФ планшет';values[4]='NI0027.A6873';values[6]=1;values[13]='#N/A';values[15]=20;
+ const sheet={getMaxColumns:()=>35,getSheetId:()=>7,getName:()=>'OZON СПБ (2-магазин)',getRange:()=>({getDeveloperMetadata:()=>[],getValues:()=>[values]})};
+ const p=f.c.boxPosition_(sheet,6);assert.equal(p.xerox,false);assert.equal(p.planSheets,20);assert.equal(p.planKits,20);assert.equal(p.multiplicity,1);
+});

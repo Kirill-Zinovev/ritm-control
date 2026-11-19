@@ -8,6 +8,11 @@ import { readMachineLayoutArticles } from "./machineLayouts.js";
 import { CloudError } from "./access.js";
 import { cloudFetch } from "./fetch.js";
 import { deliverShipmentLockEvent, setShipmentLocks } from "./shipmentLocks.js";
+import { StockOperations } from '../../agent/stockOperations.js';
+import { StockSheetsAdapter } from '../../agent/stockSheets.js';
+import { boxStockReadiness, rollStockReadiness, readRollStockHistory } from '../../agent/stockReadiness.js';
+import { createStockGateway,stockGatewaySupportsDryRun } from './stockGateway.js';
+import { queueBitrixNotifications } from './bitrixNotifications.js';
 
 export function requireCutover(bindings, scope) {
   const config = cloudConfig(bindings), cutover = scope.meta("cloudCutover");
@@ -19,8 +24,10 @@ export function requireCutover(bindings, scope) {
     throw new CloudError("local_repair_pending", "Эту таблицу изменяет локальный AI Center или результат его исправления требует сверки.", 409);
 }
 
-export async function createServices(bindings, scope, { fetcher = fetch, refresh = null, printing = null } = {}) {
+export async function createServices(bindings, scope, { fetcher = fetch, refresh = null, printing = null, readItemSnapshot = null, manager = 'RITM', deliveryOnly = false } = {}) {
   const config = cloudConfig(bindings);
+  let nextJoke = null;
+  try { nextJoke = JSON.parse(bindings.RITM_BITRIX_NEXT_ASSIGNMENT_JOKE || 'null'); } catch { /* no one-time owner request */ }
   const reader = new CloudSheetsReader(bindings, { fetcher });
   const writerCredentials = bindings.RITM_GOOGLE_WRITER_JSON ? new CloudSheetsReader(bindings, { writer: true, fetcher }) : reader;
   const guard = async (documentId = null) => {
@@ -40,24 +47,42 @@ export async function createServices(bindings, scope, { fetcher = fetch, refresh
     }
     return cloudFetch(fetcher,url.href,init);
   };
-  const writers = reader.configured ? Object.fromEntries(Object.entries(DEPARTMENTS).map(([department, target]) => [department, new ProductionSupplyWriter({ department, credentialWriter: writerCredentials, fetcher: guardedFetch, beforeWrite: () => guard(target.documentId), documentId: target.documentId, template: target.template, ...(department === 'roll' ? { layoutLookup: () => readMachineLayoutArticles(reader, sourceId(bindings, 'machineLayoutsId')) } : {}) })])) : null;
+  // guardedFetch performs the durable guard immediately before every Sheets write.
+  // A second beforeWrite hook would checkpoint the same lease twice per request.
+  const writers = reader.configured ? Object.fromEntries(Object.entries(DEPARTMENTS).map(([department, target]) => [department, new ProductionSupplyWriter({ department, credentialWriter: writerCredentials, fetcher: guardedFetch, documentId: target.documentId, template: target.template, ...(department === 'roll' ? { layoutLookup: () => readMachineLayoutArticles(reader, sourceId(bindings, 'machineLayoutsId')) } : {}) })])) : null;
   const queue = new AssemblySyncQueue(scope, { secret: bindings.RITM_ASSEMBLY_SYNC_SECRET || "", fetchImpl: (...args) => cloudFetch(fetcher,...args), beforeDeliver: () => guard() });
   // No process-owned timers in Sites. Requests and the protected maintenance
   // endpoint drain the same durable outbox; the scheduler survives closed tabs.
   queue.schedule = () => {};
+  if (deliveryOnly) return { queue, guard };
   let latestPrinting = printing;
   const refreshPrinting = refresh ? async () => {
     await scope.checkpoint();
     latestPrinting = await refresh(scope);
     return { ok: latestPrinting.ok === true, partial: latestPrinting.partial === true };
   } : null;
-  const legacy = new RollSupplyManagementService(scope, { writer: writers?.roll || null, recoverInterrupted: !!scope.lease, refresh: refreshPrinting, getPrintingSnapshot: () => latestPrinting });
+  const legacy = new RollSupplyManagementService(scope, { writer: writers?.roll || null, recoverInterrupted: !!scope.lease, refresh: refreshPrinting, getPrintingSnapshot: () => latestPrinting, readItemSnapshot: readItemSnapshot && (payload => readItemSnapshot(reader, payload)), refreshAfterWrite: !readItemSnapshot });
   const production = new ProductionSupplyService(scope, {
     writers, legacy, recoverInterrupted: !!scope.lease, refresh: refreshPrinting,
     // The two department writes are already read back and committed before
     // the response. A full source scan must not hold the production write
     // lease or keep the manager's create button disabled.
     refreshAfterWrite: false,
+    onVerified: op => {
+      if (op.action === 'create') {
+        const watches = scope.meta('arkadyWatchConfigs') || {};
+        if (!watches[op.shipmentId]) {
+          watches[op.shipmentId] = {priority: op.priority || 'normal', reminderMinutes: op.priority === 'urgent' ? (op.reminderMinutes ?? 0) : 0, createdAt: op.createdAt || op.updatedAt};
+          scope.meta('arkadyWatchConfigs', watches);
+          // A newly created task starts before any work, unlike older supplies
+          // that are baselined on the first confirmed observation.
+          const states = scope.meta('arkadyWatchStates') || {};
+          for (const step of op.steps || []) if (['roll','box'].includes(step.department)) states[`${op.shipmentId}:${step.department}`] ||= {print:false,cut:false};
+          scope.meta('arkadyWatchStates', states);
+        }
+      }
+      queueBitrixNotifications(scope, op, { kind: 'production', manager, nextJoke, documentIds:{roll:DEPARTMENTS.roll.documentId,box:DEPARTMENTS.box.documentId}, enabled: !!scope.meta('bitrixNotificationConfig') && scope.meta('bitrixNotificationsEnabled') !== false });
+    },
     beforeCreateWrite: async (operation) => {
       const shipmentIds = (operation.steps || []).map((step) => {
         const sheetId = Number(step?.plan?.sheetId);
@@ -87,7 +112,30 @@ export async function createServices(bindings, scope, { fetcher = fetch, refresh
   if (Array.isArray(legacyPreviews) && legacyPreviews.length) scope.meta("productionPreviewCache", []);
   production.previews = new Map();
   const transfer = new AssemblyTransferService(scope, { reader, queue, backfill: !!scope.lease });
-  return { reader, writers, legacy, production, transfer, queue, guard,
+  const stock = () => {
+    const boxId=sourceId(bindings,'stockBoxPrintingId'),rollId=sourceId(bindings,'stockRollPrintingId');
+    if(!boxId||!rollId)throw new CloudError('stock_sources_unconfigured','Таблицы запасов ещё не подключены.',503);
+    const layouts=()=>readMachineLayoutArticles(reader,sourceId(bindings,'machineLayoutsId'));
+    const rollHistories=new WeakMap();
+    const rollReadiness=async args=>{
+      if(!rollHistories.has(args.snapshot))rollHistories.set(args.snapshot,readRollStockHistory(reader,rollId));
+      return rollStockReadiness({...args,...await rollHistories.get(args.snapshot),sheetName:args.destination==='warehouse'?'Запасы склад':'Срочные 2 этаж'});
+    };
+    // Receipt inspection uses an existing dry-run contract. These are the two
+    // live deployments whose versioned source was checked for that contract.
+    // Unknown endpoints remain fully guarded instead of probing a possible writer.
+    const gateway=(department,id)=>{
+      const url=bindings[`RITM_STOCK_${department.toUpperCase()}_GATEWAY_URL`];
+      return createStockGateway({url,token:bindings[`RITM_STOCK_${department.toUpperCase()}_GATEWAY_TOKEN`],fetcher,beforeWrite:()=>guard(id),dryRunSupported:stockGatewaySupportsDryRun(department,url)});
+    };
+    const adapters={
+      box:new StockSheetsAdapter({reader,writer:gateway('box',boxId),spreadsheetId:boxId,department:'box',layouts,readiness:boxStockReadiness}),
+      roll:new StockSheetsAdapter({reader,writer:gateway('roll',rollId),spreadsheetId:rollId,department:'roll',layouts,readiness:rollReadiness}),
+    };
+    const operations={get:id=>structuredClone(scope.operations.get('stock:'+id)?.value||null),put:op=>{scope.putOperation('stock',op);queueBitrixNotifications(scope,op,{kind:'stock',manager,nextJoke,documentIds:{roll:rollId,box:boxId},enabled:!!scope.meta('bitrixNotificationConfig') && scope.meta('bitrixNotificationsEnabled') !== false});},pending:()=>[...scope.operations.values()].filter(row=>row.kind==='stock'&&!['verified','not_saved'].includes(row.value?.status)).map(row=>row.value)};
+    return new StockOperations({store:operations,adapters,catalog:()=>production.catalog(),checkpoint:()=>guard(),manager});
+  };
+  return { reader, writers, legacy, production, transfer, queue, guard, stock,
     savePreviews() {},
     state() {
       const state = legacy.state();

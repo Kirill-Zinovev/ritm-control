@@ -39,6 +39,19 @@ test("manager session is attached only to allowed same-origin RITM APIs", async 
       assert.equal(new Headers(call.init?.headers).get("authorization"), `Bearer ${token}`);
     for (const call of calls.slice(7))
       assert.equal(new Headers(call.init?.headers).has("authorization"), false);
+    await window.fetch('/api/stocks/preview', {method:'POST'});
+    await window.fetch('/api/stocks', {method:'POST'});
+    for(const call of calls.slice(10)) assert.equal(new Headers(call.init?.headers).get('authorization'),`Bearer ${token}`);
+    await window.fetch('/api/assembly-stocks');
+    assert.equal(new Headers(calls.at(-1).init.headers).get('authorization'), `Bearer ${token}`);
+    await window.fetch('https://other.test/api/assembly-stocks');
+    assert.equal(new Headers(calls.at(-1).init?.headers).has('authorization'), false);
+    for (const path of ['/api/box-position-removal?id=test', '/api/box-position-removal', '/api/production-moves?id=test', '/api/production-moves', '/api/production-moves/batch?id=test', '/api/production-moves/batch', '/api/warehouse/dispatch/batch']) {
+      await window.fetch(path, {method: path.includes('?') ? 'GET' : 'POST'});
+      assert.equal(new Headers(calls.at(-1).init.headers).get('authorization'), `Bearer ${token}`);
+    }
+    await window.fetch('https://other.test/api/production-moves');
+    assert.equal(new Headers(calls.at(-1).init?.headers).has('authorization'), false);
     clearManagerSession();
     assert.equal(values.size, 0);
   } finally {

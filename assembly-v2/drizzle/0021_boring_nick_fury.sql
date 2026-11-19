@@ -1,0 +1,1 @@
+ALTER TABLE `av2_stock_cut_work` ADD `comment` text DEFAULT '' NOT NULL;

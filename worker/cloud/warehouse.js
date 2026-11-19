@@ -6,7 +6,7 @@ import { CloudSheetsReader } from "./googleSheets.js";
 
 const definitions = [
   { name: "Cartons", endColumn: "P", minColumns: 16, required: ["cartonId", "directionId", "Направление", "Номер", "Занято, шт", "Статус", "createdAt", "closedAt", "shipmentId"] },
-  { name: "CartonContents", endColumn: "M", minColumns: 13, required: ["allocationId", "cartonId", "shipmentId", "directionId", "positionId", "Артикул", "Количество, шт", "createdAt", "action", "sourceAllocationId"] },
+  { name: "CartonContents", endColumn: "O", minColumns: 13, required: ["allocationId", "cartonId", "shipmentId", "directionId", "positionId", "Артикул", "Количество, шт", "createdAt", "action", "sourceAllocationId"] },
 ];
 const maxRows = 20000;
 const ritmShipmentId = /^RITM-(?:ROLL-\d+|BOX-\d+|SUPPLY-[a-f0-9-]{36})$/i;
@@ -28,6 +28,23 @@ export function activeWarehouseShipmentIds(printing) {
   return ids;
 }
 
+export function activeWarehouseShipmentInfo(printing) {
+  if (printing?.ok !== true || !Array.isArray(printing.sheets)) return null;
+  const result = Object.create(null);
+  for (const sheet of printing.sheets) {
+    const source = text(sheet?.sourceId);
+    if (source !== "roll-printing" && source !== "box-printing") continue;
+    const sheetId = Number(sheet?.sheetId);
+    if (!Number.isSafeInteger(sheetId) || sheetId <= 0) return null;
+    const id = text(sheet?.assemblyShipmentId) || (source === "roll-printing" ? `RITM-ROLL-${sheetId}` : `RITM-BOX-${sheetId}`);
+    const name = text(sheet?.name);
+    if (!ritmShipmentId.test(id) || !name) return null;
+    if (result[id] && result[id].name !== name) return null;
+    result[id] = { name, directionId: "ROLL" };
+  }
+  return result;
+}
+
 function cellValue(cell) {
   if (cell?.effectiveValue?.errorValue) throw new CloudError("warehouse_cell_error", "В таблице коробов обнаружена ошибка ячейки. Проверьте источник.");
   const value = cell?.effectiveValue || cell?.userEnteredValue || {};
@@ -41,7 +58,7 @@ function describe(metadata, documentId) {
     const rows = properties?.gridProperties?.rowCount, columns = properties?.gridProperties?.columnCount;
     if (found.length !== 1 || !Number.isSafeInteger(properties?.sheetId) || !Number.isSafeInteger(rows) || rows < 1 || rows > maxRows || !Number.isSafeInteger(columns) || columns < definition.minColumns)
       throw new CloudError("warehouse_schema_unavailable", "Не удалось подтвердить структуру листов коробов Assembly.");
-    return { ...definition, sheetId: properties.sheetId, rows, columns };
+    return { ...definition, endColumn: definition.name === "CartonContents" && columns < 15 ? "M" : definition.endColumn, sheetId: properties.sheetId, rows, columns };
   });
 }
 function extract(grid, documentId, sheets) {
@@ -59,7 +76,7 @@ function extract(grid, documentId, sheets) {
   });
 }
 
-export async function loadWarehouse(reader, bindings, { signal, now = Date.now, activeShipmentIds = null } = {}) {
+export async function loadWarehouse(reader, bindings, { signal, now = Date.now, activeShipmentIds = null, shipmentInfo = null } = {}) {
   const documentId = sourceId(bindings, "assemblyDatabaseId");
   if (!documentId) throw new CloudError("warehouse_source_unconfigured", "Источник коробов Assembly не настроен.");
   const catalogPromise = readProductionShopCatalog(reader, signal).catch(() => null);
@@ -79,10 +96,39 @@ export async function loadWarehouse(reader, bindings, { signal, now = Date.now, 
   if (sheets.some((sheet, index) => sheet.sheetId !== finalSheets[index].sheetId || sheet.rows !== finalSheets[index].rows || sheet.columns !== finalSheets[index].columns))
     throw new CloudError("warehouse_changing", "Структура коробов изменилась во время чтения. Повторите обновление.", 409);
   const [catalog, photos] = await Promise.all([catalogPromise, photoPromise]);
-  return buildWarehouseSnapshot(second[0], second[1], { catalog, photos, checkedAt: new Date(now()).toISOString(), activeShipmentIds });
+  return buildWarehouseSnapshot(second[0], second[1], { catalog, photos, checkedAt: new Date(now()).toISOString(), activeShipmentIds, shipmentInfo, includeArchived: true });
 }
 
-export async function readWarehouseSnapshot(url, bindings, store, { fetcher = fetch, activeShipmentIds = null, rosterStale = false } = {}) {
+// Dispatch changes a physical carton's status, not a production plan. Reuse the
+// known source identities but verify the actual Assembly carton/journal twice;
+// a failing refresh of unrelated printing sheets must not block the warehouse.
+export async function readWarehouseForDispatch(bindings, store, { fetcher = fetch, reader } = {}) {
+  const printing = (await store.snapshot('printing'))?.value;
+  if (!activeWarehouseShipmentIds(printing)) throw new CloudError('warehouse_supply_roster_unavailable', 'Сначала загрузите склад: связи поставок ещё не получены. Статусы не изменены.', 503);
+  const sourceReader=reader || new CloudSheetsReader(bindings, { fetcher });
+  // Reconfirm just the production tab identities, not every production metric.
+  // Deleted/hidden/renamed supplies cannot acquire a new dispatch status.
+  const documents=new Map();
+  for(const sheet of printing.sheets){
+    const source=sheet.sourceId==='roll-printing'?'rollPrintingId':sheet.sourceId==='box-printing'?'boxPrintingId':null;
+    if(source)documents.set(sheet.sourceId,sourceId(bindings,source));
+  }
+  const properties=new Map(await Promise.all([...documents].map(async([source,id])=>{
+    if(!id)throw new CloudError('warehouse_supply_roster_unavailable','Не настроена таблица производственных заданий.',503);
+    const metadata=await sourceReader.metadata(id);
+    if(metadata.spreadsheetId!==id||!Array.isArray(metadata.sheets))throw new CloudError('warehouse_source_mismatch','Не удалось подтвердить таблицу заданий.',503);
+    return [source,new Map(metadata.sheets.map(sheet=>[sheet.properties?.sheetId,sheet.properties]))];
+  })));
+  const confirmed={ok:true,sheets:printing.sheets.filter(sheet=>{
+    const property=properties.get(sheet.sourceId)?.get(Number(sheet.sheetId));
+    return property&&!property.hidden&&property.title===sheet.name;
+  })};
+  return loadWarehouse(sourceReader, bindings, {
+    now: () => store.now(), activeShipmentIds:activeWarehouseShipmentIds(confirmed), shipmentInfo:activeWarehouseShipmentInfo(confirmed),
+  });
+}
+
+export async function readWarehouseSnapshot(url, bindings, store, { fetcher = fetch, activeShipmentIds = null, shipmentInfo = null, rosterStale = false } = {}) {
   const snapshot = await store.snapshot("warehouse");
   const publicSnapshot = (value, options = {}) => {
     const { activeShipmentIds: _ids, activeShipmentFingerprint: _fingerprint, ...visible } = value;
@@ -93,8 +139,8 @@ export async function readWarehouseSnapshot(url, bindings, store, { fetcher = fe
     throw new CloudError("warehouse_supply_roster_unavailable", "Не удалось подтвердить список действующих поставок. Обновите данные позже.", 503);
   }
   const activeIds = [...activeShipmentIds].sort();
-  const activeShipmentFingerprint = activeIds.join("\n");
-  const current = snapshot?.value?.activeShipmentFingerprint === activeShipmentFingerprint;
+  const activeShipmentFingerprint = activeIds.map(id => `${id}:${shipmentInfo?.[id]?.name || ""}`).join("\n");
+  const current = snapshot?.value?.warehouseStockVersion === 1 && snapshot?.value?.warehouseArchiveVersion === 1 && snapshot?.value?.activeShipmentFingerprint === activeShipmentFingerprint;
   if (snapshot && current && url.searchParams.get("refresh") !== "1" && store.now() - snapshot.at < cloudConfig(bindings).snapshotMaxAgeMs)
     return publicSnapshot(snapshot.value, rosterStale
       ? { stale: true, snapshotAt: new Date(snapshot.at).toISOString(), staleReason: "Не удалось подтвердить свежесть списка поставок. Показан последний проверенный снимок." }
@@ -102,7 +148,7 @@ export async function readWarehouseSnapshot(url, bindings, store, { fetcher = fe
   let lease;
   try {
     lease = await store.acquire("refresh:warehouse", 60000);
-    const value = await loadWarehouse(new CloudSheetsReader(bindings, { fetcher }), bindings, { now: () => store.now(), activeShipmentIds });
+    const value = await loadWarehouse(new CloudSheetsReader(bindings, { fetcher }), bindings, { now: () => store.now(), activeShipmentIds, shipmentInfo });
     value.activeShipmentFingerprint = activeShipmentFingerprint;
     value.activeShipmentIds = activeIds;
     await store.saveSnapshot("warehouse", value, lease);

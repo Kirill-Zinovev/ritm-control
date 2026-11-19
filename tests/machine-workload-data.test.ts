@@ -141,9 +141,9 @@ test("equal supply names never merge different identities, and a failed read can
 });
 
 test('catalog equipment selects its workload lane without moving source jobs or changing facts',()=>{
- const order=row({article:'NT0006.A4692',machine:'УФ планшет',machineSource:'catalog',quantity:60,printProgress:15,cutProgress:null});
+ const order=row({article:'NT0006.A4692',machine:'УФ планшет',sourceMachine:'2-GO',machineSource:'catalog',quantity:60,printProgress:15,cutProgress:null});
  const input=snapshot([order]);const groups=buildMachineWorkload(input);
  assert.equal(groups[0].machines[0].id,'uv-flatbed');assert.equal(groups[0].machines[0].department,'box');
  assert.equal(groups[0].machines[0].printed.value,15);assert.equal(groups[0].plan,60);
- assert.equal(order.sourceId,'roll-printing');assert.equal(input.supplies.length,1);assert.ok(groups[0].machines[0].rows[0].issue);
+ assert.equal(order.sourceId,'roll-printing');assert.equal(input.supplies.length,1);assert.match(groups[0].machines[0].rows[0].issue, /рулонной печати.*2-GO.*УФ-планшет/);
 });

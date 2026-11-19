@@ -230,7 +230,9 @@ function googleHarness({
           replies.push({});
         } else if (request.appendDimension) {
           const { sheetId,dimension,length }=request.appendDimension;
-          assert.equal(dimension,"COLUMNS");sheets.get(sheetId).properties.gridProperties.columnCount+=length;replies.push({});
+          const sh=sheets.get(sheetId);
+          if(dimension==='ROWS'){sh.properties.gridProperties.rowCount+=length;sh.data[0].rowData.push(...Array.from({length},()=>({values:[]})));}
+          else {assert.equal(dimension,"COLUMNS");sh.properties.gridProperties.columnCount+=length;}replies.push({});
         } else if (request.copyPaste) {
           const { source, destination } = request.copyPaste;
           const sheet = sheets.get(source.sheetId);
@@ -455,7 +457,8 @@ test("new roll supply records layout availability per article and verifies formu
   const cells = google.sheets.get(plan.sheetId).data[0].rowData;
   assert.match(cells[4].values[2].userEnteredValue.formulaValue, /"Есть"/);
   assert.match(cells[5].values[2].userEnteredValue.formulaValue, /"Не в таблице макетов"/);
-  assert.match(cells[4].values[2].userEnteredValue.formulaValue, /Проверить макет/);
+  assert.match(cells[4].values[2].userEnteredValue.formulaValue, /_RITM_МАКЕТЫ/);
+  assert.match(cells[4].values[2].userEnteredValue.formulaValue, /Макет не готов/);
 });
 
 test("unavailable layout catalog prevents production writes", async () => {
@@ -512,10 +515,10 @@ test("new supply clears template data, renames the heading and initializes print
     assert.equal(rows[8].values[24].userEnteredValue, undefined);
     assert.equal(rows[193].values[29].userEnteredValue, undefined);
     const leavesFormula = rows[4].values[6].userEnteredValue.formulaValue;
-    assert.ok(leavesFormula.indexOf("'БДО'!B:O;5;0") < leavesFormula.indexOf("'_RITM_WB_SOURCE'!A:E;2;0"));
+    assert.ok(leavesFormula.indexOf("'Cache FBO'!B:O;5;0") < leavesFormula.indexOf("'_RITM_WB_SOURCE'!A:E;2;0"));
     assert.equal(rows[4].values[1].userEnteredValue.formulaValue, "=IMAGE(E5)");
     assert.equal(rows[4].values[2].userEnteredValue.formulaValue, "=LOOKUP(E5)");
-    assert.match(rows[4].values[3].userEnteredValue.formulaValue, /'БДО'!B:O;14;0/);
+    assert.match(rows[4].values[3].userEnteredValue.formulaValue, /'Cache FBO'!B:O;14;0/);
     const saved = h.store.rollSupplyOperation(
       "11111111-1111-4111-8111-111111111111",
     );
@@ -786,7 +789,7 @@ test("create carries a proven missing formula into the new copy only", async () 
     assert.match(copiedRow[8].userEnteredValue.formulaValue, /REGEXEXTRACT\(TO_TEXT\(H80\)/);
     assert.match(copiedRow[9].userEnteredValue.formulaValue, /REGEXEXTRACT\(TO_TEXT\(H80\)/);
     assert.match(copiedRow[10].userEnteredValue.formulaValue, /G80\*I80\*J80\*P80/);
-    assert.match(copiedRow[6].userEnteredValue.formulaValue, /'БДО'!B:O;5;0/);
+    assert.match(copiedRow[6].userEnteredValue.formulaValue, /'Cache FBO'!B:O;5;0/);
     const sourceRow = h.google.sheets.get(ROLL_PRINTING_SHEET.gid).data[0].rowData[79].values;
     assert.equal(sourceRow[8].userEnteredValue, undefined);
     const operation = h.store.rollSupplyOperation(
@@ -806,7 +809,7 @@ test("a literal size in the template is replaced by a verified lookup in the new
     const lines = Array.from({ length: 8 }, (_, index) => ({ article: `TEST-${index}`, quantity: 10 }));
     const result = await h.service.execute(payload("62626262-6262-4262-8262-626262626262", { lines }));
     const row = h.google.sheets.get(result.sheetId).data[0].rowData[11].values;
-    assert.match(row[7].userEnteredValue.formulaValue, /'БДО'!B:O;6;0/);
+    assert.match(row[7].userEnteredValue.formulaValue, /'Cache FBO'!B:O;6;0/);
     assert.match(row[8].userEnteredValue.formulaValue, /REGEXEXTRACT\(TO_TEXT\(H12\)/);
     assert.equal(h.google.sheets.get(ROLL_PRINTING_SHEET.gid).data[0].rowData[11].values[7].userEnteredValue.stringValue, "100x40");
   } finally { h.store.close(); }
@@ -819,7 +822,7 @@ test("WB supplies use WB only, while normalizing the OZ suffix", async () => {
     const row = h.google.sheets.get(result.sheetId).data[0].rowData[4].values;
     const f = row[7].userEnteredValue.formulaValue;
     assert.ok(f.includes("'_RITM_WB_SOURCE'!A:E;3;0"));
-    assert.ok(!f.includes("'БДО'!B:O"));
+    assert.ok(!f.includes("'Cache FBO'!B:O"));
     assert.match(f, /REGEXREPLACE\(UPPER\(TRIM\(\$E5\)\)/);
   } finally { h.store.close(); }
 });
@@ -1020,7 +1023,7 @@ test("append inserts new articles at the top and preserves existing rows", async
       sheet.data[0].rowData[4].values[24].userEnteredValue.numberValue,
       8,
     );
-    assert.match(sheet.data[0].rowData[4].values[6].userEnteredValue.formulaValue, /'БДО'!B:O;5;0/);
+    assert.match(sheet.data[0].rowData[4].values[6].userEnteredValue.formulaValue, /'Cache FBO'!B:O;5;0/);
     assert.notEqual(
       sheet.data[0].rowData[4].values[29].userEnteredValue.stringValue,
       "old-uid-5",
@@ -1041,7 +1044,7 @@ test("append inserts new articles at the top and preserves existing rows", async
       sheet.data[0].rowData[5].values[29].userEnteredValue.stringValue,
       originalRow.values[29].userEnteredValue.stringValue,
     );
-    assert.match(originalRow.values[6].userEnteredValue.formulaValue, /'БДО'!B:O;5;0/);
+    assert.match(originalRow.values[6].userEnteredValue.formulaValue, /'Cache FBO'!B:O;5;0/);
     const appendBatch = h.google.requests[1];
     assert.equal(
       appendBatch.some((request) => request.duplicateSheet),
@@ -1055,13 +1058,31 @@ test("append inserts new articles at the top and preserves existing rows", async
             .map((request) => request.updateCells.start.columnIndex),
         ),
       ].sort((a, b) => a - b),
-      [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 24, 29],
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 24, 29],
     );
     assert.ok(appendBatch.some((request) => request.insertDimension));
-    assert.ok(appendBatch.some((request) => request.copyPaste));
+    assert.equal(appendBatch.some((request) => request.copyPaste), false, 'filtered source rows must not require copyPaste');
   } finally {
     h.store.close();
   }
+});
+
+test("new and appended OZON roll rows resolve multiplicity from the existing FBO catalog import", async () => {
+  const h = makeService();
+  try {
+    const created = await h.service.execute(payload("a130b130-c130-4130-8130-a130b130c130"));
+    const sheet = h.google.sheets.get(created.sheetId);
+    const formula = () => sheet.data[0].rowData[4].values[13].userEnteredValue.formulaValue;
+    assert.match(formula(), /'Cache FBO'!\$B:\$Q;16;FALSE/);
+    assert.match(formula(), /IF\(\$E5="";"";/);
+    assert.ok(!formula().includes('IMPORTRANGE'), 'reuse the workbook-level import');
+    assert.ok(!formula().includes('WB'), 'OZON multiplicity never comes from another marketplace');
+    await h.service.execute({ action: 'append', explicitWriteApproval: true,
+      operationId: 'b130b130-c130-4130-8130-a130b130c130', name: created.name, sheetId: created.sheetId,
+      lines: [{ article: 'JA0037.A0470', quantity: 30 }] });
+    assert.match(formula(), /'Cache FBO'!\$B:\$Q;16;FALSE/);
+    assert.ok(!formula().includes('IFERROR'), 'unknown or invalid catalog values must not become a fabricated factor');
+  } finally { h.store.close(); }
 });
 
 test("append preserves orphan service IDs and scans beyond the old 504-row range", async () => {
@@ -1132,6 +1153,34 @@ test("lost Google write response becomes uncertain and cannot trigger a retry", 
   } finally {
     h.store.close();
   }
+});
+
+test("an interrupted removal advances only after exact readback and never writes again", async t => {
+  const store = new IncidentStore(":memory:");
+  t.after(() => store.close());
+  const id = "77777777-7777-4777-8777-777777777777";
+  const removal = { row: 17, uid: "actual-uid", shipmentId: "RITM-ROLL-10", wasLastSource: false };
+  const input = { sheetId: 10, name: "OZON ТЕСТ", article: "TEST-001", removal };
+  const at = new Date().toISOString();
+  store.beginRollSupplyOperation(id, "removeItem", "request-hash", input, at);
+  store.updateRollSupplyOperation(id, "written_unverified", {}, at);
+  let removed = false;
+  const service = new RollSupplyManagementService(store, {
+    writer: {
+      execute: () => assert.fail("recovery attempted a second write"),
+      verify: async proof => {
+        assert.deepEqual(proof, { action: "removeItem", ...removal, sheetId: 10, name: input.name, article: input.article });
+        if (!removed) throw new Error("UID still on the sheet");
+        return { sheetId: 10, row: 17 };
+      },
+    },
+  });
+  await assert.rejects(service.reconcileItemRemoval(store.rollSupplyOperation(id)), /UID still on the sheet/);
+  assert.equal(store.rollSupplyOperation(id).status, "written_unverified");
+  removed = true;
+  assert.equal(await service.reconcileItemRemoval(store.rollSupplyOperation(id)), true);
+  assert.equal(store.rollSupplyOperation(id).status, "verified");
+  assert.equal(store.rollSupplyOperation(id).result.shipmentId, removal.shipmentId);
 });
 
 test("failed readback is recorded as written-unverified and is not repeated", async () => {
@@ -1236,4 +1285,101 @@ test("new box has extension F, shifted calculations and neutral appearance; orig
   const append = await restarted.prepareAppend({ operationId: "14141414-1414-4414-8414-141414141414", name: input.name, sheetId: plan.sheetId, lines: [{ article: "SECOND", quantity: 4, extension: "DTF" }], registeredSheets: [{ gid: plan.sheetId, name: input.name }] });
   await restarted.execute(append); await restarted.verify(append);
   assert.equal(google.sheets.get(plan.sheetId).data[0].rowData[4].values[5].userEnteredValue.stringValue, "DTF");
+});
+
+for(const department of ['box','roll'])test('transfer appends at end without shifting legacy '+department+' identities',async()=>{
+ const google=googleHarness({box:department==='box'});
+ const writer=new ProductionSupplyWriter({department,credentialWriter:{token:async()=>"test-token",metrics:{}},fetcher:google.fetcher});
+ const input=payload("15151515-1515-4515-8515-151515151515",{lines:[{article:'OLD',quantity:12,extension:'X'}]});
+ const created=await writer.prepareCreate(input);await writer.execute(created);await writer.verify(created);
+ const sh=google.sheets.get(created.sheetId);sh.data[0].rowData[4].values[29]={};
+ const before=structuredClone(sh.data[0].rowData),count=sh.properties.gridProperties.rowCount;
+ const args={operationId:"16161616-1616-4616-8616-161616161616",name:input.name,sheetId:created.sheetId,lines:[{article:'NEW',quantity:50,extension:'X'}],registeredSheets:[{gid:created.sheetId,name:input.name}]};
+ await assert.rejects(writer.prepareAppend(args),/строка 5.*OLD.*служебный ID/);
+ const plan=await writer.prepareAppend({...args,preserveExistingRows:true});
+ assert.equal(plan.startRow,count+1);assert.equal(plan.existingRows[0].uid,'');
+ await writer.execute(plan);await writer.verify(plan);
+ assert.deepEqual(sh.data[0].rowData.slice(0,count),before);
+ assert.equal(sh.data[0].rowData[count].values[4].userEnteredValue.stringValue,'NEW');
+ assert.equal(sh.data[0].rowData[count].values[15].userEnteredValue.numberValue,50);
+ assert.ok(google.requests.at(-1).some(r=>r.appendDimension?.dimension==='ROWS'));
+ assert.equal(google.requests.at(-1).some(r=>r.insertDimension),false);
+ if(department==='box')assert.deepEqual([24,25,27,28].map(i=>sh.data[0].rowData[count].values[i].userEnteredValue.numberValue),[0,0,0,0]);
+});
+
+for(const department of ['box','roll'])test(`append repairs frozen ${department} progress formulas in the same write without changing existing orders`,async()=>{
+ const google=googleHarness({box:department==='box'}),writer=new ProductionSupplyWriter({department,credentialWriter:{token:async()=> 'test-token',metrics:{}},fetcher:google.fetcher});
+ const input=payload('17171717-1717-4717-8717-171717171717',{lines:[{article:'OLD',quantity:12,extension:'X'}]});
+ const created=await writer.prepareCreate(input);await writer.execute(created);await writer.verify(created);
+ const sheet=google.sheets.get(created.sheetId),old=structuredClone(sheet.data[0].rowData[4]);
+ for(const row of sheet.data[0].rowData.slice(1,3))for(const cell of row.values||[])if(cell.userEnteredValue?.formulaValue)cell.userEnteredValue.formulaValue=cell.userEnteredValue.formulaValue.replace(/([A-Z]+5:[A-Z]+)(?![A-Z\d])/g,'$1100');
+ const plan=await writer.prepareAppend({operationId:'18181818-1818-4818-8818-181818181818',name:input.name,sheetId:created.sheetId,lines:[{article:'NEW',quantity:30,extension:'X'}],registeredSheets:[{gid:created.sheetId,name:input.name}],preserveExistingRows:true});
+ assert.equal(plan.progressHeaderRepairs.length,4);await writer.execute(plan);
+ assert.deepEqual(sheet.data[0].rowData[4],old);
+ const formulas=google.requests.at(-1).filter(r=>r.updateCells?.start.rowIndex<3).map(r=>r.updateCells.rows[0].values[0].userEnteredValue?.formulaValue).filter(Boolean);
+ assert.equal(formulas.length,4);assert.ok(formulas.every(f=>!/[A-Z]+5:[A-Z]+100\b/.test(f)));
+});
+
+test('recovery inserts a fresh row even if another editor appends after the absence check',async()=>{
+ const google=googleHarness(),writer=new ProductionSupplyWriter({department:'roll',credentialWriter:{token:async()=> 'test-token',metrics:{}},fetcher:google.fetcher});
+ const input=payload('17171717-1717-4717-8717-171717171717',{lines:[{article:'OLD',quantity:12,extension:'X'}]});
+ const created=await writer.prepareCreate(input);await writer.execute(created);await writer.verify(created);
+ const plan=await writer.prepareAppend({operationId:'18181818-1818-4818-8818-181818181818',name:input.name,sheetId:created.sheetId,lines:[{article:'NEW',quantity:30,extension:'L'}],registeredSheets:[{gid:created.sheetId,name:input.name}],preserveExistingRows:true});
+ assert.equal(await writer.verifyAbsentMoveDestination(plan),true);
+ const sheet=google.sheets.get(created.sheetId),other={values:Array.from({length:30},()=>({}))};
+ other.values[4]={userEnteredValue:{stringValue:'OTHER'}};other.values[15]={userEnteredValue:{numberValue:99}};
+ sheet.data[0].rowData.push(other);sheet.properties.gridProperties.rowCount++;
+ await writer.execute({...plan,recoveryInsert:true});
+ assert.equal(sheet.data[0].rowData[plan.startRow-1].values[4].userEnteredValue.stringValue,'NEW');
+ assert.deepEqual(sheet.data[0].rowData[plan.startRow],other);
+ assert.ok(google.requests.at(-1).some(r=>r.insertDimension?.range.startIndex===plan.startRow-1));
+});
+
+for(const department of ['box','roll'])for(const count of [2,10])test(`real ${department} writer validates and appends an immutable ${count}-position transfer group`,async()=>{
+ const google=googleHarness({box:department==='box'});
+ const writer=new ProductionSupplyWriter({department,credentialWriter:{token:async()=> 'test-token',metrics:{}},fetcher:google.fetcher});
+ const input=payload('17171717-1717-4717-8717-171717171717',{lines:[{article:'OLD',quantity:12,extension:'X'}]});
+ const created=await writer.prepareCreate(input);await writer.execute(created);await writer.verify(created);
+ const lines=Array.from({length:count},(_,i)=>({article:'GROUP-'+i,quantity:10+i,extension:'X'}));
+ const plan=await writer.prepareAppend({operationId:'18181818-1818-4818-8818-181818181818',name:input.name,sheetId:created.sheetId,lines,registeredSheets:[{gid:created.sheetId,name:input.name}],preserveExistingRows:true});
+ const sheet=google.sheets.get(created.sheetId),before=structuredClone(sheet.data[0].rowData),writes=google.counters.writes;
+ assert.equal(await writer.verifyAbsentMoveDestination(plan),true);assert.equal(await writer.verifyAbsentMoveDestination(plan),true);assert.equal(google.counters.writes,writes);
+ for(const alter of [p=>p.uids.pop(),p=>p.uids[1].row++,p=>p.uids[1].uid=p.uids[0].uid,p=>p.lines[1].article=p.lines[0].article,p=>p.lines[1].quantity=0]){
+  const changed=structuredClone(plan);alter(changed);await assert.rejects(writer.verifyAbsentMoveDestination(changed),/план восстановления/);
+ }
+ await writer.execute(plan);await writer.verify(plan);
+ assert.deepEqual(sheet.data[0].rowData.slice(0,before.length),before,'old rows and their identities remain unchanged');
+ assert.deepEqual(sheet.data[0].rowData.slice(plan.startRow-1,plan.startRow-1+count).map(r=>r.values[4].userEnteredValue.stringValue),lines.map(l=>l.article));
+ const accepted=google.counters.writes;await assert.rejects(writer.verifyAbsentMoveDestination(plan),/изменился/);assert.equal(google.counters.writes,accepted,'a completed append cannot be repeated as absent');
+});
+
+test('recovery refuses when existing destination content or row count changed',async()=>{
+ const google=googleHarness(),writer=new ProductionSupplyWriter({department:'roll',credentialWriter:{token:async()=> 'test-token',metrics:{}},fetcher:google.fetcher});
+ const input=payload('19191919-1919-4919-8919-191919191919',{lines:[{article:'OLD',quantity:12,extension:'X'}]});
+ const created=await writer.prepareCreate(input);await writer.execute(created);
+ const plan=await writer.prepareAppend({operationId:'20202020-2020-4020-8020-202020202020',name:input.name,sheetId:created.sheetId,lines:[{article:'NEW',quantity:30,extension:'L'}],registeredSheets:[{gid:created.sheetId,name:input.name}],preserveExistingRows:true});
+ const sheet=google.sheets.get(created.sheetId);sheet.data[0].rowData[4].values[15]={userEnteredValue:{numberValue:13}};
+ await assert.rejects(writer.verifyAbsentMoveDestination(plan),/изменился/);
+});
+
+for (const legacy of [false,true]) test(`filtered destination template appends with explicit formulas, including ${legacy?'legacy durable':'new'} plan`,async()=>{
+  const google=googleHarness();
+  const fetcher=async(url,options={})=>{
+    if(options.body && JSON.parse(options.body).requests?.some(r=>r.copyPaste))
+      return new Response(JSON.stringify({error:{status:'INVALID_ARGUMENT',message:'This operation is not supported on a range with a filtered out row.'}}),{status:400});
+    return google.fetcher(url,options);
+  };
+  const writer=new ProductionSupplyWriter({department:'roll',credentialWriter:{token:async()=> 'test-token',metrics:{}},fetcher});
+  const input=payload('21212121-2121-4121-8121-212121212121',{lines:[{article:'OLD',quantity:12,extension:'X'}]});
+  const created=await writer.prepareCreate(input);await writer.execute(created);
+  const sheet=google.sheets.get(created.sheetId);
+  const filter={range:{sheetId:created.sheetId,startRowIndex:3},criteria:{3:{hiddenValues:['OLD']}}};sheet.basicFilter=structuredClone(filter);
+  const before=structuredClone(sheet.data[0].rowData);
+  const plan=await writer.prepareAppend({operationId:'22222222-2222-4222-8222-222222222222',name:input.name,sheetId:created.sheetId,lines:[{article:'NEW',quantity:30,extension:'CBI'}],registeredSheets:[{gid:created.sheetId,name:input.name}],preserveExistingRows:true});
+  if(legacy)delete plan.formulaCopies;
+  await writer.execute(plan);await writer.verify(plan);
+  assert.deepEqual(sheet.basicFilter,filter,'personal/shared filters remain untouched');
+  assert.deepEqual(sheet.data[0].rowData.slice(0,before.length),before,'all old positions remain unchanged');
+  assert.equal(sheet.data[0].rowData[plan.startRow-1].values[15].userEnteredValue.numberValue,30);
+  assert.equal(google.requests.at(-1).some(r=>r.copyPaste||r.clearBasicFilter),false);
 });

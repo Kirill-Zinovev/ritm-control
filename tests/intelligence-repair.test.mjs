@@ -618,7 +618,7 @@ test("effective capabilities permit publicly readable production only when canEd
   assert.equal(audit.productionAccess, "write_denied");
   assert.deepEqual(
     audit.capabilities.map((c) => c.canEdit),
-    [true, false, false],
+    [true, ...PRODUCTION_DOCUMENTS.map(() => false)],
   );
   assert.equal(w.metrics.writeRequests, 0);
 });

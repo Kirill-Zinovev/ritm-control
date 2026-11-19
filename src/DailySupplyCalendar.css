@@ -1,0 +1,65 @@
+.daily-supply-calendar { padding: 20px; }
+.daily-supply-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.daily-supply-header h3, .daily-supply-heading h3 { margin: 0 0 4px; color: var(--text); font-size: 22px; }
+.daily-supply-header small, .daily-supply-heading small { color: var(--muted); font-size: 13px; }
+.daily-supply-header-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.daily-supply-header-actions .button { min-height: 36px; }
+.daily-supply-stale { margin-bottom: 14px; padding: 10px 12px; border: 1px solid #f0d09c; border-radius: 8px; background: #fff6e7; color: #80510d; font-size: 13px; }
+.daily-supply-days { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 7px; }
+.daily-supply-day { display: grid; align-content: center; justify-items: start; gap: 5px; min-width: 0; min-height: 72px; padding: 10px; border: 1px solid #d8e3f1; border-radius: 9px; background: #fff; color: var(--text); text-align: left; font: inherit; cursor: pointer; }
+.daily-supply-day strong { font-size: 17px; }
+.daily-supply-day small { color: var(--muted); font-size: 12px; line-height: 1.25; }
+.daily-supply-day.off { background: #eef6f3; border-color: #d7ebe4; }
+.daily-supply-day.today { border-color: #72a1f4; }
+.daily-supply-day:hover { border-color: #2563eb; background: #eff5ff; }
+.daily-supply-day.selected { border-color: #2563eb; background: #2563eb; color: #fff; }
+.daily-supply-day.selected small { color: #e6efff; }
+.daily-supply-day:focus-visible, .daily-supply-warning button:focus-visible { outline: 3px solid var(--focus-ring, #4b8dff); outline-offset: 2px; }
+.daily-supply-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 22px 0 14px; color: #3464ac; }
+.daily-supply-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 14px; }
+.daily-supply-card { container-type: inline-size; min-width: 0; padding: 18px; border: 1px solid #dbe5f0; border-radius: 12px; background: #fff; box-shadow: 0 1px 3px rgba(16, 33, 58, .05); }
+.daily-supply-card-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.daily-supply-card-heading h4 { margin: 0 0 4px; color: #205ed4; font-size: 20px; line-height: 1.3; overflow-wrap: anywhere; }
+.daily-supply-card-heading small { color: var(--muted); font-size: 14px; }
+.daily-supply-status { flex-shrink: 0; padding: 5px 8px; border-radius: 6px; background: #eef2f6; color: #4f6078; font-size: 12px; font-weight: 700; }
+.daily-supply-status.done, .daily-supply-status.on-time { background: #e2f5ea; color: #08734b; }
+.daily-supply-status.risk { background: #fff1d8; color: #80510d; }
+.daily-supply-status.late { background: #fde9e8; color: #a93236; }
+.daily-supply-events { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 8px; margin: 14px 0; color: var(--muted); font-size: 13px; }
+.daily-supply-events > span { font-weight: 700; }
+.daily-supply-events small { padding: 4px 6px; border-radius: 5px; background: #edf3fb; color: #405b80; font-size: 12px; }
+.daily-supply-facts > strong { display: block; margin-bottom: 9px; color: var(--muted); font-size: 14px; }
+.daily-supply-fact { display: grid; grid-template-columns: minmax(100px, 130px) minmax(0, 1fr); gap: 10px; align-items: start; margin: 10px 0; color: var(--muted); font-size: 14px; }
+.daily-supply-fact-label { display: flex; align-items: center; gap: 7px; color: #245dc2; }
+.daily-supply-fact.cut .daily-supply-fact-label { color: #08734b; }
+.daily-supply-fact.packing .daily-supply-fact-label { color: #7030ae; }
+.daily-supply-fact-label strong { color: var(--text); font-size: 14px; }
+.daily-supply-fact-value { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; color: var(--text); }
+.daily-supply-fact-value small { grid-column: 1 / -1; color: #80510d; font-size: 11px; }
+.daily-supply-progress { grid-column: 1 / -1; height: 10px; border-radius: 99px; background: #e4ebf3; overflow: hidden; }
+.daily-supply-progress span { display: block; height: 100%; border-radius: inherit; background: #2563eb; }
+.daily-supply-fact.cut .daily-supply-progress span { background: #0b8b57; }
+.daily-supply-fact.packing .daily-supply-progress span { background: #8c4ad8; }
+.daily-supply-deadlines { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.daily-supply-deadlines > div { display: flex; gap: 6px; min-width: 0; padding: 9px; border-radius: 7px; color: #245dc2; background: #eaf1ff; }
+.daily-supply-deadlines > div.packing { color: #7030ae; background: #f2eafa; }
+.daily-supply-deadlines > div.shipping { color: #167569; background: #e8f6f1; }
+.daily-supply-deadlines svg { flex-shrink: 0; }
+.daily-supply-deadlines span { min-width: 0; color: var(--text); font-size: 13px; line-height: 1.3; }
+.daily-supply-deadlines strong { display: block; margin-top: 3px; overflow-wrap: anywhere; }
+.daily-supply-window { margin: 12px 0 0; color: #7030ae; font-size: 13px; font-weight: 650; }
+.daily-supply-warning { display: flex; gap: 8px; margin: 14px 0; padding: 10px; border: 1px solid #f0d09c; border-radius: 8px; background: #fff6e7; color: #80510d; font-size: 13px; }
+.daily-supply-warning svg { flex-shrink: 0; }
+.daily-supply-warning span { display: grid; gap: 3px; min-width: 0; }
+.daily-supply-warning small { font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
+.daily-supply-warning button { justify-self: start; padding: 0; border: 0; background: transparent; color: #1f5bc7; font: inherit; font-weight: 650; cursor: pointer; }
+.daily-supply-warning button:hover { text-decoration: underline; }
+.daily-supply-forecast { margin: 12px 0 0; color: #285b4c; font-size: 13px; }
+.daily-supply-card > .button { margin-top: 14px; }
+.daily-supply-empty { padding: 26px; border: 1px solid var(--border); border-radius: 10px; background: #fff; color: var(--text); }
+.daily-supply-empty p { color: var(--muted); font-size: 13px; }
+.daily-supply-note { margin: 16px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.daily-supply-return { margin-bottom: 10px; }
+@container (max-width: 420px) { .daily-supply-deadlines { grid-template-columns: 1fr; } .daily-supply-fact { grid-template-columns: 100px minmax(0, 1fr); } }
+@media (max-width: 1000px) { .daily-supply-grid { grid-template-columns: 1fr; } }
+@media (max-width: 700px) { .daily-supply-calendar { padding: 14px; } .daily-supply-header { align-items: flex-start; flex-direction: column; } .daily-supply-header-actions { gap: 4px; } .daily-supply-header-actions .button { padding: 7px 8px; } .daily-supply-days { grid-template-columns: repeat(4, minmax(0, 1fr)); } .daily-supply-day { min-height: 64px; padding: 8px; } .daily-supply-card { padding: 14px; } }

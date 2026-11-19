@@ -352,7 +352,8 @@ test("roll-printing registry uses article E as the activity gate and checks F er
     ),
     orders = roll.sheets.find((sheet) => sheet.gid === 119710351);
   assert.deepEqual(orders.context.activeColumns, ["E"]);
-  assert.deepEqual(orders.context.errorColumns, orders.context.columns);
+  assert.deepEqual(orders.context.errorColumns, orders.context.columns.filter(column => column !== "AD"));
+  assert.ok(orders.rules.some(rule => rule.id === "roll-order-uid" && rule.column === "AD"));
   assert.equal(orders.context.ignoreCalculationErrorsWhenInactive, true);
 });
 test("actual IMPORTRANGE row mapping retains source IDs and distinct source row numbers", () => {

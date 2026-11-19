@@ -1,7 +1,10 @@
-import { loadBoxPrinting } from './boxPrintingJournal.js';
+import { loadBoxPrinting, loadStockBoxPrinting } from './boxPrintingJournal.js';
 import { loadAssembly } from "../worker/assembly.js";
 import {
   loadPrinting,
+  loadStockRollPrinting,
+  loadStockBoxOrders,
+  assignWorkloadDetails,
   parseCsv,
   CATALOG_ID,
   ROLL_PRINTING_SHEET_ID,
@@ -201,7 +204,8 @@ export async function loadSource(
           if (
             parsed.hostname !== "docs.google.com" ||
             !documentMatch ||
-            ![source.documentId, ROLL_PRINTING_SHEET_ID, BOX_PRINTING_SHEET_ID].includes(
+            ![source.documentId, ROLL_PRINTING_SHEET_ID, BOX_PRINTING_SHEET_ID,
+              options.stockRollPrintingId, options.stockBoxPrintingId].includes(
               documentMatch[1],
             ) ||
             parsed.searchParams.get("format") !== "csv" ||
@@ -216,7 +220,7 @@ export async function loadSource(
       : fetcher;
     let shopCatalogRows = null;
     let photoCatalogRows = null;
-    if (options.googleReader) {
+    if (options.googleReader && !options.supplyTarget) {
       try {
         shopCatalogRows = await readProductionShopCatalog(
           options.googleReader,
@@ -236,8 +240,40 @@ export async function loadSource(
       assemblyBoxLinks: options.assemblyBoxLinks || [],
       shopCatalogRows,
       photoCatalogRows,
+      supplyTarget: options.supplyTarget,
+      readHiddenSupply: typeof options.googleReader?.hiddenSupplyRows === "function" ?
+        (documentId, sheetId, name) => options.googleReader.hiddenSupplyRows(documentId, sheetId, name, options.signal) : null,
     });
+    async function stockSheets(id, withJournal) {
+      const meta=await options.googleReader.metadata(id,options.signal,5);
+      if(meta.spreadsheetId!==id)throw new Error('stock source mismatch');
+      const names=['Запасы склад','Срочные 2 этаж'];
+      const sheets=names.map(name=>{
+        const found=(meta.sheets||[]).filter(s=>s.properties?.title===name&&!s.properties.hidden);
+        if(found.length!==1||!Number.isSafeInteger(found[0].properties.sheetId))throw new Error('stock sheet mismatch');
+        return {gid:found[0].properties.sheetId,name};
+      });
+      const journal=withJournal?(meta.sheets||[]).find(s=>s.properties?.title==='Журнал выпуска'):null;
+      if(withJournal&&!Number.isSafeInteger(journal?.properties?.sheetId))throw new Error('stock journal missing');
+      const archives=(meta.sheets||[]).filter(s=>s.properties?.title==='_RITM_STOCK_ARCHIVE');
+      if(archives.length>1 || (archives.length && !Number.isSafeInteger(archives[0].properties?.sheetId)))throw new Error('stock archive mismatch');
+      const historyNames=['ROLLS_V2','ROLLS_V2_PROGRESS'];
+      const history=historyNames.map(name=>(meta.sheets||[]).filter(s=>s.properties?.title===name));
+      const historyIds=withJournal && history.every(matches=>matches.length===1&&Number.isSafeInteger(matches[0].properties?.sheetId))
+        ? history.map(matches=>matches[0].properties.sheetId) : undefined;
+      return {sheets,journalId:journal?.properties?.sheetId,archiveId:archives[0]?.properties?.sheetId,historyIds};
+    }
+    if(!options.supplyTarget&&options.googleReader&&options.stockRollPrintingId)try{
+      const stock=await stockSheets(options.stockRollPrintingId,true);
+      printing=await loadStockRollPrinting(authenticatedFetcher,printing,{spreadsheetId:options.stockRollPrintingId,...stock});
+    }catch(error){if(options.signal?.aborted)throw error;printing={...printing,stockRoll:{status:'unavailable',orders:[],reason:'Не удалось подтвердить таблицу запасов рулонной печати.'}};}
+    if(!options.supplyTarget&&options.googleReader&&options.stockBoxPrintingId)try{
+      const stock=await stockSheets(options.stockBoxPrintingId,false);
+      printing=await loadStockBoxOrders(authenticatedFetcher,printing,{spreadsheetId:options.stockBoxPrintingId,...stock});
+    }catch(error){if(options.signal?.aborted)throw error;printing={...printing,stockBox:{status:'unavailable',orders:[],reason:'Не удалось подтвердить таблицу запасов бокса.'}};}
+    assignStockPlanningMachines(printing, shopCatalogRows, photoCatalogRows);
     printing = await loadBoxPrinting(options.googleReader, printing, {journalId: options.boxJournalId || source.boxJournalId || (typeof process !== "undefined" ? process.env.RITM_BOX_JOURNAL_ID : ""), signal: options.signal});
+    if (!options.supplyTarget) printing = await loadStockBoxPrinting(options.googleReader, printing, {journalId: options.stockBoxJournalId, sourceId: options.stockBoxPrintingId, signal: options.signal});
     const checkedAt = now instanceof Date ? now.toISOString() : new Date().toISOString();
     return options.googleReader
       ? loadAssemblyPacking(options.googleReader, printing, {
@@ -285,6 +321,19 @@ export async function loadSource(
       0,
     ),
   };
+}
+
+export function assignStockPlanningMachines(printing, catalog, photos) {
+  const orders = [printing.stockRoll, printing.stockBox].flatMap(source => (source?.orders || []).filter(order => !order.archived));
+  if (!orders.length) return;
+  const lookups = orders.map(order => ({...order, sheetName:'OZON '+order.sheetName}));
+  // Build the catalog/photo indices once for all stock orders. Rebuilding
+  // a full marketplace catalog for every article dominated refresh CPU time.
+  assignWorkloadDetails(lookups, catalog, photos);
+  orders.forEach((order, index) => {
+    const lookup = lookups[index];
+    order.planningMachine = lookup.machineSource === 'catalog' ? lookup.machine : null;
+  });
 }
 export function validateApi(payload, kind) {
   if (

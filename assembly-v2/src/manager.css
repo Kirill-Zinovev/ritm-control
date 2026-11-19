@@ -1,0 +1,177 @@
+/* Owner pages only. Collector markup and its styles deliberately remain independent. */
+.app.manager-app {max-width:1600px; min-height:100vh; margin:0 auto; font-size:15px; color:#19304b; background:#f5f7fb;}
+.manager-app .environment-strip {display:none;}
+.manager-app>.header {height:78px; padding:0 40px; background:#fff; border-bottom:1px solid #dce5f0; gap:24px;}
+.manager-app .brand {font-size:25px; letter-spacing:-.8px; white-space:nowrap;}
+.manager-app .brand span {font-size:14px; letter-spacing:.5px; font-weight:500; margin-left:7px;}
+.manager-app .navigation {gap:6px;}
+.manager-app .nav-button {padding:12px 16px; font-size:14px; border:0; border-radius:10px; color:#4c627f; white-space:nowrap;}
+.manager-app .nav-button[aria-current=page] {background:#eaf1ff; color:#215bea; box-shadow:none;}
+.manager-app>.content {padding:32px 40px; max-width:none;}
+.manager-app h1 {font-size:32px; font-weight:750; line-height:1.2; letter-spacing:-1px;}
+.manager-app h2 {font-size:23px; font-weight:700;}
+.manager-app .page-title,.manager-app .section-heading {margin-bottom:22px; align-items:center;}
+.manager-app .page-title .muted,.manager-app .section-heading .muted {margin-top:8px; font-size:15px;}
+.manager-app .button {min-height:42px; border:1px solid #c8d5e8; border-radius:9px; padding:10px 16px; background:white; font-weight:600; display:inline-flex; gap:8px; justify-content:center; align-items:center; white-space:normal;}
+.manager-app .button.primary {background:#2563eb; border-color:#2563eb; color:#fff;}
+.manager-app .button.danger {background:white; color:#b4233c; border-color:#f0b7bf;}
+.manager-app .field,.manager-app .search {border:1px solid #c6d3e5; border-radius:9px; min-height:44px; background:#fff; box-shadow:none;}
+.manager-app .field {padding:10px 12px; width:100%;}
+.manager-app .label {font-size:13px; font-weight:600; margin-bottom:7px;}
+.manager-app .search {padding:0 12px; min-width:200px;}
+.manager-app .search input {min-height:42px; width:100%; font-size:14px;}
+.manager-app .toolbar,.manager-app .tools {display:flex; align-items:end; gap:16px; margin:22px 0; flex-wrap:wrap;}
+.manager-app .toolbar>.search,.manager-app .tools>.search {flex:1;}
+.manager-app .toolbar>.field-wrap,.manager-app .tools>.field-wrap {min-width:160px; flex:0 1 200px;}
+.manager-app .tabs {border-bottom:1px solid #dce5f0; padding-bottom:12px; margin:20px 0 24px; gap:8px;}
+.manager-app .tab {border:0; background:transparent; border-radius:9px; font-size:14px; padding:11px 18px;}
+.manager-app .tab[aria-pressed=true] {background:#e6efff; color:#215bea; box-shadow:none;}
+.manager-app .table-scroll {position:relative;border:1px solid #d7e2f0; border-radius:12px; background:white;}
+.manager-app table {width:100%; border-collapse:collapse; font-size:14px;}
+.manager-app th {font-size:12px; color:#647895; font-weight:600; padding:14px 16px; background:#f8faff;}
+.manager-app td {padding:17px 16px; border-bottom:1px solid #e3eaf4; vertical-align:middle;}
+.manager-app tbody tr:last-child>td {border-bottom:0;}
+.manager-app tbody tr.is-selected>td {background:#edf3ff;}
+.manager-app tbody tr.is-selected>td:first-child {box-shadow:inset 3px 0 #2563eb;}
+.manager-app td small {display:block; color:#657b99; margin-top:5px; font-size:12px;}
+.manager-app .numeric {font-variant-numeric:tabular-nums; white-space:nowrap;}
+.manager-app .text-action {border:0; background:none; padding:0; color:#235bce; text-align:left; font-weight:600; cursor:pointer;}
+.manager-app .carton-select {font-size:17px; color:#19304b; display:inline-flex; align-items:center; gap:6px;}
+.manager-app .market-pill {display:inline-flex; font-size:11px; font-weight:750; border-radius:7px; padding:3px 9px; line-height:1.4; margin:5px 0;}
+.manager-app .market-pill.ozon {background:#e5efff;color:#145bd7;}
+.manager-app .market-pill.wb {background:#f0e5ff;color:#7518b4;}
+.manager-app progress {display:block; border:0; border-radius:6px; overflow:hidden; height:7px; width:100%; min-width:75px; margin-top:10px; accent-color:#21a875; background:#e8eef5;}
+.manager-app progress::-webkit-progress-bar {background:#e8eef5;}
+.manager-app progress::-webkit-progress-value {background:#21a875; border-radius:6px;}
+.manager-app .pagination {margin-top:16px; padding:12px 4px;}
+.manager-app>.status-success {margin:16px 40px 0; border-radius:9px;}
+.manager-app footer {padding:16px 40px; color:#71829a; font-size:12px;}
+.manager-app .manager-detail {background:#fff; border:1px solid #d7e2f0; border-radius:12px; min-width:0; align-self:start; position:sticky; top:18px; overflow:hidden;}
+.manager-app .manager-detail-header {padding:20px; display:flex; justify-content:space-between; align-items:start; gap:12px; border-bottom:1px solid #e3eaf4;}
+.manager-app .manager-detail-header .muted {font-size:12px; margin-bottom:7px;}
+.manager-app .manager-detail-body {padding:20px;}
+.manager-app .manager-detail-body>.muted {font-size:13px;}
+.manager-app .manager-detail .table-scroll {border:0; border-radius:0;}
+.manager-app .manager-detail td {padding:16px 0;}
+.manager-app .manager-detail td+td {padding-left:12px;}
+.manager-app .manager-detail th {padding:12px 0; background:white;}
+.manager-app .manager-detail th+th {padding-left:12px;}
+.manager-app .manager-detail .box-summary {margin:16px 0 22px; gap:16px; align-items:center;}
+.manager-app .manager-detail .box-summary strong {font-size:23px;}
+.manager-app .manager-detail .box-summary span {font-size:12px;}
+.manager-app .manager-detail .carton-content-photo {width:60px;height:76px;flex:0 0 60px;}
+.manager-app .manager-detail .carton-product {min-width:0;}
+.manager-app .manager-detail .carton-product-copy {min-width:0;}
+.manager-app .manager-detail .carton-product-name {font-size:13px;}
+.manager-app .manager-detail .carton-product-supply {font-size:11px;overflow-wrap:anywhere;}
+.manager-app .manager-detail .stack {margin-top:18px;}
+.manager-app .cartons-workspace {display:grid;grid-template-columns:minmax(0,1.05fr) minmax(440px,1fr);gap:20px;align-items:start;}
+.manager-app .cartons-list-pane {min-width:0;}
+.manager-app .manager-carton-table td {padding:20px 13px;}
+.manager-app .manager-carton-table td:first-child {width:115px;}
+.manager-app .manager-carton-table td:nth-child(2) {max-width:210px;}
+.manager-app .manager-history .toolbar>.field-wrap {flex:1;}
+.manager-app .manager-history .toolbar>.search {flex:1.5;}
+.manager-app .manager-history .table-scroll {margin-top:22px;}
+.manager-app .manager-history table {min-width:1020px;}
+.manager-app .employee-cell {display:flex;align-items:center;gap:10px;white-space:nowrap;}
+.manager-app .avatar {background:#e7efff;color:#2663eb;display:inline-grid;place-items:center;width:32px;height:32px;border-radius:50%;flex:0 0 32px;}
+.manager-app .work-product-name {font-size:12px;color:#536b88;max-width:290px;margin:4px 0;}
+.manager-app .manager-history td a {font-size:11px;text-decoration:none;display:inline-block;max-width:280px;}
+.manager-app .operation-pill {display:inline-block;padding:5px 10px;border-radius:7px;white-space:nowrap;font-size:12px;}
+.manager-app .operation-pill.packing {background:#eee5ff;color:#683caa;}
+.manager-app .operation-pill.assembly {background:#e3f1ff;color:#265c99;}
+.manager-app .operation-pill.cut {background:#e1f4e9;color:#24774d;}
+.manager-app .coefficient {font-weight:750;font-size:17px;}
+.manager-app .work-detail-row td {background:#edf3ff;padding:12px 20px;}
+.manager-app .work-detail-actions {display:flex;align-items:center;justify-content:space-between;gap:16px;font-size:13px;}
+.manager-app .work-canceled {color:#7a8799;}
+.manager-app .work-canceled .coefficient {font-size:12px;}
+.manager-app .warehouse {position:relative;}
+.manager-app .warehouse-stats {display:flex;gap:28px;flex-wrap:wrap;margin:0 0 20px;}
+.manager-app .warehouse-stats>div {padding-right:28px;border-right:1px solid #d7e2f0;}
+.manager-app .warehouse-stats>div:last-child {border:0;}
+.manager-app .warehouse-stats strong {font-size:27px;letter-spacing:-.7px;}
+.manager-app .warehouse-stats span {font-size:12px;color:#60738f;}
+.manager-app .warehouse>.actions {display:flex;flex-direction:row-reverse;justify-content:space-between;margin-bottom:20px;align-items:center;gap:20px;}
+.manager-app .warehouse>.actions>.muted {font-size:13px;}
+.manager-app .warehouse-table {min-width:1000px;}
+.manager-app .warehouse-table td:nth-child(3) {max-width:260px;}
+.manager-app .warehouse-table td:nth-child(3) small {font-size:11px;max-width:250px;}
+.manager-app .composition-thumbs {display:inline-flex;align-items:center;gap:5px;margin:0 10px 5px 0;vertical-align:middle;}
+.manager-app .composition-thumbs .catalog-photo {width:30px;height:40px;min-width:30px;}
+.manager-app .composition-thumbs>span {font-size:11px;padding:3px 5px;background:#edf3ff;border-radius:6px;}
+.manager-app .warehouse-expanded>td {padding:10px 40px;background:#fafcff;}
+.manager-app .warehouse-expanded-product {display:flex;justify-content:space-between;align-items:center;gap:20px;border-bottom:1px solid #e3eaf4;padding:14px 0;}
+.manager-app .warehouse-expanded-product .carton-content-photo {width:48px;height:60px;flex:0 0 48px;}
+.manager-app .warehouse-expanded-product>strong {white-space:nowrap;}
+.manager-app .warehouse-expanded .button {margin-top:10px;}
+.manager-app .selection-bar {position:sticky;bottom:12px;z-index:2;background:#fff;border:1px solid #c8d8ee;box-shadow:0 5px 20px #1b355312;border-radius:12px;padding:18px 20px;margin:22px 0 0;}
+.manager-app .selection-bar strong {font-size:18px;}
+.manager-app .selection-bar small {font-size:12px;margin-top:4px;}
+.manager-app .owner-badge {display:inline-flex;align-items:center;gap:8px;background:#e7efff;padding:6px 12px;border-radius:20px;font-size:12px;color:#31598c;margin-bottom:24px;}
+.manager-app .setup-grid {display:grid;grid-template-columns:minmax(0,1.5fr) minmax(300px,1fr);gap:20px;align-items:start;}
+.manager-app .setup-grid>.panel {background:white;border:1px solid #d7e2f0;border-radius:12px;padding:24px;min-width:0;}
+.manager-app .setup-connection {grid-column:1;grid-row:1;}
+.manager-app .setup-employees {grid-column:2;grid-row:1 / span 2;}
+.manager-app .setup-grid>.panel:not(.setup-employees):not(.setup-connection) {grid-column:1;grid-row:2;}
+.manager-app .setup-grid h2 {font-size:24px;margin-bottom:12px;}
+.manager-app .setup-grid p {font-size:13px;line-height:1.65;}
+.manager-app .setup-connection .callout {background:#f1faf5;border:0;border-radius:9px;padding:14px;color:#26714f;}
+.manager-app .setup-connection .callout strong {font-size:14px;}
+.manager-app .connection-status-rows>div {display:grid;grid-template-columns:24px minmax(140px,1fr) 1fr;gap:12px;padding:20px 0;border-bottom:1px solid #e3eaf4;align-items:center;}
+.manager-app .connection-status-rows span {font-size:12px;color:#526b87;}
+.manager-app .setup-employees form {display:flex;align-items:end;gap:12px;}
+.manager-app .setup-employees form>.field-wrap {flex:1;min-width:0;}
+.manager-app .setup-employees form>.button {flex:0 0 auto;max-width:150px;}
+.manager-app .employee-list {display:block;padding:0;margin:20px 0 0;max-height:580px;overflow:auto;list-style:none;}
+.manager-app .employee-list li {display:flex;align-items:center;gap:14px;background:none;border:0;border-bottom:1px solid #e3eaf4;padding:16px 0;border-radius:0;font-size:15px;}
+.manager-app .setup-advanced {padding:18px 0 0;margin-top:8px;border-top:1px solid #e3eaf4;}
+.manager-app .setup-advanced summary {font-weight:650;font-size:13px;}
+.manager-app .setup-advanced[open]>p {margin-top:16px;}
+.manager-app .setup-grid label.field {display:block;height:auto;margin:16px 0 10px;overflow:hidden;}
+.manager-app .setup-grid label.field input {display:block;border:0;padding:8px 0;width:100%;background:white;}
+@media(min-width:1400px){.manager-app .warehouse>.page-title{min-height:85px;padding-right:630px}.manager-app .warehouse-stats{position:absolute;top:34px;right:40px;gap:24px;}}
+@media(max-width:1180px){.manager-app>.header{padding:0 24px;gap:18px}.manager-app .nav-button{padding:10px;font-size:12px}.manager-app>.content{padding:28px 24px}.manager-app .brand{font-size:21px}.manager-app .brand span{font-size:11px}.manager-app .catalog-workspace.has-editor{grid-template-columns:minmax(0,1fr) 365px}.manager-app .cartons-workspace{grid-template-columns:minmax(0,1fr) minmax(370px,1fr)}.manager-app .catalog-summary span:nth-child(3){display:none}.manager-app .setup-employees form{flex-wrap:wrap}}
+@media(max-width:900px){.manager-app>.header{height:auto;min-height:76px;flex-wrap:wrap;padding:16px 20px}.manager-app .navigation{overflow-x:auto;max-width:100%;padding-bottom:2px}.manager-app .catalog-workspace.has-editor,.manager-app .cartons-workspace{grid-template-columns:1fr}.manager-app .manager-detail{position:relative;top:0}.manager-app .catalog-workspace.has-editor>.catalog-editor{grid-row:1}.manager-app .catalog-editor-body{max-height:none}.manager-app .cartons-workspace>.manager-detail{grid-row:1}.manager-app .setup-grid{grid-template-columns:1fr}.manager-app .setup-grid>.panel{grid-column:1;grid-row:auto}.manager-app .setup-connection{order:-2}.manager-app .setup-grid>.panel:not(.setup-employees):not(.setup-connection){order:-1;grid-row:auto}.manager-app .selection-bar{position:static;display:flex;flex-direction:column;align-items:stretch;gap:14px}.manager-app .selection-bar .actions{flex-wrap:wrap}.manager-app .catalog-workspace.has-editor .catalog-table{min-width:650px}}
+@media(max-width:540px){.manager-app>.content{padding:24px 16px}.manager-app h1{font-size:28px}.manager-app .page-title,.manager-app .section-heading{align-items:start;gap:14px;flex-wrap:wrap}.manager-app .catalog-heading-actions{width:100%;display:flex;gap:8px}.manager-app .catalog-heading-actions .button{flex:1;font-size:12px}.manager-app .toolbar>.field-wrap,.manager-app .tools>.field-wrap{min-width:140px;flex:1}.manager-app .toolbar>.search,.manager-app .tools>.search{flex:1 0 100%}.manager-app .catalog-summary{gap:8px}.manager-app .catalog-summary span:not(:first-child){display:none}.manager-app .warehouse-stats{gap:14px}.manager-app .warehouse-stats>div{padding-right:14px}.manager-app .warehouse-stats strong{font-size:23px}.manager-app .warehouse>.actions{flex-direction:column;align-items:start}.manager-app .tabs{overflow-x:auto;flex-wrap:nowrap}.manager-app .tab{white-space:nowrap}.manager-app .manager-detail-body{padding:14px}.manager-app .manager-detail-header{padding:16px}.manager-app .manager-detail .carton-content-photo{width:38px;height:50px;flex:0 0 38px}.manager-app .manager-detail .carton-product-sku{font-size:12px}.manager-app .manager-detail .button{font-size:11px;padding:8px}.manager-app .setup-grid>.panel{padding:18px}.manager-app .connection-status-rows>div{grid-template-columns:24px 1fr}.manager-app .connection-status-rows span{grid-column:2}.manager-app .work-detail-actions{flex-wrap:wrap}}
+
+.manager-app .manager-detail .carton-product {grid-template-columns:60px minmax(0,1fr);gap:14px;}
+.manager-app .carton-composition-heading {margin:24px 0 6px;font-size:19px;}
+.manager-app .carton-label-action {margin-top:12px;display:flex;justify-content:flex-end;}
+.manager-app .carton-label-preview {text-align:center;border:1px solid #d7e2f0;border-radius:10px;padding:24px;margin:18px 0;}
+.manager-app .carton-label-preview strong {display:block;font-size:42px;color:#152e4c;margin:12px 0;}
+.manager-app .setup-connection .connection-unavailable {background:#fff7e9;color:#85571d;}
+@media(max-width:540px){.manager-app .manager-detail .carton-product{grid-template-columns:38px minmax(0,1fr);gap:10px}.manager-app .catalog-editor{max-height:78vh;}}
+.manager-app .work-product {display:grid;grid-template-columns:48px minmax(0,1fr);align-items:center;gap:12px;}
+.manager-app .work-product .catalog-photo {width:48px;height:64px;}
+.manager-app .setup-grid>.panel.setup-manager-access:not(.setup-employees):not(.setup-connection) {grid-column:1/-1;grid-row:3;}
+.manager-app .setup-manager-access h2 {display:flex;align-items:center;gap:10px;}
+.manager-app .setup-manager-access form {display:grid;gap:14px;margin:18px 0;}
+.manager-app .setup-manager-access .actions {flex-wrap:wrap;}
+.manager-login {min-height:100vh;background:#f5f7fb;padding:8vh 20px;color:#19304b;display:flex;justify-content:center;align-items:flex-start;}
+.manager-login-card {background:#fff;border:1px solid #d7e2f0;border-radius:16px;padding:36px;max-width:480px;width:100%;}
+.manager-login-brand {display:block;font-size:24px;font-weight:750;margin-bottom:32px;}
+.manager-login-brand small {font-size:12px;letter-spacing:1px;font-weight:500;margin-left:8px;}
+.manager-login h1 {font-size:28px;margin:16px 0 10px;}
+.manager-login p {font-size:14px;line-height:1.6;margin-bottom:20px;}
+.manager-login form {display:grid;gap:14px;margin:24px 0;}
+.manager-app .stock-manager-toolbar {display:grid;gap:18px;margin:24px 0;}
+.manager-app .stock-manager-toolbar h2 {font-size:21px;margin:0 0 8px;}
+.manager-app .stock-manager-toolbar .actions {justify-content:flex-start;flex-wrap:wrap;}
+.manager-app .warehouse-stock-view>.search {max-width:540px;margin:8px 0;}
+.manager-app .warehouse-stock-view>.stock-carton {padding:24px;margin:18px 0;background:white;border:1px solid #d7e2f0;border-radius:14px;}
+.manager-app .stock-carton-heading {display:flex;justify-content:space-between;align-items:center;gap:16px;padding-bottom:18px;border-bottom:1px solid #e3eaf4;}
+.manager-app .stock-carton-heading h3 {display:flex;align-items:center;gap:12px;margin:0 0 8px;font-size:19px;}
+.manager-app .stock-select {width:18px;height:18px;accent-color:#2862eb;}
+.manager-app .warehouse-stock-view .stock-transfer {display:grid;grid-template-columns:64px minmax(0,1fr) auto;gap:18px;padding:20px 0;border-bottom:1px solid #e3eaf4;}
+.manager-app .warehouse-stock-view .stock-product-photo {width:64px;height:86px;object-fit:contain;border-radius:8px;}
+.manager-app .warehouse-stock-view .stock-product-info {display:grid;gap:7px;}
+.manager-app .warehouse-stock-view .stock-item-actions {justify-content:flex-start;flex-wrap:wrap;}
+.manager-app .warehouse-stock-view .readonly-note {color:#68809d;font-size:12px;line-height:1.5;}
+@media(max-width:600px){.manager-app .warehouse-stock-view>.stock-carton{padding:16px}.manager-app .stock-carton-heading{align-items:flex-start;flex-direction:column}.manager-app .warehouse-stock-view .stock-transfer{grid-template-columns:44px minmax(0,1fr);gap:12px}.manager-app .warehouse-stock-view .stock-product-photo{width:44px;height:60px}.manager-app .warehouse-stock-view .stock-product-quantity{grid-column:2;grid-row:2}.manager-app .stock-manager-toolbar .tools{display:grid;grid-template-columns:1fr}}
+.manager-login .button {min-height:44px;border-radius:9px;}
+.manager-login .field {min-height:46px;border-radius:9px;}
+@media(max-width:900px){.manager-app .setup-grid>.panel.setup-manager-access:not(.setup-employees):not(.setup-connection){grid-row:auto;grid-column:1;order:3;}}
+.manager-app .setup-manager-access .catalog-edit-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;}
+@media(max-width:540px){.manager-app .setup-manager-access .catalog-edit-grid{grid-template-columns:1fr;}}

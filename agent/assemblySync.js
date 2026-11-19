@@ -34,6 +34,10 @@ export class AssemblySyncQueue {
     return true;
   }
   recoverConfirmed() {
+    if (typeof this.store.assemblySyncOperations === "function") {
+      for (const operation of this.store.assemblySyncOperations()) this.enqueue(operation);
+      return;
+    }
     for (const operation of this.store.meta("productionSupplyOperations") || []) this.enqueue(operation);
     for (const operation of this.persistence.recoverableRollOperations()) this.enqueue(operation);
   }

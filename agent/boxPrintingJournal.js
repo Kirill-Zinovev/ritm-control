@@ -18,7 +18,7 @@ function activeBoxJournalRows(rows) {
 }
 
 function parseBoxActionJournal(rows, action) {
-  return activeBoxJournalRows(rows).filter(row=>String(row[10]).trim()===action).map(row=>({id:String(row[0]).trim(),positionId:String(row[3]),sheetId:Number(row[5]),shipment:String(row[6]),article:String(row[7]),employee:String(row[9]),date:String(row[2]),comment:String(row[22]??''),sheets:row[13]===''||row[13]==null?null:Number(row[13]),quantity:row[14]===''||row[14]==null?null:Number(row[14]),area:row[15]===''||row[15]==null?null:Number(row[15]),width:row[19]===''||row[19]==null?null:Number(row[19]),height:row[20]===''||row[20]==null?null:Number(row[20])}));
+  return activeBoxJournalRows(rows).filter(row=>String(row[10]).trim()===action).map(row=>({id:String(row[0]).trim(),positionId:String(row[3]),spreadsheetId:String(row[4]??''),sheetId:Number(row[5]),shipment:String(row[6]),article:String(row[7]),employee:String(row[9]),date:String(row[2]),comment:String(row[22]??''),sheets:row[13]===''||row[13]==null?null:Number(row[13]),quantity:row[14]===''||row[14]==null?null:Number(row[14]),area:row[15]===''||row[15]==null?null:Number(row[15]),width:row[19]===''||row[19]==null?null:Number(row[19]),height:row[20]===''||row[20]==null?null:Number(row[20])}));
 }
 
 export function parseBoxJournal(rows) { return parseBoxActionJournal(rows, 'Печать'); }
@@ -28,7 +28,9 @@ function boxOperationEvents(rows, orders, action, history = null) {
   const operationName=action==='Порезка'?'порезки':'печати';
   return parseBoxActionJournal(rows, action).map(e=>{
     if(!e.employee.trim()||!Number.isFinite(Date.parse(e.date))||!Number.isFinite(e.quantity)||e.quantity<=0||e.sheets!==null&&(!Number.isFinite(e.sheets)||e.sheets<=0)) throw new Error('Некорректная запись '+operationName+' бокса');
-    const matches=orders.filter(o=>o.sourceId==='box-printing'&&Number(o.sheetId)===e.sheetId&&o.article===e.article);
+    const candidates=orders.filter(o=>o.sourceId==='box-printing'&&Number(o.sheetId)===e.sheetId&&o.article===e.article&&(!o.spreadsheetId||!e.spreadsheetId||o.spreadsheetId===e.spreadsheetId));
+    const archived=candidates.filter(o=>o.archived&&o.boxPositionId===e.positionId);
+    const matches=archived.length?archived:candidates.filter(o=>!o.archived);
     const machines=new Set(matches.map(o=>String(o.machine||'').trim().toLowerCase()).filter(Boolean));
     const machine=machines.size===1?[...machines][0]:null;
     const xerox=machine!==null&&/^(xerox|ксерокс|x|х)$/.test(machine);
@@ -38,7 +40,7 @@ function boxOperationEvents(rows, orders, action, history = null) {
     const area=history?.areas.has(e.id)?history.areas.get(e.id)
       : history && Date.parse(e.date)<=history.cutoff ? null : e.area;
     if(area!==null&&(!Number.isFinite(area)||area<0))throw new Error('Некорректная площадь бокса');
-    return {...e,area,sheets:physicalSheets,operation:action==='Порезка'?'cut':'print',sourceId:'box-printing',date:new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(e.date))};
+    return {...e,area,machine,sheets:physicalSheets,operation:action==='Порезка'?'cut':'print',sourceId:'box-printing',date:new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(e.date))};
   });
 }
 export function boxPrintingEvents(rows, orders = [], history = null) { return boxOperationEvents(rows, orders, 'Печать', history); }
@@ -85,4 +87,30 @@ export async function loadBoxPrinting(reader, printing, {journalId,signal}={}) {
     const history={areas,cutoff:Math.max(...dated)};
     return {...printing,boxPrinting:{status:'available',events:boxPrintingEvents(rows,printing.supplies||[],history),cutEvents:boxCuttingEvents(rows,printing.supplies||[],history),exceptions:boxJournalExceptions(rows),reason:null}};
   } catch(error) {if(signal?.aborted)throw error;return unavailable('Журнал бокса недоступен или содержит неподтверждённые записи.');}
+}
+
+// The stock workbook has its own journal and lock. Never mix its cancellation
+// records with another journal before validating their individual identities.
+export async function loadStockBoxPrinting(reader, printing, {journalId,sourceId,signal}={}) {
+  if (!journalId || !sourceId) return printing;
+  const previous = printing.boxPrinting;
+  const partial = () => ({...printing, boxPrinting: {...previous, stockStatus:'unavailable', stockReason:'Журнал запасов бокса недоступен или содержит неподтверждённые записи.'}});
+  if (!previous || previous.status !== 'available') return partial();
+  try {
+    const metadata = await reader.metadata(journalId, signal, 5);
+    const sheet = metadata.sheets?.find(s=>s.properties?.title==='Журнал');
+    const count = sheet?.properties?.gridProperties?.rowCount;
+    if(metadata.spreadsheetId!==journalId || !Number.isSafeInteger(count) || count<1 || count>50000) throw new Error('metadata');
+    const grid=await reader.grid(journalId,[`'Журнал'!A1:X${count}`],signal,5);
+    const block=grid.sheets?.find(s=>s.properties?.sheetId===sheet.properties.sheetId)?.data?.[0];
+    if(grid.spreadsheetId!==journalId||!block||block.startRow||block.startColumn||!Array.isArray(block.rowData))throw new Error('grid');
+    const rows=block.rowData.map(r=>(r.values||[]).map(c=>c.effectiveValue?.stringValue??c.effectiveValue?.numberValue??c.userEnteredValue?.stringValue??c.userEnteredValue?.numberValue??''));
+    if(rows.slice(1).some(row=>row[0]&&String(row[4])!==sourceId))throw new Error('source');
+    if(printing.stockBox?.status!=='available')throw new Error('stock orders unavailable');
+    const orders=printing.stockBox.orders;
+    const events=boxPrintingEvents(rows,orders),cutEvents=boxCuttingEvents(rows,orders),exceptions=boxJournalExceptions(rows);
+    const known=new Set([...(previous.events||[]),...(previous.cutEvents||[]),...(previous.exceptions||[])].map(e=>e.id));
+    if([...events,...cutEvents,...exceptions].some(e=>known.has(e.id)))throw new Error('duplicate');
+    return {...printing,boxPrinting:{...previous,events:[...previous.events,...events],cutEvents:[...previous.cutEvents,...cutEvents],exceptions:[...previous.exceptions,...exceptions],stockStatus:'available',stockReason:null}};
+  } catch(error) { if(signal?.aborted)throw error; return partial(); }
 }

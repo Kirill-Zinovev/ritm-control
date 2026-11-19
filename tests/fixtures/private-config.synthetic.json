@@ -1,0 +1,7 @@
+{
+  "googleSources": {
+    "testWriterTargetId": "SYNTHETIC_TEST_TARGET_000000000000",
+    "testWriterEmail": "test-writer@example.invalid",
+    "protectedProductionDocumentIds": ["SYNTHETIC_PROTECTED_000000000000"]
+  }
+}

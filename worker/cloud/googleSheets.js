@@ -115,4 +115,20 @@ export class CloudSheetsReader {
       throw new CloudError("bounded_ranges_required", "Нужен точный диапазон таблицы.", 400);
     return this.get(id, { ranges, fields: "spreadsheetId,properties(title,locale,timeZone),sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)),merges,data(startRow,startColumn,rowData(values(userEnteredValue,effectiveValue))))" }, signal);
   }
+  async hiddenSupplyRows(id, sheetId, title, signal) {
+    const metadata = await this.metadata(id, signal);
+    const sheet = metadata.sheets.find(({ properties }) => properties.sheetId === sheetId && properties.title === title)?.properties;
+    if (!sheet?.hidden) return null;
+    const rows = sheet.gridProperties?.rowCount;
+    if (!Number.isSafeInteger(rows) || rows < 5 || rows > 20000) return null;
+    const columns = Math.min(sheet.gridProperties?.columnCount || 0, 52);
+    if (columns < 20) return null;
+    const lastColumn = columns <= 26 ? String.fromCharCode(64 + columns) : "A" + String.fromCharCode(38 + columns);
+    const range = `'${title.replaceAll("'", "''")}'!A1:${lastColumn}${rows}`;
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(range)}?valueRenderOption=FORMATTED_VALUE`;
+    const response = await this.request(url, { signal });
+    const value = await response.json();
+    if (!Array.isArray(value.values)) throw new CloudError("source_mismatch", "Google Sheets не подтвердил содержимое скрытого листа.");
+    return value.values.map(row => row.map(cell => String(cell ?? "")));
+  }
 }

@@ -4,12 +4,18 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 
-const code = readFileSync(
-  new URL('../apps-script/assembly/Code.gs', import.meta.url),
+const rawCode = readFileSync(
+  new URL('../apps-script/'+(process.env.ASSEMBLY_TEST_SOURCE||'assembly')+'/Code.gs', import.meta.url),
   'utf8',
-);
+) + '\n' + readFileSync(new URL('../apps-script/'+(process.env.ASSEMBLY_TEST_SOURCE||'assembly')+'/WarehouseManual.gs', import.meta.url), 'utf8');
+const code = process.env.ASSEMBLY_TEST_SOURCE === 'assembly-live' ? rawCode
+  .replace(/const DB_ID = '[^']+';/,"const DB_ID = 'PUBLIC_TEST_SHEET_ID_0012';")
+  .replace(/const RITM_PRINTING_ID = '[^']+';/,"const RITM_PRINTING_ID = 'PUBLIC_TEST_SHEET_ID_0014';")
+  .replace(/const RITM_BOX_PRINTING_ID = '[^']+';/,"const RITM_BOX_PRINTING_ID = 'PUBLIC_TEST_SHEET_ID_0015';")
+  .replace(/const RITM_CATALOG_ID = '[^']+';/,"const RITM_CATALOG_ID = 'PUBLIC_TEST_SHEET_ID_0013';")
+  .replace(/const RITM_PHOTOS_ID = '[^']+';/,"const RITM_PHOTOS_ID = 'PUBLIC_TEST_SHEET_ID_0011';") : rawCode;
 const html = readFileSync(
-  new URL('../apps-script/assembly/Index.html', import.meta.url),
+  new URL('../apps-script/'+(process.env.ASSEMBLY_TEST_SOURCE||'assembly')+'/Index.html', import.meta.url),
   'utf8',
 );
 
@@ -180,6 +186,9 @@ class Sheet {
     return this.getRange(1, 1, this.getLastRow(), this.getLastColumn());
   }
   getRange(row, col, height = 1, width = 1) {
+    if (![row, col, height, width].every(value => Number.isSafeInteger(value) && value > 0)) {
+      throw new Error('Invalid SpreadsheetApp.Sheet.getRange coordinates');
+    }
     const sheet = this;
     sheet.rangeReads += 1;
     const range = {
@@ -294,7 +303,7 @@ function orderSheet(name, id, lines) {
   return new Sheet(name, rows, id);
 }
 
-function fixture() {
+export function fixture() {
   const props = new Map([
     ["RITM_ASSEMBLY_DB_ID", ids.assembly],
     ["RITM_LABEL_FBO_ID", ids.catalog],
@@ -562,6 +571,15 @@ function fixture() {
   };
   vm.createContext(sandbox);
   vm.runInContext(code, sandbox);
+  // External RITM is a separate boundary: fixtures provide an empty manual
+  // list and an unlocked source, while safety tests override this response.
+  sandbox.ritmControlApiRequest_ = (method, path) => {
+    const shipmentId = decodeURIComponent((String(path).match(/shipmentId=([^&]+)/) || [,''])[1]);
+    if (path === '/api/assembly-stocks') return {ok:true,shipmentId:'RITM-STOCK-WAREHOUSE',destination:'warehouse',marketplace:'OZON',items:[]};
+    if (path.startsWith('/api/assembly-only-items?')) return {ok:true,items:[]};
+    if (path.startsWith('/api/assembly-controls?')) return {ok:true,controls:[],shipmentLock:{shipmentId,locked:false,status:'unlocked'}};
+    throw new Error('Unexpected fixture RITM request: ' + path);
+  };
   return {
     api: sandbox,
     db,
@@ -641,12 +659,62 @@ function linkedDepartmentFixture() {
   return { ...f, box, manifest, shipmentId };
 }
 
+test('a superseded box synchronizer retires only its registry pointer after the same canonical supply is confirmed', () => {
+  const f = linkedDepartmentFixture();
+  assert.equal(f.api.syncRitmSupplies(true).status, 'current');
+  const target = f.db.getSheetByName(f.manifest.name);
+  const key = 'ritm.assembly.supply.linked-RITM-BOX-700';
+  const old = { shipmentId: f.shipmentId, name: f.manifest.name, sheetId: target.id,
+    sourceSheetId: 700, transferred: true, mergedIntoRoll: true, mergedRollSourceSheetId: 100 };
+  f.props.set(key, JSON.stringify(old));
+  const data = f.api.getInitialData(f.shipmentId);
+  appendPacking(f, data.items[2], 3, 'moscow-history-kept');
+  const history = JSON.stringify(['WorkLog', 'Cartons', 'CartonContents'].map(name => f.db.getSheetByName(name).rows));
+  const positions = data.items.map(item => item.positionId);
+  const report = f.api.syncRitmSupplies(true);
+  assert.equal(report.status, 'current', JSON.stringify(report));
+  const retired = JSON.parse(f.props.get(key));
+  assert.equal(retired.archived, true);
+  assert.equal(retired.supersededBy, f.shipmentId);
+  assert.equal(retired.shipmentId, old.shipmentId);
+  assert.ok(retired.supersededAt);
+  assert.deepEqual(Array.from(f.api.getInitialData(f.shipmentId).items, item => item.positionId), Array.from(positions));
+  assert.equal(JSON.stringify(['WorkLog', 'Cartons', 'CartonContents'].map(name => f.db.getSheetByName(name).rows)), history);
+  assert.equal(f.api.syncRitmSupplies(true).status, 'current', 'repeat reconciliation is idempotent');
+  assert.equal(f.box.writes, 0); assert.equal(f.print.writes, 0);
+});
+
+test('an unconfirmed or different canonical target cannot retire an explicit box transfer', () => {
+  for (const mismatch of ['target', 'revision', 'unavailable', 'marker', 'shipment', 'parts']) {
+    const f = linkedDepartmentFixture(); f.api.syncRitmSupplies(true);
+    const target = f.db.getSheetByName(f.manifest.name);
+    const key = 'ritm.assembly.supply.linked-RITM-BOX-700';
+    const old = { shipmentId: f.shipmentId, sheetId: target.id, sourceSheetId: 700,
+      transferred: true, mergedIntoRoll: true, mergedRollSourceSheetId: 100 };
+    f.props.set(key, JSON.stringify(old));
+    const canonicalKey = 'ritm.assembly.supply.linked-' + f.shipmentId;
+    const canonical = JSON.parse(f.props.get(canonicalKey));
+    if (mismatch === 'target') old.sheetId++;
+    if (mismatch === 'revision') canonical.manifestRevision = 'older';
+    if (mismatch === 'unavailable') canonical.sourceAvailable = false;
+    if (mismatch === 'marker') canonical.marker = 'different-marker';
+    if (mismatch === 'shipment') old.shipmentId = 'RITM-BOX-700';
+    if (mismatch === 'parts') canonical.parts = canonical.parts.slice(0, 1);
+    f.props.set(canonicalKey, JSON.stringify(canonical));
+    const before = f.props.get(key), writes = target.writes;
+    const source = f.api.readRitmTransferSource_('box', 700);
+    assert.equal(f.api.retireSupersededRitmBoxTransfer_(source, old, key, f.db, f.api.PropertiesService.getScriptProperties(), Date.now()), false, mismatch);
+    assert.equal(f.props.get(key), before, mismatch);
+    assert.equal(target.writes, writes, 'no mirror/history changes');
+  }
+});
+
 test('department jobs become one selectable Assembly supply with all actual positions and source namespaces', () => {
   const f = linkedDepartmentFixture();
   const result = f.api.syncRitmSupplies(true);
   assert.equal(result.status, 'current', JSON.stringify(result));
   const data = f.api.getInitialData(f.shipmentId);
-  assert.equal(data.shipments.length, 1);
+  assert.equal(data.shipments.filter(row=>!row.stockTask).length, 1);
   assert.equal(data.items.length, 3);
   assert.deepEqual(Array.from(data.items, item => item.sku), ['KNOWN', 'UNKNOWN', 'BOX-SKU']);
   assert.equal(data.items[2].operations.packing.plan, 25);
@@ -875,7 +943,7 @@ test('RITM-created print tab produces a same-name assembly tab and selectable ac
   assert.equal(data.items[0].operations.packing.plan, 55);
   assert.ok(f.db.getSheetByName('OZON Новая поставка'));
   assert.equal(
-    data.shipments.filter((s) => s.environment === 'RITM').length,
+    data.shipments.filter((s) => s.environment === 'RITM' && !s.stockTask).length,
     2,
   );
   assert.deepEqual(
@@ -892,10 +960,10 @@ test('each RITM shipment gets an auto-updating four-column box view filtered by 
   const first = f.db.getSheetByName('Короба · OZON МОСКВА');
   assert.ok(first);
   assert.deepEqual(first.rows[0], ['Номер короба', 'Поставка', 'Артикул', 'Количество']);
-  assert.equal(first.getRange(1, 1).getNote(), 'RITM_ASSEMBLY_BOX_VIEW_V1:RITM-ROLL-100');
+  assert.equal(first.getRange(1, 1).getNote(), 'RITM_ASSEMBLY_BOX_VIEW_V1:direction:OZON_MOSCOW');
   const firstFormula = first.getRange(2, 1).getFormula();
   assert.match(firstFormula, /CartonContents!C2:C/);
-  assert.match(firstFormula, /Col5 = 'RITM-ROLL-100'/);
+  assert.match(firstFormula, /Col5 matches 'RITM-ROLL-100'/);
   assert.match(firstFormula, /sum\(Col4\)/);
 
   f.add('OZON Новая поставка', 200, [['SECOND', 55, 'new-uid']]);
@@ -931,7 +999,7 @@ test('a renamed RITM shipment keeps one stable box-view tab and updates its labe
   assert.ok(original);
   f.print.name = 'OZON Москва — новое название';
   f.api.syncRitmSupplies(true);
-  const renamed = f.db.getSheetByName('Короба · OZON Москва — новое название');
+  const renamed = f.db.getSheetByName('Короба · OZON МОСКВА');
   assert.equal(renamed?.getSheetId(), original.getSheetId());
   assert.equal(f.db.sheets.filter((sheet) => sheet.name.startsWith('Короба · ')).length, 1);
   assert.match(renamed.getRange(2, 1).getFormula(), /RITM-ROLL-100/);
@@ -942,7 +1010,7 @@ test('a same-name user tab is preserved and the generated box view receives a st
   const userSheet = f.db.insertSheet('Короба · OZON МОСКВА');
   userSheet.getRange(1, 1).setValues([['Содержимое пользователя']]);
   f.api.syncRitmSupplies(true);
-  const generated = f.db.getSheetByName('Короба · OZON МОСКВА · ROLL-100');
+  const generated = f.db.getSheetByName('Короба · OZON МОСКВА · общий');
   assert.ok(generated);
   assert.equal(userSheet.rows[0][0], 'Содержимое пользователя');
   assert.match(generated.getRange(2, 1).getFormula(), /RITM-ROLL-100/);
@@ -1277,7 +1345,7 @@ test('legacy preview token remains scoped and deduplicates retries', () => {
   assert.match(mismatched.message, /не совпадают с проверенным/);
   const catalogOpensBeforeSave = f.catalogOpenCount();
   const saved = f.api.saveBoxPlacement({ ...payload, previewId: preview.previewId });
-  assert.equal(f.catalogOpenCount() - catalogOpensBeforeSave, 2, 'final server validation freshly confirms norms and store assignment');
+  assert.equal(f.catalogOpenCount() - catalogOpensBeforeSave, 1, 'one fresh request-scoped catalog read confirms both norms and store assignment');
   assert.equal(saved.duplicate, false);
   assert.equal(saved.assigned, 50);
   assert.equal(saved.available, 50);
@@ -2027,7 +2095,7 @@ test('hidden source tabs and service sheets are excluded', () => {
     new Sheet('Журнал выпуска', [['Артикул', 'Количество']]),
   );
   assert.equal(
-    f.api.getInitialData().shipments.filter((s) => s.environment === 'RITM')
+    f.api.getInitialData().shipments.filter((s) => s.environment === 'RITM' && !s.stockTask)
       .length,
     1,
   );
@@ -2076,7 +2144,7 @@ test('deleted and recreated same-name source archives old derived rows and isola
   assert.equal(JSON.stringify(old.rows), rows);
   assert.equal(JSON.stringify(f.db.getSheetByName('WorkLog').rows), log);
   const after = f.api.getInitialData('RITM-ROLL-200');
-  assert.equal(after.shipments.length, 1);
+  assert.equal(after.shipments.filter(row=>!row.stockTask).length, 1);
   assert.equal(after.items[0].operations.cut.fact, 0);
   assert.equal(after.items[0].operations.cut.plan, 507);
   assert.throws(
@@ -2152,7 +2220,7 @@ test('deleting a source supply archives its assembly sheet, hides it from the ap
   );
   assert.deepEqual(
     Array.from(
-      f.api.getInitialData(data.shipment.id).shipments,
+      f.api.getInitialData(data.shipment.id).shipments.filter(row=>!row.stockTask),
       (row) => row.id,
     ),
     ['RITM-ROLL-200'],
@@ -2179,8 +2247,9 @@ test('when the last RITM supply is deleted, the app receives an empty state inst
   f.source.sheets = [];
   f.api.syncRitmSupplies(true);
   const next = f.api.getInitialData(data.shipment.id);
-  assert.equal(next.shipment, null);
-  assert.deepEqual(Array.from(next.shipments), []);
+  assert.equal(next.shipment.id, 'RITM-STOCK-WAREHOUSE');
+  assert.deepEqual(Array.from(next.items), []);
+  assert.equal(next.shipments.filter(s=>!s.stockTask).length,0);
 });
 
 test('a held sync/work lock prevents duplicate runs and Google reads', () => {
@@ -2270,11 +2339,11 @@ test('event deletion archives a common supply only after all source jobs are con
   f.source.sheets = [];
   f.offline('PUBLIC_TEST_SHEET_ID_0015');
   assert.equal(f.api.receiveRitmAssemblyEvent_(signedAssemblyEvent(secret)).status, 'pending');
-  assert.equal(f.api.getInitialData().shipments.length, 1, 'a network failure is never proof of deletion');
+  assert.equal(f.api.getInitialData().shipments.filter(row=>!row.stockTask).length, 1, 'a network failure is never proof of deletion');
   f.offline('');
   f.boxSource.sheets = [];
   assert.equal(f.api.receiveRitmAssemblyEvent_(signedAssemblyEvent(secret)).status, 'synced');
-  assert.equal(f.api.getInitialData().shipments.length, 0);
+  assert.equal(f.api.getInitialData().shipments.filter(row=>!row.stockTask).length, 0);
   assert.ok(f.db.sheets.some(sheet => sheet.name.includes('архив')));
   assert.equal(JSON.stringify(f.db.getSheetByName('WorkLog').rows), work);
 });
@@ -2286,7 +2355,7 @@ test('an already removed derived tab is retired without blocking notifications f
   f.source.sheets = []; f.boxSource.sheets = [];
   const result = f.api.syncRitmSupplies(true);
   assert.equal(result.status, 'current', JSON.stringify(result));
-  assert.equal(f.api.getInitialData().shipments.length, 0);
+  assert.equal(f.api.getInitialData().shipments.filter(row=>!row.stockTask).length, 0);
 });
 
 test('restoring after interrupted create adopts only a marked sheet', () => {
@@ -2354,7 +2423,7 @@ test('first paint shows the synced composition while facts load, and keeps work 
   preview.environment = 'RITM';
   preview.referenceIncomplete = true;
   preview.items[0].status = 'Проверяем…';
-  runner.success(preview);
+  calls.find(call => call.method === 'getAssemblyPreview').success(preview);
   assert.equal(vm.runInContext('state.loading', sandbox), false);
   assert.equal(elements.get('dataOrigin').textContent, 'Состав из RITM · проверяем факты и короба');
   assert.equal(elements.get('openWorkButton').disabled, true);
@@ -2366,7 +2435,7 @@ test('first paint shows the synced composition while facts load, and keeps work 
   assert.equal(calls.at(-1).method, 'getInitialData');
   const complete = uiSnapshot();
   complete.environment = 'RITM';
-  runner.success(complete);
+  calls.find(call => call.method === 'getInitialData').success(complete);
   assert.equal(elements.get('openWorkButton').disabled, false);
   assert.equal(elements.get('dataOrigin').textContent, 'Состав из RITM · факты из журнала выбранной поставки');
 });
@@ -2411,6 +2480,7 @@ function browserFixture(options = {}) {
           .join('')
       );
     }
+    get options() { return this.children; }
     append(...nodes) {
       this.children.push(...nodes);
     }
@@ -2443,6 +2513,7 @@ function browserFixture(options = {}) {
     querySelectorAll() {
       return [];
     }
+    after() {}
     focus() {}
     showModal() {
       this.open = true;
@@ -2482,6 +2553,8 @@ function browserFixture(options = {}) {
         failure: this.failure,
       });
     },
+    getAssemblyDirections() { const initial=calls.findLast(call=>call.method==='getInitialData'); if(initial){this.success=initial.success;this.failure=initial.failure;} },
+    getShipmentLockIndicators() { this.success({}); },
     getAssemblyPreview(id) {
       this.lastId = id;
       calls.push({ method: 'getAssemblyPreview', args: [id], success: this.success, failure: this.failure });
@@ -2516,6 +2589,9 @@ function browserFixture(options = {}) {
         failure: this.failure,
       });
     },
+    getAssemblyControlTasks() {
+      this.success({ ok: true, available: true, controls: [] });
+    },
     getBoxesForItem(shipmentId, directionId, positionId) {
       calls.push({ method: 'getBoxesForItem', args: [shipmentId, directionId, positionId], success: this.success, failure: this.failure });
     },
@@ -2536,6 +2612,12 @@ function browserFixture(options = {}) {
     },
     closeCarton(payload) {
       calls.push({ method: 'closeCarton', payload, success: this.success, failure: this.failure });
+    },
+    closeWarehouseCarton(payload) {
+      calls.push({ method: 'closeWarehouseCarton', payload, success: this.success, failure: this.failure });
+    },
+    getWarehouseStock() {
+      calls.push({ method: 'getWarehouseStock', success: this.success, failure: this.failure });
     },
     cancelWork(eventId, reason) {
       calls.push({ method: 'cancelWork', eventId, reason, success: this.success, failure: this.failure });
@@ -2585,6 +2667,7 @@ function browserFixture(options = {}) {
   };
   vm.createContext(sandbox);
   vm.runInContext(html.match(/<script>([\s\S]*?)<\/script>/)[1], sandbox);
+  vm.runInContext("state.completionTab='all'", sandbox);
   return { sandbox, runner, elements, calls, timers };
 }
 
@@ -2701,6 +2784,7 @@ test('work history shows exact event details and offers audited cancellation onl
     operationId: 'packing', quantity: 30, norm: 500, coefficient: 0.06,
     createdAt: '2026-10-16T07:30:00Z', source: ' web_app_ritm ', cancelled: false,
   }];
+  vm.runInContext('state.historyExpanded.add(' + JSON.stringify(item.positionId) + ')', f.sandbox);
   const panel = f.sandbox.renderWorkerHistory(item);
   assert.equal(panel.hidden, false, 'article work records are visible as soon as its details are expanded');
   assert.match(panel.textContent, /Максим · Упаковка · 30 шт/);
@@ -2748,6 +2832,7 @@ test('packing cancellation immediately removes reconciled carton quantities and 
     createdAt: '2026-10-16T07:30:00Z', source: 'WEB_APP_RITM', cancelled: false,
   }];
 
+  vm.runInContext('state.historyExpanded.add(' + JSON.stringify(item.positionId) + ')', f.sandbox);
   const panel = f.sandbox.renderWorkerHistory(item);
   const entry = panel.children.find((child) => child.className.includes('history-event'));
   entry.children[1].children.find((child) => child.textContent === 'Удалить запись').handlers.click();
@@ -2784,6 +2869,7 @@ test('confirmed cancellation clears the pending button before reconciling an inc
     createdAt: '2026-10-16T07:30:00Z', source: 'WEB_APP_RITM', cancelled: false,
   }];
 
+  vm.runInContext('state.historyExpanded.add(' + JSON.stringify(item.positionId) + ')', f.sandbox);
   const panel = f.sandbox.renderWorkerHistory(item);
   const entry = panel.children.find((child) => child.className.includes('history-event'));
   entry.children[1].children.find((child) => child.textContent === 'Удалить запись').handlers.click();
@@ -2830,7 +2916,7 @@ test('work modal shows confirmed operation remainder and a local after-save esti
   assert.equal(f.elements.get('workRemainingValue').textContent, '80 шт.');
   assert.equal(f.elements.get('workRemainingNote').textContent, 'Выполнено 20 из 100 шт.');
   assert.equal(f.elements.get('workRemainingPreview').textContent, 'После этой записи останется 50 шт.');
-  assert.equal(f.calls.length, 1, 'remaining and estimate must use the loaded snapshot');
+  assert.equal(f.calls.length, 2, 'only the startup preview and full read; remainder adds no requests');
 
   const missing = uiSnapshot();
   missing.items[0].operations.packing.plan = null;
@@ -2904,7 +2990,7 @@ test('product type is a client-side column and combined filter, supplier shipmen
   assert.equal(f.elements.get('statusFilter').value, 'Упаковка завершена');
   assert.equal(f.elements.get('articleList').children.length, 1);
   assert.match(f.elements.get('articleList').children[0].textContent, /SKU-6/);
-  assert.equal(f.calls.filter((call) => call.method === 'getInitialData').length, 0);
+  assert.equal(f.calls.filter((call) => call.method === 'getInitialData').length, 1);
   f.elements.get('statusFilter').handlers.change({ target: { value: '' } });
 
   filter.value = 'Магниты';
@@ -2912,7 +2998,7 @@ test('product type is a client-side column and combined filter, supplier shipmen
   assert.equal(f.elements.get('articleList').children.length, 1);
   assert.match(f.elements.get('articleList').children[0].textContent, /SKU-2/);
   assert.doesNotMatch(f.elements.get('articleList').children[0].textContent, /SKU-1/);
-  assert.equal(f.calls.filter((call) => call.method === 'getInitialData').length, 0);
+  assert.equal(f.calls.filter((call) => call.method === 'getInitialData').length, 1);
 
   filter.value = '';
   const boxTypeFilter = f.elements.get('boxTypeFilter');
@@ -2932,7 +3018,7 @@ test('product type is a client-side column and combined filter, supplier shipmen
   const row = f.elements.get('articleList').children[0];
   assert.match(row.textContent, /Короб О/);
   assert.match(row.textContent, /64 шт\. \/ короб/);
-  assert.equal(f.calls.filter((call) => call.method === 'getInitialData').length, 0, 'box type filtering must use the loaded snapshot');
+  assert.equal(f.calls.filter((call) => call.method === 'getInitialData').length, 1, 'box type filtering must use the loaded snapshot');
 
   const storeFilter = f.elements.get('storeFilter');
   storeFilter.value = '02';
@@ -3043,7 +3129,7 @@ test('lost save response found in WorkLog completes once and only updates the ch
   );
   assert.equal(
     f.calls.filter((call) => call.method === 'getInitialData').length,
-    0,
+    1,
   );
   first.success({ ...first.payload, quantity: 30 });
   assert.equal(
@@ -3121,12 +3207,13 @@ test('expanded article shows related carton number and physical fill from its in
   assert.equal(f.calls.filter((call) => call.method === 'getBoxesForItem').length, 0);
 });
 
-test('expanded team cards scale from one to ten employees and hide operations the article does not need', () => {
+test('compact article keeps history collapsed, then shows one to ten employees and only relevant operations', () => {
   for (const count of [1, 3, 10]) {
     const f = browserFixture();
     const data = uiSnapshot();
     data.items[0].operations.cut.plan = null;
     data.items[0].operations.assembly.plan = null;
+    data.items[0].workRecords = [{eventId:'history-1',employee:'Анна',operation:'Упаковка',quantity:10,createdAt:'2026-10-16T07:00:00.000Z',source:'WEB_APP_RITM',norm:500,coefficient:0.02}];
     data.items[0].workers = Array.from({ length: count }, (_, index) => ({
       id: 'worker-' + index,
       name: index === 0 ? 'Анна' : 'Сотрудник ' + index,
@@ -3139,12 +3226,15 @@ test('expanded team cards scale from one to ten employees and hide operations th
     }));
     f.runner.success(data);
     f.sandbox.toggleItem('A1');
-    const expanded = f.elements.get('articleList').children[0].replacement;
+    const compact = f.elements.get('articleList').children[0].replacement;
+    assert.equal(compact.textContent.includes('Анна'), false, 'worker details stay collapsed by default');
+    vm.runInContext("state.historyExpanded.add('A1')", f.sandbox);
+    const expanded = vm.runInContext('renderItem(state.data.items[0])', f.sandbox);
     const cards = [];
     let teamPanel;
     const walk = element => {
       if (element?.className === 'worker-card') cards.push(element);
-      if (element?.className === 'team-panel') teamPanel = element;
+      if (element?.className === 'compact-history') teamPanel = element;
       (element?.children || []).forEach(child => { if (typeof child !== 'string') walk(child); });
     };
     walk(expanded);
@@ -3183,7 +3273,7 @@ test('expanded carton actions load details or select the requested open carton o
   f.calls.at(-1).success(uiBoxesSnapshot());
   const detailCall = f.calls.at(-1);
   assert.equal(detailCall.method, 'getBoxDetails');
-  assert.deepEqual(detailCall.args, ['A', 'D', 'carton-1']);
+  assert.deepEqual(detailCall.args, ['A', 'D', 'carton-1', '__direction__']);
 });
 
 test('box placement adds in one click, then updates only the affected article', () => {
@@ -3213,7 +3303,7 @@ test('box placement adds in one click, then updates only the affected article', 
   assert.equal(vm.runInContext('state.data.items[0].cartonsSnapshot[0].number', f.sandbox), '1мск211');
   assert.equal(vm.runInContext('state.data.items[0].cartonsSnapshot[0].itemQuantity', f.sandbox), 50);
   assert.equal(f.calls.filter((call) => call.method === 'saveWork').length, 0);
-  assert.equal(f.calls.filter((call) => call.method === 'getInitialData').length, 0, 'placement does not reload the whole supply');
+  assert.equal(f.calls.filter((call) => call.method === 'getInitialData').length, 1, 'placement does not reload the whole supply');
 });
 
 test('box placement timeout reconciles the operation ID before any retry', () => {
@@ -3472,8 +3562,8 @@ test('failed supply switch retains prior data and restores its selectable identi
   });
   sandbox.switchShipment('B');
   assert.equal(runner.lastId, 'B');
-  assert.equal(calls.at(-1).method, 'getAssemblyPreview');
-  runner.failure(new Error('Сеть недоступна'));
+  assert.equal(calls.at(-1).method, 'getInitialData');
+  calls.findLast(call=>call.method==='getAssemblyPreview').failure(new Error('Сеть недоступна'));
   assert.equal(calls.at(-1).method, 'getInitialData');
   runner.failure(new Error('Сеть недоступна'));
   assert.equal(elements.get('shipmentSelect').value, 'A');
@@ -3610,7 +3700,7 @@ test('new supplies are selectable before a slow reference load finishes, and lat
   assert.equal(f.elements.get('shipmentCount').textContent, '2');
   assert.ok(f.elements.get('shipmentList').children.every(button => !button.disabled));
   f.sandbox.requestShipment('B');
-  assert.equal(f.calls.at(-1).method, 'getAssemblyPreview');
+  assert.equal(f.calls.at(-1).method, 'getInitialData');
   const other = uiSnapshot();
   other.shipment = { ...other.shipment, id: 'B', name: 'WB Новая поставка' };
   other.dataVersion = 4;
@@ -3892,4 +3982,519 @@ test('manual refresh updates unchanged OZON and WB supplies using their own curr
     assert.equal(after.items[0].operations.packing.plan, before.items[0].operations.packing.plan);
     assert.ok(f.catalog.every(sheet => sheet.writes === 0));
   }
+});
+
+for(const [name,prefix,max] of [['OZON СПБ 1й магазин','1спб',8],['OZON Новосиб 1й магазин','1нов',3]])test('next number across globally occupied '+prefix+' cartons',()=>{
+ const f=fixture(),sheet=f.db.getSheetByName('Cartons');
+ seedCarton(f,{id:'other-supply',directionId:'other',name:'Other'},prefix+'1',{status:'Закрыт'});
+ seedCarton(f,{id:'other-supply',directionId:'other',name:'Other'},prefix+max,{status:'Отменён'});
+ seedCarton(f,{id:'other-shop',directionId:'another',name:'Other'},'2'+prefix.slice(1)+'999');
+ const before=JSON.stringify(sheet.rows);
+ const next=f.api.nextCartonNumber_({'Название поставки':name,shipmentId:'new',directionId:'new'},[],'1',sheet);
+ assert.equal(next,prefix+(max+1));assert.equal(JSON.stringify(sheet.rows),before,'allocation lookup never edits existing cartons');
+});
+
+test('concurrent new carton from another shipment gets the next globally free number and retries once',()=>{
+ const f=fixture(),data=f.api.getInitialData(),item=data.items[0],sheet=f.db.getSheetByName('Cartons');
+ const foreign={id:'other-supply',directionId:'other-direction',name:'Other shipment'};
+ seedCarton(f,foreign,'1мос1',{status:'Закрыт'});appendPacking(f,item,10);
+ const scope=f.api.boxPlacementCurrentScope_;let concurrent=false;
+ f.api.boxPlacementCurrentScope_=(...args)=>{if(!concurrent){concurrent=true;seedCarton(f,foreign,'1мос2',{status:'Закрыт'});}return scope(...args);};
+ const payload=placementPayload(item,{mode:'new',quantity:8,idempotencyKey:'concurrent-global-number-01'});
+ const result=f.api.saveBoxPlacement(payload);assert.equal(result.ok,true,JSON.stringify(result));assert.equal(result.carton.number,'1мос3');
+ const before=JSON.stringify(sheet.rows),contents=JSON.stringify(f.db.getSheetByName('CartonContents').rows);
+ const repeat=f.api.saveBoxPlacement(payload);assert.equal(repeat.duplicate,true);
+ assert.equal(JSON.stringify(sheet.rows),before);assert.equal(JSON.stringify(f.db.getSheetByName('CartonContents').rows),contents);
+});
+
+test('direction index groups only confirmed city, marketplace and store, preserving all source IDs', () => {
+  const f = fixture();
+  f.add('OZON Москва XEROX', 101, [['KNOWN', 25, 'x1'], ['UNKNOWN', 3, 'x2']]);
+  f.add('WB Москва', 102, [['KNOWN', 15, 'w1']]);
+  f.add('OZON СПБ', 103, [['KNOWN', 12, 'p1']]);
+  f.api.getInitialData();
+  const before = JSON.stringify(f.db.sheets.map(s => [s.name, s.rows]));
+  const result = f.api.getAssemblyDirections(true);
+  const moscow = result.groups.find(g => g.name === 'OZON МОСКВА' && g.store === '01');
+  assert.ok(moscow, JSON.stringify(result));
+  assert.equal(moscow.sources.length, 2);
+  assert.equal(new Set(moscow.sources.map(s => s.id)).size, 2);
+  assert.ok(moscow.sources.every(s => s.positionIds.length === 1));
+  assert.equal(result.groups.filter(g => g.marketplace === 'OZON' && !g.store && !g.stockTask).length, 2, 'unknown stores are never merged');
+  assert.ok(result.groups.some(g => g.marketplace === 'WB' && g.sources.length === 1));
+  assert.ok(result.groups.some(g => g.name.includes('СПБ') && g.sources.length === 1));
+  assert.equal(JSON.stringify(f.db.sheets.map(s => [s.name, s.rows])), before, 'navigation index is strictly read only');
+  const opens = f.catalogOpenCount();
+  assert.equal(f.api.getAssemblyDirections().revision, result.revision);
+  assert.equal(f.catalogOpenCount(), opens, 'cached directory does not reopen catalog');
+});
+
+test('ambiguous catalog store is source-specific rather than inferred from a shipment label', () => {
+  const f=fixture();
+  f.add('OZON МОСКВА 1й магазин XEROX', 101, [['KNOWN', 25, 'x1']]);
+  const conflict = [...f.catalog[0].rows[1]]; conflict[14]='02'; f.catalog[0].rows.push(conflict);
+  f.api.getInitialData();
+  const groups=f.api.getAssemblyDirections(true).groups;
+  assert.ok(groups.every(group => group.store === ''));
+  assert.ok(groups.every(group => group.sources.length === 1));
+});
+
+function groupedBrowserFixture() {
+  const f=browserFixture();
+  const a=uiSnapshot(), b=structuredClone(a);
+  a.items[0].storeNumbers=['1']; a.items[0].workFactsAvailable=true;
+  b.shipment={...b.shipment,id:'B',name:'OZON Москва Xerox'};
+  b.items[0]={...b.items[0],shipmentId:'B',positionId:'B1',storeNumbers:['1'],workFactsAvailable:true};
+  a.shipments=b.shipments=[a.shipment,b.shipment];
+  f.runner.success(a);
+  f.sandbox.__groupA=a; f.sandbox.__groupB=b;
+  vm.runInContext(`state.dataCache.B=__groupB; state.directions=[{id:'group',name:'OZON МОСКВА',marketplace:'OZON',store:'1',directionKey:'OZON|МОСКВА',sources:[{id:'A',name:'OZON Москва 2-GO',positionIds:['A1']},{id:'B',name:'OZON Москва Xerox',positionIds:['B1']}]}];state.selectedDirectionId='group';state.completionTab='work';render();`,f.sandbox);
+  return f;
+}
+
+test('grouped identical articles retain separate position identities and work opens the correct source', () => {
+  const f=groupedBrowserFixture();
+  assert.equal(f.sandbox.visibleDirectionItems().length, 2);
+  const original=JSON.stringify(f.sandbox.__groupA.items);
+  f.sandbox.openWorkModal('B1');
+  assert.equal(vm.runInContext('state.data.shipment.id',f.sandbox),'B');
+  assert.equal(vm.runInContext('state.workPositionId',f.sandbox),'B1');
+  assert.equal(f.elements.get('workContext').textContent,'OZON Москва Xerox');
+  assert.equal(JSON.stringify(f.sandbox.__groupA.items),original);
+  assert.equal(f.sandbox.visibleDirectionItems().length,2);
+});
+
+test('ready items require confirmed packing and allocation, including warehouse excess', () => {
+  const f=groupedBrowserFixture(), item=f.sandbox.__groupA.items[0];
+  item.operations.packing.fact=105;
+  item.boxedQtySnapshot=100;
+  assert.equal(f.sandbox.itemIsFinished(item),false,'unallocated surplus stays visible');
+  item.assignedQtySnapshot=105;
+  assert.equal(f.sandbox.itemIsFinished(item),true);
+  item.workFactsAvailable=false;
+  assert.equal(f.sandbox.itemIsFinished(item),false);
+  item.workFactsAvailable=true; item.operations.packing.fact=null;
+  assert.equal(f.sandbox.itemIsFinished(item),false);
+});
+
+test('completion tabs change only the view and never issue work or carton mutations', () => {
+  const f=groupedBrowserFixture(), item=f.sandbox.__groupA.items[0];
+  item.operations.packing.fact=100; item.assignedQtySnapshot=100;
+  const before=JSON.stringify([f.sandbox.__groupA,f.sandbox.__groupB]);
+  const mutations=f.calls.filter(c=>/^save|^cancel|^close/.test(c.method)).length;
+  vm.runInContext("state.completionTab='work';render()",f.sandbox);
+  assert.equal(f.elements.get('articleList').children.length,1);
+  vm.runInContext("state.completionTab='done';render()",f.sandbox);
+  assert.equal(f.elements.get('articleList').children.length,1);
+  assert.equal(f.elements.get('articleList').children[0].dataset.positionId,'A1');
+  vm.runInContext("state.completionTab='all';render()",f.sandbox);
+  assert.equal(f.elements.get('articleList').children.length,2);
+  assert.equal(f.calls.filter(c=>/^save|^cancel|^close/.test(c.method)).length,mutations);
+  assert.equal(JSON.stringify([f.sandbox.__groupA,f.sandbox.__groupB]),before);
+});
+
+test('pending carton placement may reopen its own source but cannot switch to another position', () => {
+  const f=groupedBrowserFixture();
+  vm.runInContext("state.boxPending={payload:{shipmentId:'B',positionId:'B1'}}",f.sandbox);
+  assert.equal(f.sandbox.activateItemSource('A1',true),false);
+  assert.equal(f.sandbox.activateItemSource('B1'),false);
+  assert.equal(f.sandbox.activateItemSource('B1',true),true);
+  assert.equal(vm.runInContext('state.data.shipment.id',f.sandbox),'B');
+});
+
+test('authoritative unlock clears stale group source lock while a locked source remains blocked', () => {
+  const f=groupedBrowserFixture();
+  vm.runInContext("state.sourceLocks.B=true;state.shipmentLockIndicatorsLoading=false",f.sandbox);
+  f.runner.getShipmentLockIndicators=function(){this.success({A:'locked',B:'unlocked'});};
+  f.sandbox.refreshShipmentLockIndicators();
+  assert.equal(f.sandbox.isShipmentLocked('A'),true);
+  assert.equal(f.sandbox.isShipmentLocked('B'),false);
+});
+
+test('a late direction read cannot overwrite work saved during that read', () => {
+  const f=groupedBrowserFixture();
+  vm.runInContext('delete state.dataCache.B;scheduleDirectionSources()',f.sandbox);
+  const read=f.calls.findLast(c=>c.method==='getInitialData'&&c.args[0]==='B'); assert.ok(read);
+  vm.runInContext('state.mutationEpoch++',f.sandbox);
+  read.success(f.sandbox.__groupB);
+  assert.equal(vm.runInContext('state.dataCache.B',f.sandbox),undefined);
+  assert.equal(vm.runInContext('state.data.shipment.id',f.sandbox),'A');
+});
+
+test('direction loading does not duplicate an already-running active source read', () => {
+  const f=groupedBrowserFixture();
+  vm.runInContext("delete state.dataCache.B;state.selectedShipmentId='B';state.loading=true",f.sandbox);
+  const before=f.calls.filter(c=>c.method==='getInitialData'&&c.args[0]==='B').length;
+  f.sandbox.scheduleDirectionSources();
+  assert.equal(f.calls.filter(c=>c.method==='getInitialData'&&c.args[0]==='B').length,before);
+});
+
+test('open carton chooser excludes another confirmed store and preserves existing allocation inspection', () => {
+  const f=groupedBrowserFixture(),item=f.sandbox.__groupA.items[0];
+  assert.equal(f.sandbox.boxMatchesSelectedStore({storeNumber:'1'},item),true);
+  assert.equal(f.sandbox.boxMatchesSelectedStore({storeNumber:'2'},item),false);
+  assert.equal(f.sandbox.boxMatchesSelectedStore({storeNumber:'2',itemQuantity:1},item),true);
+  assert.equal(f.sandbox.boxMatchesSelectedStore({},item),true,'unknown legacy numbering stays inspectable');
+});
+
+function stockPlacementFixture() {
+  const f = fixture();
+  f.api.PropertiesService.getScriptProperties().setProperties = entries => Object.entries(entries).forEach(([key,value]) => f.props.set(key,value));
+  f.api.syncRitmSupplies(true);
+  const item=f.api.getInitialData('RITM-ROLL-100').items.find(row=>row.sku==='KNOWN');
+  appendPacking(f,item,130,'stock-audit-packed');
+  const payload={mode:'new',shipmentId:item.shipmentId,directionId:item.directionId,positionId:item.positionId,quantity:130,idempotencyKey:'stock-audit-request-001',employeeId:'emp'};
+  return { ...f,item,payload };
+}
+
+function manualWarehousePayload(changes={}){return {article:'KNOWN',marketplace:'OZON',storeNumber:'1',quantity:23,employeeId:'emp',comment:'Готовый товар',idempotencyKey:'manual-warehouse-test-001',...changes};}
+test('manual warehouse lookup loads current product photo, name, store and carton details without a supply',()=>{
+  const f=fixture(),before=JSON.stringify(f.db.sheets.map(s=>s.rows));
+  const card=f.api.getManualWarehouseProduct({article:'known',marketplace:'OZON'});
+  assert.equal(card.found,true);assert.equal(card.productName,'Реальное название');assert.match(card.photoUrl,/wbbasket/);assert.equal(card.boxType,'M');assert.deepEqual(Array.from(card.stores),['1']);
+  assert.equal(JSON.stringify(f.db.sheets.map(s=>s.rows)),before);
+});
+test('manual warehouse receipt accepts an article absent from supplies and catalog, preserving work and production data',()=>{
+  const f=fixture(),work=JSON.stringify(f.db.getSheetByName('WorkLog').rows),items=JSON.stringify(f.db.getSheetByName('Items').rows);
+  const payload=manualWarehousePayload({article:'NEW0001.A0001',storeNumber:'2'}),result=f.api.saveManualWarehouseEntry(payload);
+  assert.equal(result.ok,true,JSON.stringify(result));assert.equal(result.number,'2скл1');assert.equal(result.quantity,23);
+  const stock=f.api.getWarehouseStock(),entry=stock.cartons[0].contents[0];assert.equal(entry.sku,payload.article);assert.equal(entry.quantity,23);assert.equal(entry.employee,'ОляЖ 2');assert.ok(entry.createdAt);assert.equal(entry.shipment,'Ручное поступление на склад');assert.equal(entry.comment,'Готовый товар');
+  assert.equal(JSON.stringify(f.db.getSheetByName('WorkLog').rows),work);assert.equal(JSON.stringify(f.db.getSheetByName('Items').rows),items);assert.equal(f.print.writes,0);assert.ok(f.db.getSheetByName('Короба · На склад'));
+});
+test('manual warehouse retries deduplicate and separate new receipts share the current carton',()=>{
+  const f=fixture(),payload=manualWarehousePayload();const first=f.api.saveManualWarehouseEntry(payload);assert.equal(first.ok,true,JSON.stringify(first));
+  assert.equal(f.api.saveManualWarehouseEntry(payload).duplicate,true);assert.equal(f.api.getManualWarehouseEntryStatus(payload.idempotencyKey).quantity,23);
+  assert.equal(f.api.saveManualWarehouseEntry({...payload,idempotencyKey:'manual-warehouse-test-002',quantity:7}).ok,true);
+  const stock=f.api.getWarehouseStock();assert.equal(stock.cartons.length,1);assert.equal(stock.cartons[0].contents.reduce((n,r)=>n+r.quantity,0),30);
+});
+
+test('manual warehouse updates the real row of an existing carton after blank rows, not a filtered index',()=>{
+  const f=fixture();
+  assert.equal(f.api.saveManualWarehouseEntry(manualWarehousePayload()).ok,true);
+  const sheet=f.db.getSheetByName('Cartons'),headers=sheet.rows[0];
+  sheet.rows.push([],[],[]);
+  const values=headers.map(name=>({cartonId:'carton-stock-existing-shop2',shipmentId:'RITM-ROLL-100',directionId:'ROLL','Направление':'OZON МОСКВА','Номер':'2скл7','Занято, шт':0,'Статус':'Открыт',createdAt:new Date().toISOString(),'Тип короба':'Склад'}[name]??''));
+  sheet.rows.push(values);const row=sheet.rows.length;
+  const payload=manualWarehousePayload({article:'NEW0001.A0001',storeNumber:'2',quantity:15,idempotencyKey:'manual-warehouse-existing-002'});
+  const saved=f.api.saveManualWarehouseEntry(payload);
+  assert.equal(saved.ok,true,JSON.stringify(saved));assert.equal(saved.number,'2скл7');
+  assert.equal(sheet.rows[row-1][headers.indexOf('Занято, шт')],15);
+  assert.equal(sheet.rows[1][headers.indexOf('Занято, шт')],23);
+  assert.equal(f.api.saveManualWarehouseEntry(payload).duplicate,true);
+  assert.equal(sheet.rows[row-1][headers.indexOf('Занято, шт')],15);
+});
+
+test('a new request reuses an identical unfinished manual receipt instead of appending another quantity',()=>{
+  const f=fixture(),payload=manualWarehousePayload(),ensure=f.api.ensureWarehouseBoxViewSheet_;let fail=true;
+  f.api.ensureWarehouseBoxViewSheet_=db=>{if(fail){fail=false;throw Error('Lost acknowledgement after quantity');}return ensure(db);};
+  assert.equal(f.api.saveManualWarehouseEntry(payload).status,'pending');
+  const changedKey=f.api.saveManualWarehouseEntry({...payload,idempotencyKey:'manual-warehouse-new-tab-002'});
+  assert.equal(changedKey.status,'pending_existing');assert.equal(changedKey.resumeKey,payload.idempotencyKey);
+  assert.equal(f.api.readTable_(f.db,'StockPlacementOperations').length,1);
+  assert.equal(f.api.readTable_(f.db,'CartonContents').length,1);
+  assert.equal(f.api.saveManualWarehouseEntry({...payload,idempotencyKey:changedKey.resumeKey,resume:true}).ok,true);
+  assert.equal(f.api.getWarehouseStock().cartons[0].contents[0].quantity,23);
+});
+
+test('an audited cancellation of a duplicate receipt is terminal and cannot re-add stock on continue',()=>{
+  const f=fixture(),payload=manualWarehousePayload();assert.equal(f.api.saveManualWarehouseEntry(payload).ok,true);
+  const sheet=f.db.getSheetByName('StockPlacementOperations'),headers=sheet.rows[0],saved=JSON.parse(sheet.rows[1][headers.indexOf('request')]);
+  saved.cancelledAt=new Date().toISOString();saved.cancellationReason='Owner confirmed duplicate';
+  sheet.rows[1][headers.indexOf('request')]=JSON.stringify(saved);sheet.rows[1][headers.indexOf('stockQuantity')]=0;
+  const before=JSON.stringify(f.db.sheets.map(s=>s.rows));
+  const result=f.api.saveManualWarehouseEntry({...payload,resume:true});
+  assert.equal(result.ok,true);assert.equal(result.cancelled,true);assert.equal(result.quantity,0);assert.match(result.message,/отменено/);
+  assert.equal(f.api.getManualWarehouseEntryStatus(payload.idempotencyKey).cancelled,true);
+  assert.equal(JSON.stringify(f.db.sheets.map(s=>s.rows)),before);
+});
+test('manual warehouse validates employee, quantities, marketplace and known catalog store before writing goods',()=>{
+  for(const change of [{employeeId:''},{employeeId:'not-active'},{quantity:0},{quantity:1.5},{quantity:-1},{storeNumber:'2'},{marketplace:'OTHER'},{article:'=IMPORTDATA()'}]){
+    const f=fixture(),result=f.api.saveManualWarehouseEntry(manualWarehousePayload(change));assert.equal(result.ok,false,JSON.stringify(result));assert.equal(result.status,'not_written');
+    assert.equal(f.api.readTable_(f.db,'CartonContents').length,0);assert.equal(f.api.readTable_(f.db,'Cartons').length,0);
+  }
+});
+test('manual warehouse cannot overwrite a saved receipt using a changed request',()=>{
+  const f=fixture(),payload=manualWarehousePayload();assert.equal(f.api.saveManualWarehouseEntry(payload).ok,true);
+  assert.equal(f.api.saveManualWarehouseEntry({...payload,quantity:70}).ok,false);assert.equal(f.api.getWarehouseStock().cartons[0].contents[0].quantity,23);
+});
+test('manual warehouse recovers after lost append acknowledgement and after report failure without duplicating goods',()=>{
+  for(const stage of ['allocation','report']){const f=fixture(),payload=manualWarehousePayload();let fail=true;
+    if(stage==='allocation'){const append=f.api.appendRecordByHeaders_;f.api.appendRecordByHeaders_=(sheet,headers,record)=>{append(sheet,headers,record);if(fail&&sheet.getName()==='CartonContents'){fail=false;throw Error('INTERNAL after append');}};}
+    else {const ensure=f.api.ensureWarehouseBoxViewSheet_;f.api.ensureWarehouseBoxViewSheet_=db=>{if(fail){fail=false;throw Error('INTERNAL report');}return ensure(db);};}
+    const first=f.api.saveManualWarehouseEntry(payload);assert.equal(first.status,'pending',JSON.stringify(first));assert.equal(f.api.getManualWarehouseEntryStatus(payload.idempotencyKey).status,'pending');
+    const second=f.api.saveManualWarehouseEntry({...payload,resume:true});assert.equal(second.ok,true,JSON.stringify(second));const stock=f.api.getWarehouseStock();assert.equal(stock.cartons.length,1);assert.equal(stock.cartons[0].contents.length,1);assert.equal(stock.cartons[0].contents[0].quantity,23);
+  }
+});
+test('manual stock can be added without a catalog response and enriched later without changing its quantity or author',()=>{
+  const f=fixture(),read=f.api.readRitmCatalog_;f.api.readRitmCatalog_=()=>{throw Error('offline');};
+  const p=manualWarehousePayload({article:'LATER',storeNumber:'2'});assert.equal(f.api.saveManualWarehouseEntry(p).ok,true);
+  assert.equal(f.api.getWarehouseStock().cartons[0].contents[0].productName,'');f.api.readRitmCatalog_=read;
+  const row=[...f.catalog[0].rows[1]];row[0]='LATER(OZ)';row[1]='LATER';row[2]='Появилось в базе';row[row.length-1]='2';f.catalog[0].rows.push(row);
+  const stock=f.api.getWarehouseStock();assert.equal(stock.cartons[0].contents[0].productName,'Появилось в базе');assert.equal(stock.cartons[0].contents[0].quantity,23);assert.equal(stock.cartons[0].contents[0].employee,'ОляЖ 2');
+});
+test('manual receipt status read cannot create sheets or write goods',()=>{
+  const f=fixture(),before=JSON.stringify(f.db.sheets.map(s=>s.rows));assert.equal(f.api.getManualWarehouseEntryStatus('manual-never-written-001').status,'pending');assert.equal(JSON.stringify(f.db.sheets.map(s=>s.rows)),before);
+});
+test('manual receipt resumes into a new carton if an empty provisional carton was closed before allocation',()=>{
+  const f=fixture(),payload=manualWarehousePayload(),append=f.api.appendRecordByHeaders_;let fail=true;
+  f.api.appendRecordByHeaders_=(sheet,headers,record)=>{if(fail&&sheet.getName()==='CartonContents'){fail=false;throw Error('INTERNAL before append');}return append(sheet,headers,record);};
+  assert.equal(f.api.saveManualWarehouseEntry(payload).status,'pending');
+  const cartons=f.db.getSheetByName('Cartons'),headers=cartons.rows[0];cartons.rows[1][headers.indexOf('Статус')]='Закрыт';cartons.rows[1][headers.indexOf('closedAt')]=new Date().toISOString();
+  const result=f.api.saveManualWarehouseEntry({...payload,resume:true});assert.equal(result.ok,true,JSON.stringify(result));assert.equal(result.number,'1скл2');assert.equal(f.api.readTable_(f.db,'CartonContents').length,1);assert.equal(cartons.rows[1][headers.indexOf('Статус')],'Закрыт');
+});
+
+test('a shared direction carton closes from another source shipment without changing quantities or work',()=>{
+  const f=fixture(); f.add('OZON МОСКВА XEROX',101,[['KNOWN',40,'second-job']]); f.api.syncRitmSupplies(true);
+  const first=f.api.getInitialData('RITM-ROLL-100'),second=f.api.getInitialData('RITM-ROLL-101');
+  const carton=seedCarton(f,first.shipment,'1мос401',{cartonId:'shared-close'});
+  seedAllocation(f,first.shipment,first.items[0],carton.cartonId,12,'shared-close-allocation');
+  const details=f.api.getBoxDetails(second.shipment.id,second.shipment.directionId,carton.cartonId,'__direction__');
+  assert.ok(details.closeRevision);assert.equal(details.shipment.directionId,second.shipment.directionId);
+  const contents=JSON.stringify(f.db.getSheetByName('CartonContents').rows),work=JSON.stringify(f.db.getSheetByName('WorkLog').rows);
+  f.api.bumpDataVersion_(); // A different collector saved unrelated work.
+  const payload={shipmentId:second.shipment.id,directionId:second.shipment.directionId,cartonId:carton.cartonId,closeRevision:details.closeRevision,idempotencyKey:'shared-close-request-001'};
+  assert.equal(f.api.closeCarton(payload).ok,true);
+  assert.equal(f.api.closeCarton(payload).duplicate,true);
+  assert.equal(JSON.stringify(f.db.getSheetByName('CartonContents').rows),contents);
+  assert.equal(JSON.stringify(f.db.getSheetByName('WorkLog').rows),work);
+});
+
+test('carton close rejects a changed composition and a foreign city',()=>{
+  const f=fixture();f.add('OZON СПБ',101,[['KNOWN',40,'spb']]);f.api.syncRitmSupplies(true);
+  const first=f.api.getInitialData('RITM-ROLL-100'),second=f.api.getInitialData('RITM-ROLL-101');
+  const carton=seedCarton(f,first.shipment,'1мос402',{cartonId:'changed-close'});
+  const details=f.api.getBoxDetails(first.shipment.id,first.shipment.directionId,carton.cartonId);
+  seedAllocation(f,first.shipment,first.items[0],carton.cartonId,2,'later-allocation');
+  const payload={shipmentId:first.shipment.id,directionId:first.shipment.directionId,cartonId:carton.cartonId,closeRevision:details.closeRevision,idempotencyKey:'changed-close-request-001'};
+  assert.throws(()=>f.api.closeCarton(payload),/Состав короба изменился/);
+  assert.throws(()=>f.api.closeCarton({...payload,shipmentId:second.shipment.id,directionId:second.shipment.directionId}),/не найден/);
+});
+
+test('warehouse carton close preserves contents and history, is retry-safe and routes later excess to another carton',()=>{
+  const f=stockPlacementFixture();assert.equal(f.api.saveStockSplitPlacement(f.payload).ok,true);
+  const stock=f.api.getWarehouseStock(),box=stock.cartons[0];assert.equal(box.open,true);assert.ok(box.closeRevision);
+  const contents=JSON.stringify(f.db.getSheetByName('CartonContents').rows),work=JSON.stringify(f.db.getSheetByName('WorkLog').rows);
+  const payload={cartonId:box.cartonId,closeRevision:box.closeRevision,idempotencyKey:'warehouse-close-request-001'};
+  f.api.bumpDataVersion_();assert.equal(f.api.closeWarehouseCarton(payload).ok,true);assert.equal(f.api.closeWarehouseCarton(payload).duplicate,true);
+  const closed=f.api.getWarehouseStock().cartons.find(row=>row.cartonId===box.cartonId);
+  assert.equal(closed.open,false);assert.ok(closed.closedAt);assert.equal(closed.current,false);
+  assert.equal(JSON.stringify(f.db.getSheetByName('CartonContents').rows),contents);assert.equal(JSON.stringify(f.db.getSheetByName('WorkLog').rows),work);
+  appendPacking(f,f.item,10,'warehouse-after-close-packed');
+  const result=f.api.saveStockSplitPlacement({...f.payload,quantity:10,idempotencyKey:'warehouse-after-close-place-001'});assert.equal(result.ok,true,JSON.stringify(result));
+  const after=f.api.getWarehouseStock();assert.equal(after.cartons.find(row=>row.current).number,'1скл2');assert.equal(after.cartons.find(row=>row.cartonId===box.cartonId).contents[0].quantity,30);
+});
+
+test('warehouse close UI confirms the chosen carton before issuing a mutation',()=>{
+  const f=browserFixture();f.runner.success(uiSnapshot());f.sandbox.setWarehouseStockView(true);
+  const box={cartonId:'carton-stock-test',number:'1скл1',open:true,current:true,marketplace:'OZON',storeNumber:'1',closeRevision:'test-revision',contents:[]};
+  f.calls.at(-1).success({ok:true,dataVersion:7,cartons:[box]});
+  assert.match(f.elements.get('warehouseStockList').textContent,/Закрыть короб/);
+  f.sandbox.crypto={randomUUID};f.sandbox.requestCloseWarehouseCarton(box);assert.match(f.elements.get('warehouseStockList').textContent,/Закрыть 1скл1/);
+  assert.equal(f.calls.filter(call=>call.method==='closeWarehouseCarton').length,0);
+  f.sandbox.confirmCloseWarehouseCarton();assert.equal(f.calls.at(-1).method,'closeWarehouseCarton');assert.equal(f.calls.at(-1).payload.closeRevision,'test-revision');
+});
+test('warehouse excess from different articles and cities shares the current store carton without a capacity split',()=>{
+  const f=stockPlacementFixture();
+  assert.equal(f.api.saveStockSplitPlacement(f.payload).ok,true);
+  const catalog=[...f.catalog[0].rows[1]];catalog[0]='SECOND(OZ)';catalog[1]='SECOND';f.catalog[0].rows.push(catalog);
+  f.add('OZON КАЗАНЬ',101,[['SECOND',100,'second']]);f.api.syncRitmSupplies(true);
+  const second=f.api.getInitialData('RITM-ROLL-101').items.find(row=>row.sku==='SECOND');
+  appendPacking(f,second,400,'stock-second-packed');
+  const work=JSON.stringify(f.db.getSheetByName('WorkLog').rows);
+  const result=f.api.saveStockSplitPlacement({...f.payload,shipmentId:second.shipmentId,directionId:second.directionId,positionId:second.positionId,quantity:400,idempotencyKey:'stock-second-request-001'});
+  assert.equal(result.ok,true,JSON.stringify(result));assert.equal(result.stockQuantity,300);
+  const stock=f.api.getWarehouseStock();assert.equal(stock.cartons.length,1);assert.equal(stock.cartons[0].number,'1скл1');
+  assert.deepEqual(Array.from(stock.cartons[0].contents,item=>item.quantity),[30,300]);
+  assert.equal(new Set(stock.cartons[0].contents.map(item=>item.shipment)).size,2);
+  assert.equal(JSON.stringify(f.db.getSheetByName('WorkLog').rows),work);
+});
+test('manual warehouse carton creation is idempotent and only future allocations go to the new current carton',()=>{
+  const f=stockPlacementFixture();assert.equal(f.api.saveStockSplitPlacement(f.payload).ok,true);
+  const first=f.api.getWarehouseStock().cartons[0];
+  const input={sourceCartonId:first.cartonId,idempotencyKey:'manual-stock-carton-001'};
+  const created=f.api.createWarehouseCarton(input);assert.equal(created.ok,true);assert.equal(created.number,'1скл2');
+  assert.equal(f.api.createWarehouseCarton(input).cartonId,created.cartonId);
+  let stock=f.api.getWarehouseStock();assert.equal(stock.cartons.length,2);assert.equal(stock.cartons.find(c=>c.current).number,'1скл2');
+  assert.equal(stock.cartons[0].contents[0].quantity,30,'old quantities are untouched');
+  appendPacking(f,f.item,20,'stock-more-packed');
+  const result=f.api.saveStockSplitPlacement({...f.payload,quantity:20,idempotencyKey:'stock-more-request-001'});
+  assert.equal(result.ok,true,JSON.stringify(result));stock=f.api.getWarehouseStock();
+  assert.equal(stock.cartons[0].contents[0].quantity,30);assert.equal(stock.cartons[1].contents[0].quantity,20);
+});
+test('warehouse current selection never mixes stores or marketplaces and retains the oldest existing open carton by default',()=>{
+  const f=stockPlacementFixture();
+  const rows=[
+    {cartonId:'carton-stock-first','Номер':'1скл1','Статус':'Открыт','Направление':'OZON Ростов'},
+    {cartonId:'carton-stock-second','Номер':'1скл2','Статус':'Открыт','Направление':'OZON Казань'},
+    {cartonId:'carton-stock-other-store','Номер':'2скл1','Статус':'Открыт','Направление':'OZON Москва'},
+    {cartonId:'carton-stock-other-market','Номер':'1скл3','Статус':'Открыт','Направление':'WB Москва'},
+  ];
+  assert.equal(f.api.chooseWarehouseCarton_(rows,'1','OZON','').cartonId,'carton-stock-first');
+  assert.equal(f.api.chooseWarehouseCarton_(rows,'1','OZON','carton-stock-second').cartonId,'carton-stock-second');
+  assert.equal(f.api.chooseWarehouseCarton_(rows,'2','OZON','carton-stock-first').cartonId,'carton-stock-other-store');
+  assert.equal(f.api.chooseWarehouseCarton_(rows,'1','WB','carton-stock-first').cartonId,'carton-stock-other-market');
+  rows[0]['Статус']='Закрыт';assert.equal(f.api.chooseWarehouseCarton_(rows,'1','OZON','carton-stock-first').cartonId,'carton-stock-second');
+});
+test('empty current warehouse carton stays visible without a search and creation retry keeps the same request',()=>{
+  const f=browserFixture();const boxes=[{number:'1скл1',current:true,contents:[]}];
+  assert.equal(f.sandbox.filterWarehouseStock(boxes,'').length,1);assert.equal(f.sandbox.filterWarehouseStock(boxes,'missing').length,0);
+});
+test('warehouse excess keeps packing history and attributes stock to the selected employee, with idempotent replay',()=>{
+  const f=stockPlacementFixture(), work=JSON.stringify(f.db.getSheetByName('WorkLog').rows);
+  const result=f.api.saveStockSplitPlacement(f.payload);
+  assert.equal(result.ok,true,JSON.stringify(result));
+  assert.equal(result.shipmentQuantity,100); assert.equal(result.stockQuantity,30);
+  const stock=f.api.getWarehouseStock();
+  assert.equal(stock.cartons.length,1); assert.equal(stock.cartons[0].contents[0].quantity,30);
+  assert.equal(stock.cartons[0].contents[0].employee,'ОляЖ 2');
+  assert.ok(stock.cartons[0].contents[0].createdAt);
+  assert.equal(JSON.stringify(f.db.getSheetByName('WorkLog').rows),work);
+  const contents=JSON.stringify(f.db.getSheetByName('CartonContents').rows);
+  assert.equal(f.api.saveStockSplitPlacement(f.payload).duplicate,true);
+  assert.equal(JSON.stringify(f.db.getSheetByName('CartonContents').rows),contents);
+});
+test('unknown or missing stock sender is rejected before a carton or allocation is written',()=>{
+  for(const employeeId of ['', 'unknown']){
+    const f=stockPlacementFixture(); const before=JSON.stringify(f.db.sheets.map(sheet=>sheet.rows));
+    const result=f.api.saveStockSplitPlacement({...f.payload,employeeId});
+    assert.equal(result.notWritten,true); assert.match(result.message,/сотрудника/);
+    assert.equal(f.api.getWarehouseStock().cartons.length,0);
+    // Creating an empty audit sheet is harmless; production and work remain unchanged.
+    assert.equal(f.print.writes,0);
+  }
+});
+test('stock report retains old missing authors and normalizes removal history without fabricating names',()=>{
+  const f=stockPlacementFixture(); assert.equal(f.api.saveStockSplitPlacement(f.payload).ok,true);
+  const table=f.db.getSheetByName('CartonContents'), headers=table.rows[0];
+  const index=table.rows.findIndex(row=>String(row[headers.indexOf('cartonId')]).startsWith('carton-stock-'));
+  const original=Object.fromEntries(Array.from(headers,(header,i)=>[header,table.rows[index][i]]));
+  table.rows[index][headers.indexOf('Сотрудник')]='';
+  const correction={...original,allocationId:'stock-remove-audit',action:'REMOVE',sourceAllocationId:original.allocationId,'Количество, шт':-5};
+  table.rows.push(headers.map(header=>correction[header]??''));
+  const result=f.api.getWarehouseStock();
+  assert.equal(result.cartons[0].contents[0].quantity,25); assert.equal(result.cartons[0].contents[0].employee,'');
+  assert.equal(table.rows[index][headers.indexOf('Количество, шт')],30);
+});
+
+test('warehouse product details use the exact Assembly position and preserve quantities, dates and author',()=>{
+  const f=stockPlacementFixture(); assert.equal(f.api.saveStockSplitPlacement(f.payload).ok,true);
+  const before=JSON.stringify(f.db.sheets.map(sheet=>sheet.rows));
+  const item=f.api.getWarehouseStock().cartons[0].contents[0];
+  assert.equal(item.productName,'Реальное название');
+  assert.match(item.photoUrl,/^https:\/\/basket-33\.wbbasket\.ru\//);
+  assert.equal(item.quantity,30); assert.equal(item.employee,'ОляЖ 2'); assert.ok(item.createdAt);
+  assert.equal(JSON.stringify(f.db.sheets.map(sheet=>sheet.rows)),before,'product enrichment is read-only');
+  assert.equal(f.print.writes,0);
+});
+test('unavailable product source never hides physical stock or invents a photo',()=>{
+  const f=stockPlacementFixture(); assert.equal(f.api.saveStockSplitPlacement(f.payload).ok,true);
+  f.api.assemblyShipments_=()=>[]; f.api.readRitmCatalog_=()=>{throw Error('offline')};
+  const item=f.api.getWarehouseStock().cartons[0].contents[0];
+  assert.equal(item.quantity,30); assert.equal(item.productName,''); assert.equal(item.photoUrl,'');
+});
+test('warehouse search matches a carton number or an article locally and preserves the original snapshot',()=>{
+  const f=browserFixture();
+  const cartons=[{number:'1скл1',contents:[{sku:'LT0001.A5442',productName:'Наклейки Ёлочка',quantity:20},{sku:'CT0009.A0190',productName:'Плакат',quantity:10}]},{number:'2скл2',contents:[{sku:'OTHER',quantity:4}]}];
+  const before=JSON.stringify(cartons),calls=f.calls.length;
+  assert.equal(f.sandbox.filterWarehouseStock(cartons,'1СКЛ1')[0].contents.length,2);
+  assert.equal(f.sandbox.filterWarehouseStock(cartons,'ct0009.a0190')[0].contents.length,1);
+  assert.equal(f.sandbox.filterWarehouseStock(cartons,'елочка')[0].contents[0].sku,'LT0001.A5442');
+  assert.equal(f.sandbox.filterWarehouseStock(cartons,'missing').length,0);
+  assert.equal(f.sandbox.filterWarehouseStock(cartons,'   ').length,2);
+  assert.equal(JSON.stringify(cartons),before);assert.equal(f.calls.length,calls,'search must not issue server calls');
+});
+test('carton overview embeds its already-read composition and the final save returns updated quantities',()=>{
+ const f=fixture(),data=f.api.getInitialData(),item=data.items[0];const carton=seedCarton(f,data.shipment,'1мск271',{cartonId:'embedded-composition'});appendPacking(f,item,100,'embedded-packed');seedAllocation(f,data.shipment,item,carton.cartonId,20,'embedded-alloc');
+ const overview=f.api.getBoxesForItem(data.shipment.id,data.shipment.directionId,item.positionId),box=overview.boxes.find(b=>b.cartonId===carton.cartonId);
+ assert.equal(box.contents.reduce((n,r)=>n+r.quantity,0),20);assert.equal(box.contents[0].sku,item.sku);
+ const result=f.api.saveBoxPlacement(placementPayload(item,{cartonId:carton.cartonId,quantity:15,idempotencyKey:'embedded-composition-save'}));assert.equal(result.ok,true,JSON.stringify(result));assert.equal(result.carton.contents.reduce((n,r)=>n+r.quantity,0),35);assert.equal(result.assigned,35);
+});
+test('request-only table snapshots reset between reads and are never reused by a writer',()=>{
+ const f=fixture(),sheet=f.db.getSheetByName('CartonContents');let reads=0;const getRange=sheet.getRange.bind(sheet);
+ sheet.getRange=(...args)=>{const range=getRange(...args),getValues=range.getValues.bind(range);range.getValues=()=>{reads++;return getValues();};return range;};
+ const data=f.api.getInitialData(),item=data.items[0],carton=seedCarton(f,data.shipment,'1мск272',{cartonId:'request-cache'});seedAllocation(f,data.shipment,item,carton.cartonId,5,'cache-first');reads=0;
+ const read=()=>f.api.readIndexedRows_(sheet,['cartonId'],r=>r.cartonId===carton.cartonId);
+ f.api.withCartonRequestReads_(false,()=>{assert.equal(read().length,1);assert.equal(read().length,1);});assert.equal(reads,3,'one header, one narrow key column and one matched block shared by both lookups');
+ seedAllocation(f,data.shipment,item,carton.cartonId,7,'cache-second');f.api.withCartonRequestReads_(false,()=>assert.equal(read().length,2));
+ f.api.withCartonRequestReads_(true,()=>{assert.equal(read().length,2);seedAllocation(f,data.shipment,item,carton.cartonId,8,'cache-third');assert.equal(read().length,3,'writer observes the newly appended allocation');});
+});
+test('carton read memo indexes historical keys but fetches only matching rows',()=>{
+ const f=fixture(),sheet=f.db.getSheetByName('CartonContents'),headers=sheet.rows[0];
+ for(let i=0;i<10000;i++)sheet.rows.push(headers.map(header=>({allocationId:'old-'+i,cartonId:i===17?'wanted':'other',shipmentId:'old-source',positionId:'old-position','Количество, шт':1})[header]??''));
+ const reads=[],getRange=sheet.getRange.bind(sheet);
+ sheet.getRange=(...args)=>{reads.push(args);return getRange(...args);};
+ const before=JSON.stringify(sheet.rows);
+ f.api.withCartonRequestReads_(false,()=>{
+   const find=()=>f.api.readIndexedRows_(sheet,['cartonId'],r=>r.cartonId==='wanted');
+   const first=find();assert.equal(first.length,1);first[0].cartonId='changed-locally';
+   assert.equal(find()[0].cartonId,'wanted','callers cannot mutate the request snapshot');
+ });
+ assert.deepEqual(reads,[[1,1,1,headers.length],[2,2,10000,1],[19,1,1,headers.length]]);
+ assert.equal(JSON.stringify(sheet.rows),before,'reading never changes the source history');
+});
+
+test('embedded composition opens immediately and a saved placement replaces the cache without another RPC',()=>{
+ const f=browserFixture();f.runner.success(uiSnapshot());f.sandbox.openBoxes('A1');const overview=uiBoxesSnapshot();overview.boxes[0].contents=[{positionId:'A1',sku:'SKU-1',quantity:20}];f.calls.at(-1).success(overview);
+ const before=f.calls.length;f.sandbox.toggleBoxComposition('carton-1',f.sandbox.renderBoxCards);assert.equal(f.calls.length,before,'expanding loaded contents does not query Apps Script');assert.match(f.elements.get('boxCards').textContent,/20 шт\./);
+ const result={ok:true,allocation:{positionId:'A1',cartonId:'carton-1',quantity:10},carton:{...overview.boxes[0],itemQuantity:30,pieceCount:30,contents:[{positionId:'A1',sku:'SKU-1',quantity:30}]},assigned:30,available:70,dataVersion:2};
+ f.sandbox.applyBoxPlacement(result);assert.equal(f.calls.length,before);assert.equal(vm.runInContext("state.boxDetailsCache['carton-1'].carton.contents[0].quantity",f.sandbox),30);assert.match(f.elements.get('boxCards').textContent,/30 шт\./);
+});
+test('closed carton page embeds contents and expanding it stays local',()=>{
+ const f=browserFixture();f.runner.success(uiSnapshot());f.sandbox.openBoxes('A1');f.calls.at(-1).success(uiBoxesSnapshot());f.elements.get('closedBoxesButton').handlers.click();const lookup=f.calls.at(-1);lookup.success({boxes:[{...uiBoxesSnapshot().boxes[0],open:false,closed:true,status:'Закрыт',contents:[{positionId:'A1',sku:'SKU-1',quantity:20}]}],hasMore:false,nextCursor:null});
+ const before=f.calls.length;f.sandbox.toggleBoxComposition('carton-1',f.sandbox.renderClosedBoxCards);assert.equal(f.calls.length,before);assert.match(f.elements.get('closedBoxCards').textContent,/20 шт\./);
+ f.sandbox.toggleBoxComposition('carton-1',f.sandbox.renderClosedBoxCards);assert.equal(f.calls.length,before);
+});
+test('a late closed-carton response cannot change the newly selected shipment',()=>{
+ const f=browserFixture();f.runner.success(uiSnapshot());f.sandbox.openBoxes('A1');f.calls.at(-1).success(uiBoxesSnapshot());f.elements.get('closedBoxesButton').handlers.click();const old=f.calls.at(-1);vm.runInContext("state.boxRequest++;state.closedBoxes=[]",f.sandbox);old.success({boxes:[{...uiBoxesSnapshot().boxes[0]}],hasMore:false});assert.equal(vm.runInContext('state.closedBoxes.length',f.sandbox),0);
+});
+
+function warehouseJobFixture() {
+  const f=fixture(), shipmentId='RITM-STOCK-WAREHOUSE';
+  f.api.PropertiesService.getScriptProperties().setProperties=entries=>Object.entries(entries).forEach(([k,v])=>f.props.set(k,v));
+  let response={ok:true,shipmentId,destination:'warehouse',marketplace:'OZON',items:[
+    {department:'box',documentId:'box-stock-book',sheetId:7,uid:'stock-box-1',article:'KNOWN',quantity:40,print:'done',cut:'done',archivedAt:'',positionId:shipmentId+'|uid:box:box-stock-book:7:stock-box-1|KNOWN'},
+    {department:'roll',documentId:'roll-stock-book',sheetId:8,uid:'stock-roll-1',article:'KNOWN',quantity:20,print:'partial',cut:'not_started',archivedAt:'',positionId:shipmentId+'|uid:roll:roll-stock-book:8:stock-roll-1|KNOWN'},
+  ]};
+  const original=f.api.ritmControlApiRequest_;
+  f.api.ritmControlApiRequest_=(method,path)=>path==='/api/assembly-stocks'?structuredClone(response):original(method,path);
+  const request=()=>vm.runInContext('assemblyStockRequest_=null',f.api);
+  return {...f,shipmentId,response,request,read:()=>{request();return f.api.getInitialData(shipmentId);}};
+}
+
+test('warehouse stock tab reads both departments, keeps same-SKU tasks distinct and never writes production',()=>{
+  const f=warehouseJobFixture(),before=JSON.stringify(f.db.sheets.map(s=>s.rows));
+  const data=f.read();assert.equal(data.shipment.stockTask,true);assert.equal(data.items.length,2);
+  assert.equal(data.items[0].operations.packing.plan,40);assert.equal(data.items[0].productName,'Реальное название');assert.ok(data.items[0].photoUrl);
+  assert.notEqual(data.items[0].positionId,data.items[1].positionId);assert.equal(data.items[1].productionDepartment,'roll');
+  assert.equal(JSON.stringify(f.db.sheets.map(s=>s.rows)),before);assert.equal(f.print.writes,0);
+  const index=f.api.getAssemblyDirections(true);assert.equal(index.groups.filter(g=>g.stockTask).length,1);
+});
+
+test('warehouse work uses the existing idempotent named journal, survives plan growth and production archival',()=>{
+  const f=warehouseJobFixture(),item=f.read().items[0];
+  const payload={shipmentId:f.shipmentId,directionId:'ROLL',positionId:item.positionId,employeeId:'emp',operationId:'packing',quantity:10,idempotencyKey:'warehouse-work-001'};
+  const first=f.api.saveWork(payload);assert.equal(first.ok,true);assert.equal(f.api.saveWork(payload).duplicate,true);
+  const before=JSON.stringify(f.db.getSheetByName('WorkLog').rows);
+  f.response.items[0].quantity=50;f.response.items[0].archivedAt='2026-11-12T08:00:00Z';const next=f.read().items[0];
+  assert.equal(next.positionId,item.positionId);assert.equal(next.operations.packing.plan,50);assert.equal(next.operations.packing.fact,10);
+  assert.equal(JSON.stringify(f.db.getSheetByName('WorkLog').rows),before);
+  f.api.cancelWork(first.eventId,'Тестовая коррекция в изолированной копии');assert.equal(f.read().items[0].operations.packing.fact,0);
+});
+
+test('warehouse job packing goes entirely to one current warehouse carton with employee audit and retry deduplication',()=>{
+  const f=warehouseJobFixture(),item=f.read().items[0];appendPacking(f,item,20,'warehouse-packed-fixture');
+  const payload={mode:'new',shipmentId:f.shipmentId,directionId:'ROLL',positionId:item.positionId,quantity:10,employeeId:'emp',idempotencyKey:'warehouse-place-001'};
+  const result=f.api.saveStockSplitPlacement(payload);assert.equal(result.ok,true,JSON.stringify(result));assert.equal(result.shipmentQuantity,0);assert.equal(result.stockQuantity,10);
+  assert.equal(f.api.saveStockSplitPlacement(payload).duplicate,true);
+  const second=f.api.saveStockSplitPlacement({...payload,idempotencyKey:'warehouse-place-002'});assert.equal(second.ok,true,JSON.stringify(second));
+  const cartons=f.api.readTable_(f.db,'Cartons').filter(row=>String(row.cartonId).startsWith('carton-stock-'));assert.equal(cartons.length,1);assert.equal(cartons[0]['Номер'],'1скл1');
+  const allocations=f.api.normalizeCartonContents_(f.api.readTable_(f.db,'CartonContents'));assert.equal(allocations.reduce((n,row)=>n+row['Количество, шт'],0),20);assert.ok(allocations.every(row=>row['Сотрудник']));
+  const overview=f.api.getBoxesForItem(f.shipmentId,'ROLL',item.positionId);assert.equal(overview.available,0);assert.equal(f.print.writes,0);
+});
+
+test('stock source unavailability blocks work without altering any journal',()=>{
+  const f=warehouseJobFixture(),item=f.read().items[0],before=JSON.stringify(f.db.sheets.map(s=>s.rows));
+  f.api.ritmControlApiRequest_=()=>{throw Error('offline');};f.request();
+  assert.throws(()=>f.api.saveWork({shipmentId:f.shipmentId,directionId:'ROLL',positionId:item.positionId,employeeId:'emp',operationId:'packing',quantity:1,idempotencyKey:'warehouse-offline-001'}),/offline/);
+  assert.equal(JSON.stringify(f.db.sheets.map(s=>s.rows)),before);
 });

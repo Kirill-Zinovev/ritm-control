@@ -1,6 +1,6 @@
 const column = n => {let s='';for(n++;n;n=Math.floor((n-1)/26))s=String.fromCharCode(65+(n-1)%26)+s;return s;};
 export function supplyProgressHeaderRequests(sheet, {box=false,newSupply=false,uidColumn=null,name=sheet.properties.title}={}) {
-  const id=sheet.properties.sheetId, count=sheet.properties.gridProperties.rowCount, cols=sheet.properties.gridProperties.columnCount;
+  const id=sheet.properties.sheetId, cols=sheet.properties.gridProperties.columnCount;
   const rows=sheet.data?.[0]?.rowData||[];
   const value=c=>c?.userEnteredValue?.stringValue??c?.effectiveValue?.stringValue??'';
   const headers=(rows[3]?.values||[]).map(c=>value(c).toLowerCase().replace(/\s+/g,' ').trim());
@@ -8,7 +8,7 @@ export function supplyProgressHeaderRequests(sheet, {box=false,newSupply=false,u
   const quantity=find(['кол-во','количество']),article=find(['артикул']);
   const uid=(rows[0]?.values||[]).findIndex(c=>value(c)==='UID');
   const end=Number.isSafeInteger(uidColumn)?uidColumn:uid>=0?uid:Math.min(cols,29);if(end<16)throw new Error('Недостаточно места для панели');
-  const range=c=>`${column(c)}5:${column(c)}${count}`,q=range(quantity),a=range(article);
+  const range=c=>`${column(c)}5:${column(c)}`,q=range(quantity),a=range(article);
   const plan=`SUMIF(${a};"<>";${q})`;
   let amounts;
   if(box){
@@ -31,4 +31,20 @@ export function supplyProgressHeaderRequests(sheet, {box=false,newSupply=false,u
   }
   for(const [row,pixelSize] of [[0,36],[1,64],[2,16]])requests.push({updateDimensionProperties:{range:{sheetId:id,dimension:'ROWS',startIndex:row,endIndex:row+1},properties:{pixelSize},fields:'pixelSize'}});
   return requests;
+}
+
+// Repair only the existing four formula anchors. Keep merges, layout, title,
+// UID/service cells and all article data untouched.
+export function supplyProgressFormulaRepairs(sheet) {
+  const rows=sheet.data?.[0]?.rowData || [];
+  const anchors=['ПЕЧАТЬ','ПОРЕЗКА'].map(label=>(rows[1]?.values||[]).flatMap((c,i)=>String(c.formattedValue||c.userEnteredValue?.formulaValue||c.userEnteredValue?.stringValue||'').includes(label)?[i]:[]));
+  if(anchors.some(hits=>hits.length!==1))return [];
+  const repairs=[];
+  for(const [col] of anchors)for(const row of [1,2]) {
+    const original=rows[row]?.values?.[col]?.userEnteredValue?.formulaValue;
+    if(!original)continue;
+    const formula=original.replace(/(\$?[A-Z]{1,3}\$?5):(\$?[A-Z]{1,3})\$?\d+\b/g,(range,start,end)=>start.replace(/[$5]/g,'')===end.replace(/\$/g,'')?start+':'+end:range);
+    if(formula!==original)repairs.push({updateCells:{start:{sheetId:sheet.properties.sheetId,rowIndex:row,columnIndex:col},rows:[{values:[{userEnteredValue:{formulaValue:formula}}]}],fields:'userEnteredValue'}});
+  }
+  return repairs;
 }

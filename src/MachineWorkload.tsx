@@ -1,3 +1,5 @@
+import {lazy,Suspense} from 'react';
+const ProductionForecast=lazy(()=>import('./ProductionForecast').then(m=>({default:m.ProductionForecast})));
 import { useEffect, useId, useMemo, useState } from "react";
 import {
   ArrowLeft,
@@ -126,13 +128,36 @@ function ArticleTable({
   showSupply: boolean;
 }) {
   const [page, setPage] = useState(0),
-    [size, setSize] = useState(10);
+    [size, setSize] = useState(10),
+    [missingOnly, setMissingOnly] = useState(false);
+  const missing = rows.filter((row) => !row.printed.complete),
+    visible = missingOnly ? missing : rows;
   const current = Math.min(
     page,
-    Math.max(0, Math.ceil(rows.length / size) - 1),
+    Math.max(0, Math.ceil(visible.length / size) - 1),
   );
   return (
     <div className="mw-articles">
+      {(missing.length > 0 || missingOnly) && (
+        <div className="mw-article-filter">
+          <Button
+            onClick={() => {
+              setMissingOnly(!missingOnly);
+              setPage(0);
+            }}
+            aria-pressed={missingOnly}
+          >
+            {missingOnly
+              ? "Показать все артикулы"
+              : `Без данных печати · ${num(missing.length)}`}
+          </Button>
+          {!missingOnly && (
+            <small>
+              По этим артикулам источник не подтвердил количество печати.
+            </small>
+          )}
+        </div>
+      )}
       <div className="mw-article-table-scroll">
         <table>
           <caption className="sr-only">Артикулы, назначенные на станок</caption>
@@ -148,7 +173,7 @@ function ArticleTable({
             </tr>
           </thead>
           <tbody>
-            {rows.slice(current * size, (current + 1) * size).map((row) => (
+            {visible.slice(current * size, (current + 1) * size).map((row) => (
               <tr key={row.key}>
                 <td>
                   <div className="mw-product">
@@ -201,8 +226,8 @@ function ArticleTable({
       </div>
       <div className="mw-pagination">
         <span>
-          {num(rows.length)}{" "}
-          {countWord(rows.length, "артикул", "артикула", "артикулов")}
+          {num(visible.length)}{" "}
+          {countWord(visible.length, "артикул", "артикула", "артикулов")}
         </span>
         <div>
           <label>
@@ -228,10 +253,10 @@ function ArticleTable({
             <ArrowLeft size={14} />
           </Button>
           <span>
-            {current + 1} / {Math.max(1, Math.ceil(rows.length / size))}
+            {current + 1} / {Math.max(1, Math.ceil(visible.length / size))}
           </span>
           <Button
-            disabled={(current + 1) * size >= rows.length}
+            disabled={(current + 1) * size >= visible.length}
             onClick={() => setPage(current + 1)}
             aria-label="Следующая страница"
           >
@@ -345,7 +370,12 @@ function DepartmentLane({
 const parameter = (name: string, fallback: string) =>
   new URLSearchParams(location.search).get(`mw_${name}`) || fallback;
 
-export function MachineWorkload({
+export function MachineWorkload(props: {live:LivePrinting|null;loading:boolean;error:string;onRefresh:()=>void;demo?:boolean}) {
+  const [tab,setTab]=useState(()=>parameter("tab","current")==="forecast"?"forecast":"current");
+  useEffect(()=>{const url=new URL(location.href);if(tab==="forecast")url.searchParams.set("mw_tab",tab);else url.searchParams.delete("mw_tab");history.replaceState(null,"",url);},[tab]);
+  return <><div className="forecast-section-tabs" aria-label="Загрузка и прогноз"><Button kind={tab==="current"?"primary":"secondary"} aria-pressed={tab==="current"} onClick={()=>setTab("current")}>Текущая загрузка</Button><Button kind={tab==="forecast"?"primary":"secondary"} aria-pressed={tab==="forecast"} onClick={()=>setTab("forecast")}>Прогноз сроков</Button></div>{tab==="current"?<CurrentMachineWorkload {...props}/>:<Suspense fallback={<div className="notice">Открываем прогноз сроков…</div>}><ProductionForecast live={props.live} loading={props.loading} onRefresh={props.onRefresh}/></Suspense>}</>;
+}
+function CurrentMachineWorkload({
   live,
   loading,
   error,

@@ -4,6 +4,7 @@ import {
   attachAssemblyPacking,
   loadAssemblyPacking,
   RITM_ASSEMBLY_WORKLOG,
+  attachAssemblyWorkStages,
 } from "../agent/assemblyPacking.js";
 
 test("shared supply packaging matches both department positions and does not mix equal raw UIDs", () => {
@@ -188,6 +189,7 @@ test("separate cancellation ledger removes only targeted packing facts and dedup
   assert.equal(result.packing.status, "available");
   assert.equal(result.supplies[0].packed, 6);
   assert.equal(result.supplies[0].packingRecords, 1);
+  assert.deepEqual(result.supplies[0].packingEventIds, ["active-packing"]);
 });
 
 test("read-only packing includes shared and standalone box supplies and preserves cancellations", async () => {
@@ -220,6 +222,7 @@ test("all cancelled packing gives a confirmed zero; an unreadable correction led
   const unavailable = await loadAssemblyPacking(readerFor(missing), printingPayload());
   assert.equal(unavailable.packing.status, "unavailable");
   assert.equal(unavailable.supplies[0].packed, null);
+  assert.equal(unavailable.supplies[0].packingEventIds, null);
   const corrupt = structuredClone(data);
   corrupt.sheets[1].data[0].rowData[1].values[2].userEnteredValue.stringValue = "RESTORE";
   const invalid = await loadAssemblyPacking(readerFor(corrupt), printingPayload());
@@ -361,4 +364,27 @@ test('old roll UID maps to its unique unchanged article while retaining the curr
 test('ambiguous old UID does not invent an article match',()=>{
  const shipment='RITM-ROLL-119710351', common={sourceId:'roll-printing',sheetId:119710351,legacyUid:'old',article:'SKU'};
  const result=attachAssemblyPacking({supplies:[{...common,row:5,rawUid:'new-a'},{...common,row:6,rawUid:'new-b'}]},{invalid:[],events:[{shipmentId:shipment,positionId:`${shipment}|uid:old|SKU`,article:'SKU',quantity:10,createdAt:'2026-11-02T10:00:00Z'}]},'2026-11-03T00:00:00Z');assert.equal(result.packing.status,'partial');assert.equal(result.supplies[0].packed,null);
+});
+
+test('direction stages reuse exact identities, exclude cancellations and never count cutting as packing', () => {
+  const rows = [
+    workRow({id:'pack',quantity:12,idempotencyKey:'p'}),
+    workRow({id:'cut',operation:'cut',quantity:30,idempotencyKey:'c'}),
+    workRow({id:'manual',operation:'assembly',quantity:8,idempotencyKey:'m'}),
+    workRow({id:'cancelled',operation:'cut',quantity:20,idempotencyKey:'x'}),
+  ];
+  const result=attachAssemblyWorkStages(printingPayload(),grid(rows,[['correction','cancelled','cancel','2026-10-16T10:30:00Z','owner','ошибка']]),'2026-10-16T11:00:00Z');
+  assert.equal(result.supplies[0].packed,12);
+  assert.equal(result.supplies[0].assemblyMachineCut,30);
+  assert.equal(result.supplies[0].assemblyManualCut,8);
+  assert.equal(result.supplies[1].assemblyMachineCut,0);
+});
+
+test('invalid machine-cut event cannot invalidate confirmed packing or manufacture full readiness',()=>{
+  const result=attachAssemblyWorkStages(printingPayload(),grid([
+    workRow({id:'pack',quantity:12,idempotencyKey:'p'}),
+    workRow({id:'cut',operation:'cut',quantity:-1,idempotencyKey:'c'}),
+  ]),'2026-10-16T11:00:00Z');
+  assert.equal(result.supplies[0].packed,12);
+  assert.equal(result.supplies[0].assemblyMachineCut,null);
 });

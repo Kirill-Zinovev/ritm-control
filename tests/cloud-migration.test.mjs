@@ -113,6 +113,21 @@ test("production previews use expiring rows instead of a growing cloud_state cac
   } finally { db.close(); }
 });
 
+test('unchanged write guards renew the lease without rewriting journals or repeating preview cleanup',async()=>{
+ const {db,store}=fixture();
+ try{await store.withScope(async scope=>{
+  scope.meta('printingMoveRevision','committed');await scope.checkpoint();
+  let renewals=0,batches=0;const renew=store.renew.bind(store),batch=db.batch.bind(db);
+  store.renew=async lease=>{renewals++;return renew(lease);};db.batch=async statements=>{batches++;return batch(statements);};
+  for(let i=0;i<10;i++)await scope.checkpoint();
+  assert.equal(renewals,10);assert.equal(batches,0);assert.equal(await store.readMeta('printingMoveRevision'),'committed');
+  db.db.prepare("UPDATE cloud_leases SET expires_at=0 WHERE name='production'").run();
+  await assert.rejects(scope.checkpoint(),{code:'cloud_lease_lost'});
+  // Restore this fixture's lease solely so withScope can run its final guard.
+  db.db.prepare("UPDATE cloud_leases SET expires_at=? WHERE name='production'").run(Date.now()+10000);
+ });}finally{db.close();}
+});
+
 test("chunked source snapshots round-trip without truncation and detect corrupted contents", async () => {
   const { db, store } = fixture();
   const lease = await store.acquire("refresh:printing");
@@ -215,6 +230,21 @@ test("migration verifies exact operation payloads, is idempotent and refuses for
     foreign.digest = await digest(JSON.stringify(foreign.payload));
     await assert.rejects(importMigration(foreign, configured, store), /другому набору/);
     assert.equal(db.db.prepare("SELECT count(*) AS n FROM cloud_operations").get().n, 1);
+  } finally { db.close(); }
+});
+
+test("migration retains sent carton snapshots together with their status", async () => {
+  const { db, store } = fixture();
+  const input = await migrationFixture();
+  const box = {id:'test-box',shipmentId:'test-supply',contents:[{article:'TEST.A001',quantity:4}]};
+  input.payload.warehouseCartonDispatch = [{cartonId:box.id,shipmentId:box.shipmentId,status:'sent',sentAt:'2026-10-20T09:00:00Z',changedAt:'2026-10-20T09:00:00Z',changedBy:'Тест'}];
+  input.payload.warehouseCartonSnapshots = [{cartonId:box.id,shipmentId:box.shipmentId,box}];
+  input.digest = await digest(JSON.stringify(input.payload));
+  try {
+    await importMigration(input, {...env,RITM_CLOUD_IMPORT_ENABLED:'true'}, store);
+    const saved = db.db.prepare('SELECT snapshot_json FROM ritm_warehouse_dispatch_snapshots WHERE carton_id=?').get(box.id);
+    assert.deepEqual(JSON.parse(saved.snapshot_json),box);
+    assert.equal((await importMigration(input, {...env,RITM_CLOUD_IMPORT_ENABLED:'true'}, store)).repeated,true);
   } finally { db.close(); }
 });
 

@@ -8,7 +8,12 @@ import {
 import { rollPrinted, rollCut } from "./liveSupplyProgress";
 
 export type Department = "roll" | "box";
-export function countWord(count: number, one: string, few: string, many: string) {
+export function countWord(
+  count: number,
+  one: string,
+  few: string,
+  many: string,
+) {
   const rule = new Intl.PluralRules("ru-RU").select(count);
   return rule === "one" ? one : rule === "few" ? few : many;
 }
@@ -121,6 +126,30 @@ export function summarizeMachines(
     cut: productionFact(orders.map(rollCut)),
   };
 }
+function sourceMismatch(
+  items: LiveOrder[],
+  target: Department,
+  machineId: string,
+) {
+  const conflicts = items.filter(
+    (item) =>
+      item.machineSource === "catalog" &&
+      (item.sourceId === "box-printing" ? "box" : "roll") !== target,
+  );
+  if (!conflicts.length) return "";
+  const sources = [
+    ...new Set(
+      conflicts.map((item) => {
+        const department =
+          item.sourceId === "box-printing" ? "боксе" : "рулонной печати";
+        return `${department}${item.sourceMachine ? ` (в листе: ${item.sourceMachine})` : ""}`;
+      }),
+    ),
+  ];
+  const machine =
+    MACHINES.find((item) => item.id === machineId)?.label || machineId;
+  return `Задание в ${sources.join(", ")}. По базе: ${machine} · ${target === "box" ? "бокс" : "рулонная печать"}. Переноса не было.`;
+}
 export function buildMachineWorkload(
   live: LivePrinting | null,
 ): WorkloadSupply[] {
@@ -132,9 +161,15 @@ export function buildMachineWorkload(
       const workloadDepartments = new Map<Department, LiveOrder[]>();
       for (const sourceDepartment of supply.departments) {
         for (const order of sourceDepartment.orders) {
-          const catalogMachine = order.machineSource === "catalog" ? resolveMachine(order.machine) : null;
+          const catalogMachine =
+            order.machineSource === "catalog"
+              ? resolveMachine(order.machine)
+              : null;
           const target = catalogMachine?.department || sourceDepartment.id;
-          workloadDepartments.set(target, [...(workloadDepartments.get(target) || []), order]);
+          workloadDepartments.set(target, [
+            ...(workloadDepartments.get(target) || []),
+            order,
+          ]);
         }
       }
       for (const [departmentId, departmentOrders] of workloadDepartments) {
@@ -171,9 +206,7 @@ export function buildMachineWorkload(
                     (items.some((item) => item.machine)
                       ? `Станок не распознан или относится к другому участку: ${[...new Set(items.map((item) => item.machine).filter(Boolean))].join(", ")}`
                       : "Станок не указан в источнике")
-                  : items.some(item => item.machineSource === "catalog" && (item.sourceId === "box-printing" ? "box" : "roll") !== department.id)
-                    ? `Станок и участок показаны по базе. Исходное задание находится в другом участке; производственные данные сохранены.`
-                    : "",
+                  : sourceMismatch(items, department.id, id),
             }),
           );
           const machine = summarizeMachines(

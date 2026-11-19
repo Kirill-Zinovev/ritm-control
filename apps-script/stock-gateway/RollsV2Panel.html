@@ -1,0 +1,1038 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+
+*{box-sizing:border-box}
+
+body{
+  margin:0;
+  background:#f5f7fb;
+  color:#172033;
+  font:14px Arial,sans-serif
+}
+
+.app{padding:14px}
+
+.eyebrow{
+  font-size:12px;
+  font-weight:800;
+  letter-spacing:1px;
+  color:#4053bc;
+  margin-bottom:4px
+}
+
+.title{
+  font-size:19px;
+  font-weight:800;
+  margin-bottom:8px
+}
+
+.hint{
+  font-size:12px;
+  color:#50627a;
+  margin-bottom:12px
+}
+
+.card{
+  background:#fff;
+  border:1px solid #dfe5ef;
+  border-radius:12px;
+  padding:12px;
+  margin:10px 0;
+  box-shadow:0 1px 2px #00000008
+}
+
+.orderCard{
+  border-left:4px solid #6b5ce7
+}
+
+.auditCard{
+  border-left:4px solid #1877d2
+}
+
+.auditTop{
+  display:flex;
+  justify-content:space-between;
+  gap:8px;
+  align-items:center
+}
+
+.auditTitle{
+  font-size:14px;
+  font-weight:800
+}
+
+.auditGrid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:6px;
+  margin-top:8px
+}
+
+.auditMetric{
+  background:#f7f9fd;
+  border-radius:8px;
+  padding:8px
+}
+
+.auditMetric span{
+  display:block;
+  color:#50627a;
+  font-size:12px;
+  text-transform:uppercase
+}
+
+.auditMetric b{
+  display:block;
+  font-size:15px;
+  margin-top:2px
+}
+
+.auditGood{
+  color:#087443
+}
+
+.auditWarn{
+  color:#8a5100
+}
+
+.auditBad{
+  color:#ad2b2b
+}
+
+.auditArea{
+  background:#eef9f3;
+  border-radius:8px;
+  padding:8px;
+  margin-top:8px;
+  font-size:12px
+}
+
+.auditWarning{
+  background:#fff5df;
+  color:#805a00;
+  border-radius:7px;
+  padding:7px;
+  margin-top:7px;
+  font-size:12px
+}
+
+.missingList{
+  margin-top:8px;
+  border-top:1px solid #edf0f5;
+  padding-top:6px
+}
+
+.missingItem{
+  display:flex;
+  justify-content:space-between;
+  gap:8px;
+  padding:5px 0;
+  font-size:12px;
+  border-bottom:1px dashed #edf0f5
+}
+
+.orderTop{
+  display:flex;
+  justify-content:space-between;
+  gap:7px;
+  align-items:flex-start
+}
+
+.orderArt{
+  font-size:17px;
+  font-weight:800;
+  margin:6px 0
+}
+
+.badge{
+  font-size:12px;
+  color:#996600;
+  background:#fff1c9;
+  border-radius:12px;
+  padding:5px 7px;
+  font-weight:bold
+}
+
+.badge.done{
+  color:#087443;
+  background:#dff8ea
+}
+
+.grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:6px;
+  margin-top:8px
+}
+
+.metric{
+  background:#f7f9fd;
+  border-radius:7px;
+  padding:7px
+}
+
+.metric label,.label{
+  display:block;
+  font-size:12px;
+  color:#50627a;
+  text-transform:uppercase;
+  margin-bottom:3px
+}
+
+.metric b{font-size:12px}
+
+.muted{
+  color:#50627a;
+  font-size:12px
+}
+
+.blue{
+  color:#4053bc;
+  font-size:12px;
+  font-weight:bold
+}
+
+.section{
+  font-size:14px;
+  font-weight:800;
+  margin:10px 0 7px
+}
+
+.row{
+  display:flex;
+  gap:6px;
+  align-items:center
+}
+
+input{
+  width:100%;
+  height:30px;
+  border:1px solid #cbd5e1;
+  border-radius:7px;
+  padding:6px 8px;
+  background:#fff
+}
+
+button{
+  min-height:30px;
+  border:0;
+  border-radius:7px;
+  background:#7558ee;
+  color:#fff;
+  padding:6px 10px;
+  font-size:12px;
+  font-weight:bold;
+  cursor:pointer
+}
+
+button.secondary{
+  background:#edf1fb;
+  color:#4d61ce
+}
+
+button.green{
+  background:#22a06b
+}
+
+button.orange{
+  background:#e88a16
+}
+
+button.danger{
+  background:#d64545
+}
+
+button.blueButton{
+  background:#1877d2
+}
+
+button.small{
+  min-height:26px;
+  padding:4px 8px;
+  font-size:12px
+}
+
+button:disabled{
+  opacity:.5;
+  cursor:not-allowed
+}
+
+.actions{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:6px;
+  margin-top:9px
+}
+
+.addBox{
+  background:#f8f9fd;
+  border:1px solid #e5e9f1;
+  border-radius:9px;
+  padding:9px;
+  margin-top:10px
+}
+
+.roll{
+  border-top:1px solid #eef1f6;
+  padding:10px 0
+}
+
+.rollHead{
+  display:flex;
+  gap:6px;
+  align-items:center
+}
+
+.rollHead input{
+  font-weight:800
+}
+
+.rollMeta{
+  margin:5px 0 7px
+}
+
+.detail{
+  border-top:1px dashed #dfe5ef;
+  padding:8px 0;
+  display:grid;
+  gap:6px
+}
+
+.numberEdit{
+  display:flex;
+  gap:5px;
+  align-items:center
+}
+
+.numberEdit input{
+  width:62px
+}
+
+.checks{
+  display:flex;
+  gap:10px
+}
+
+.check{
+  display:flex;
+  align-items:center;
+  gap:4px;
+  font-size:12px;
+  color:#56627b
+}
+
+.check input{
+  width:15px;
+  height:15px
+}
+
+.progressRow{
+  margin:7px 0
+}
+
+.progressLabel{
+  display:flex;
+  justify-content:space-between;
+  font-size:12px;
+  font-weight:bold
+}
+
+.bar{
+  height:6px;
+  background:#e8edf5;
+  border-radius:9px;
+  overflow:hidden;
+  margin-top:3px
+}
+
+.bar i{
+  display:block;
+  height:100%;
+  background:#5775f6
+}
+
+.bar.green i{
+  background:#26b77a
+}
+
+.allocation{
+  margin-top:9px;
+  background:#f7f9fd;
+  border-radius:9px;
+  padding:9px
+}
+
+.allocTop{
+  display:flex;
+  justify-content:space-between;
+  gap:7px;
+  font-size:12px;
+  font-weight:bold
+}
+
+.allocGrid{
+  display:grid;
+  grid-template-columns:1fr 1fr 1fr;
+  gap:5px;
+  margin-top:7px
+}
+
+.allocCell{
+  background:#fff;
+  border-radius:7px;
+  padding:6px
+}
+
+.allocCell span{
+  display:block;
+  font-size:12px;
+  color:#50627a;
+  text-transform:uppercase
+}
+
+.kpi{
+  background:#eef9f3;
+  color:#14734d;
+  border-radius:6px;
+  padding:6px 7px;
+  font-size:12px;
+  font-weight:bold
+}
+
+.error{
+  color:#ad2b2b;
+  background:#fff0f0;
+  padding:9px;
+  border-radius:8px
+}
+
+.ok{
+  color:#087443;
+  background:#e8f8ef;
+  padding:8px;
+  border-radius:8px;
+  margin-bottom:8px
+}
+
+.empty{
+  text-align:center;
+  color:#50627a;
+  padding:12px
+}
+
+body{overflow-x:hidden}.app,.card,.metric,.auditMetric,.allocCell{min-width:0}
+.metric b,.auditMetric b,.orderArt{overflow-wrap:anywhere}
+.row{flex-wrap:wrap}.row button{flex:1}.rollHead input{min-width:0}.orderTop .blue{min-width:0;overflow-wrap:anywhere}
+input,select,textarea{font:inherit;color:inherit;max-width:100%}
+select,textarea{width:100%;border:1px solid #cbd5e1;border-radius:7px;background:#fff;padding:6px 8px}
+textarea{resize:vertical}.numberEdit input{min-width:0}
+.auditDetails{font-size:12px;color:#50627a;margin-top:8px}.auditDetails summary{cursor:pointer}
+.factBox{margin-top:10px}.factBox summary{font-size:12px;font-weight:800;cursor:pointer}
+.factGrid{display:grid;grid-template-columns:minmax(0,1fr) 70px;gap:6px;margin:8px 0}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{outline:2px solid #7558ee;outline-offset:2px}
+.panelLinks{display:flex;gap:6px;margin:12px 0 0}.panelLinks button{flex:1}
+#deleteRollDialog{width:min(calc(100% - 24px),320px);max-width:320px;max-height:calc(100vh - 24px);overflow:auto;border:1px solid #dfe5ef;border-radius:12px;padding:14px;color:#172033;box-shadow:0 12px 36px #00000030}
+#deleteRollDialog::backdrop{background:#17203380}
+.deleteDialogTitle{font-size:15px;font-weight:800;margin:0 0 8px}
+.deleteDialogCopy{font-size:12px;line-height:1.45;color:#56627b;margin:0}
+.deleteDialogError{font-size:12px;color:#ad2b2b;margin-top:8px}
+.deleteDialogError:empty{display:none}
+.deleteDialogActions{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:13px}
+.rollDeleteButton{width:100%;margin-top:2px}
+/* Shared narrow workspace: the document owns scrolling; no nested scrollers. */
+:root{--ink:#10213a;--muted:#50627a;--blue:#174eeb;--green:#0b7350;--line:#dfe7f2;--soft:#eef4ff;--font-body:"Segoe UI Variable", "Segoe UI", -apple-system, BlinkMacSystemFont, Arial, sans-serif}
+body{background:#fff;color:var(--ink);font:14px/1.45 var(--font-body);font-variant-numeric:tabular-nums}
+*{scrollbar-width:thin;scrollbar-color:#a9bad0 #f4f7fb}::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{background:#a9bad0;border-radius:8px}::-webkit-scrollbar-track{background:#f4f7fb}
+.app{padding:14px 14px 20px}button,input,select,textarea{font:inherit}button{cursor:pointer;min-height:36px;border-radius:8px}button:hover:not(:disabled){filter:brightness(.96)}button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible,textarea:focus-visible{outline:3px solid #90b5ff;outline-offset:2px}button:disabled{cursor:default;opacity:.55}textarea{resize:none;min-height:68px;width:100%;border:1px solid var(--line);border-radius:8px;padding:10px}input,select{min-height:38px;width:100%;border:1px solid #cad8eb;border-radius:8px;padding:8px;color:var(--ink);background:#fff}input[type=checkbox],input[type=radio]{width:18px;height:18px;min-height:18px;accent-color:var(--blue);flex:none}
+.workspaceHeader{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding:0 0 14px;margin-bottom:16px}.workspaceBrand{font-size:21px;font-weight:750;letter-spacing:-.5px}.workspaceBrand b{color:var(--blue)}.workspaceHeader button{padding:7px 9px;background:var(--soft);color:var(--blue);border:1px solid var(--line);font-size:12px}.workspaceSource{font-size:13px;color:var(--muted);margin:10px 0}.workspaceArticle{font-size:23px;letter-spacing:-.4px;line-height:1.2;margin:9px 0;font-weight:750;overflow-wrap:anywhere}.workspaceMeta{color:var(--muted);margin-bottom:15px}.workspaceMetrics{display:grid;grid-template-columns:1fr 1fr;background:var(--soft);border-radius:10px;padding:12px;gap:12px}.workspaceMetrics div+div{border-left:1px solid #cadaf8;padding-left:14px}.workspaceMetrics span{display:block;color:var(--muted);font-size:13px}.workspaceMetrics b{font-size:24px;white-space:nowrap;font-weight:750}.workspaceAllocation{background:#eff9f3;color:var(--green);padding:10px;border-radius:8px;font-size:13px;margin:9px 0 16px}.workspaceSection{margin:18px 0;border-top:1px solid var(--line);padding-top:16px}.workspaceSectionHead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}.workspaceSectionHead h2,.workForm h2{font-size:17px;margin:0;font-weight:700}.workspaceSectionHead button{background:#fff;color:var(--blue);border:1px solid #a8bfff;padding:5px 9px}.workspaceRoll{border:1px solid var(--line);border-radius:9px;margin:7px 0;padding:10px;display:flex;align-items:center;gap:8px;cursor:pointer;background:#fff}.workspaceRoll.isSelected{border-color:#729bff;background:#f0f5ff}.workspaceRoll .rollName{font-size:17px;font-weight:750}.workspaceRoll .rollQuantity{font-weight:650;margin-left:auto;white-space:nowrap}.workspaceRoll .rollState{font-size:12px;color:var(--muted);display:block}.workspaceRoll .rollState.ready{color:var(--green)}.workspaceTabs{display:flex;background:#f2f5fb;border:1px solid var(--line);border-radius:9px;padding:3px;gap:3px;margin:14px 0}.workspaceTabs button{flex:1;background:transparent;border:0;color:var(--muted);padding:7px 5px}.workspaceTabs button[aria-pressed=true]{background:var(--blue);color:#fff;box-shadow:0 1px 3px #00000012}.workspaceSearch{margin-bottom:10px}.workspaceSelectAll{display:flex;align-items:center;gap:8px;background:#f4f7fc;padding:8px;border-radius:8px;font-size:13px}.workspaceSelectAll b{margin-left:auto}.workspaceOrderGroup{border:1px solid var(--line);border-radius:10px;padding:10px;margin:12px 0}.workspaceOrderGroup h2{font-size:15px;margin:0 0 2px;overflow-wrap:anywhere}.workspaceOrderGroup .workspaceRoll{border:0;margin:3px -5px;padding:8px 5px}.workspaceOrderGroup .workspaceRoll.isSelected{background:var(--soft)}.workspacePage{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--muted);font-size:12px;margin:9px 0}.workspacePage button{border:1px solid var(--line);background:#fff;color:var(--blue);padding:4px 9px}.workForm{border-top:1px solid var(--line);padding-top:16px;margin-top:18px}.workForm label.fieldLabel{display:block;font-size:13px;color:var(--muted);margin:11px 0 4px}.workForm .quantityRow{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}.workForm .quantityRow button{border:0;background:transparent;color:var(--blue);padding:6px}.workForm .workTotal{background:var(--soft);padding:10px;border-radius:8px;color:var(--blue);font-weight:700;margin:12px 0}.workSubmit{width:100%;min-height:44px;background:var(--blue);color:#fff;border:0;font-weight:700;margin-top:12px}.workHelp{color:var(--muted);font-size:12px;margin:7px 0}.workError{font-size:13px;color:#a52c38;margin:8px 0}.workForm details,.workspaceAdvanced,.workspaceAudit{border-top:1px solid var(--line);padding-top:13px;margin-top:16px}.workForm summary,.workspaceAdvanced>summary,.workspaceAudit>summary{cursor:pointer;font-size:14px;font-weight:600;min-height:32px}.workspaceBulkInput{margin:10px 0}.workspaceBulkInput label{display:block;font-size:13px;margin-bottom:3px}.workspaceBulkInput label b{display:block}.workspaceBulkInput input{margin-top:4px}.workspaceFeedback{font-size:12px;color:var(--muted);margin:4px 0}.workEmployee{background:#f8faff}.workspaceEmpty{color:var(--muted);font-size:13px;padding:14px 0}.workspaceAdvanced .orderCard{border-left:0;padding:10px;margin:8px 0;box-shadow:none}.workspaceAdvanced .orderTop,.workspaceAdvanced .orderArt,.workspaceAdvanced .grid,.workspaceAdvanced .allocation,.workspaceAdvanced .actions,.workspaceAdvanced .addBox{display:none}.workspaceAdvanced .factBox .addBox{display:block}.workspaceAdvanced .detailsBox input{min-width:0}.panelLinks{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:14px}.panelLinks button{font-size:12px;min-width:0;background:#f3f7ff;color:var(--blue);border:1px solid var(--line);padding:7px 4px}.progressLabel{font-size:14px;font-weight:600;margin-bottom:6px}.bar{height:7px;background:#e6edf7}.bar i{background:var(--blue)}.bar.green i{background:#15986d}.progressRow{margin:13px 0}.workspaceAdd{margin:10px 0;padding:12px;background:#f7faff;border:1px solid var(--line);border-radius:9px}.workspaceAdd label{display:block;font-size:13px;color:var(--muted);margin:10px 0 3px}.workspaceAdd button{width:100%;margin-top:12px}.ok,.error{font-size:13px;line-height:1.45;margin:8px 0;padding:10px;border-radius:8px}.ok{background:#edf8f1;color:var(--green)}.error{background:#fff3e4;color:#8a510c}.orderSwitch{margin:10px 0}.auditCard{border:0;box-shadow:none;padding:0}.auditMetric span{font-size:12px}.workspaceCount{background:#edf8f1;color:var(--green);padding:9px;border-radius:8px;font-weight:650;margin:10px 0}.workspaceDirty{font-size:12px;color:#8a510c;margin-top:8px}.workspaceStatus{font-size:12px;color:var(--muted);margin-top:12px;text-align:center}
+.workspaceAdd:not([open]){display:none}.app{padding-bottom:88px}.workspaceSubmitDock{position:fixed;bottom:0;left:0;right:0;z-index:10;padding:10px 14px 12px;background:#fffffffa;border-top:1px solid var(--line)}.workspaceSubmitDock .workSubmit{margin:0}.workspaceAdvanced .orderArt{display:block;font-size:17px}.workspaceAdvanced .actions{display:flex}.workspaceRoll .rollState{line-height:1.4}.workForm .singleTotal{display:none}.workForm>.workHelp{margin-bottom:10px}
+.workspaceArticleChoice{display:flex;align-items:center;gap:9px;cursor:pointer;min-height:32px}.workspaceArticleChoice h2{margin:0;overflow-wrap:anywhere}.workspaceArticleChoice input,.workspaceSelectAll input{flex:none}.workspaceCreate{border-top:1px solid var(--line);padding-top:14px;margin-top:16px}.workspaceCreate>summary{font-size:16px;font-weight:700;cursor:pointer;min-height:32px}.workspaceCreate .fieldLabel{display:block;font-size:13px;color:var(--muted);margin-top:9px}.workspaceCreateRow{border:1px solid var(--line);border-radius:9px;padding:10px;margin-top:10px}.workspaceCreateRow>b{overflow-wrap:anywhere}.workspaceLoading{padding:12px;border-radius:9px;background:#edf3ff;color:#214d93;font-size:13px}.workspaceCreate input{margin-top:4px}
+.workspaceTabs{margin:8px 0}.workspaceRoll{padding:9px}.workspaceRoll>div{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;align-items:center;flex:1;min-width:0}.workspaceRoll .rollName{grid-row:1 / span 2;white-space:nowrap;font-size:16px}.workspaceRoll .rollState{grid-column:2;font-size:12px}.workspaceRoll .rollQuantity{font-size:13px}.workForm{padding-top:12px;margin-top:14px}.workForm label.fieldLabel{margin:8px 0 3px}.workspaceAdvanced,.workspaceAudit{margin-top:12px;padding-top:10px}.workspaceModeCompact{background:none;border:0;margin:0 0 8px;padding:0}.workspaceModeCompact button{min-height:28px;font-size:12px;padding:4px 8px}.workspaceModeCompact button[aria-pressed=true]{background:#edf3ff;color:var(--blue);box-shadow:none}.workspaceModeCompact button[aria-pressed=false]{color:var(--blue)}
+.workspaceHeader{padding-bottom:10px;margin-bottom:10px}.workspaceSource{margin:8px 0;font-weight:600}.workspaceOrderGroup{padding:9px;margin:8px 0}.workspaceOrderGroup>.workHelp{margin:3px 0 5px}.workspaceOrderGroup .rollState:last-child:not(.ready){display:none}.workspaceSubmitDock .workTotal{background:transparent;margin:0 0 6px;padding:0;font-size:13px}.app{padding-bottom:108px}
+.workspaceRoll .workspaceRollChoice{display:flex;align-items:center;gap:8px;flex:1;min-width:0;cursor:pointer}.workspaceRoll .rollInfo{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;align-items:center;flex:1;min-width:0}.workspaceEditButton{padding:5px 7px;border:1px solid #c5d6f7;background:#fff;color:var(--blue);font-size:11px;white-space:nowrap}.workspaceRoll .rollQuantity{margin-left:auto}.editRollDialog{width:min(calc(100% - 24px),320px);max-width:320px;max-height:calc(100vh - 24px);overflow:auto;border:1px solid #dfe5ef;border-radius:12px;padding:14px;color:#172033;box-shadow:0 12px 36px #00000030}.editRollDialog::backdrop{background:#17203380}.editRollDialog label{display:block;font-size:12px;font-weight:650;margin-top:12px}.editRollDialog input{margin-top:5px}.editRollDialog .workHelp{line-height:1.4}#saveEditRoll{background:var(--blue);color:#fff}.editRollPending{background:#fff5e6;padding:10px;border-radius:8px;color:#865000;font-size:12px;margin:8px 0}.editRollPending button{margin-top:7px;border:1px solid #e4b978;background:#fff;color:#865000;padding:6px 8px}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="workspaceHeader"><div class="workspaceBrand"><b>RITM /</b> Рулоны</div><button class="secondary" id="refreshSelection" aria-label="Обновить выделение">Обновить</button></header>
+  <div id="message" role="status" aria-live="polite"></div>
+  <div id="orders"><div class="card muted">Загружаю выбранные строки…</div></div>
+  <details id="auditDisclosure" class="workspaceAudit"><summary>Проверка KPI</summary><div id="kpiAudit"><button id="checkKpi" class="secondary">Проверить</button></div></details>
+  <div class="panelLinks"><button class="secondary small" id="openJournal">Журнал выпуска</button><button class="secondary small" id="openDaily">Выпуск по дням</button></div>
+</div>
+<dialog id="deleteRollDialog" aria-labelledby="deleteRollTitle" aria-describedby="deleteRollCopy">
+  <h2 class="deleteDialogTitle" id="deleteRollTitle">Удалить рулон?</h2>
+  <p class="deleteDialogCopy" id="deleteRollCopy"></p>
+  <div class="deleteDialogError" id="deleteRollError" role="alert" aria-live="assertive"></div>
+  <div class="deleteDialogActions">
+    <button class="secondary" id="cancelDeleteRoll" type="button">Оставить рулон</button>
+    <button class="danger" id="confirmDeleteRoll" type="button">Удалить рулон</button>
+  </div>
+</dialog>
+<dialog id="editRollDialog" class="editRollDialog" aria-labelledby="editRollTitle">
+  <h2 class="deleteDialogTitle" id="editRollTitle">Изменить рулон</h2>
+  <p class="deleteDialogCopy" id="editRollArticle"></p>
+  <label>Название рулона<input id="editRollName" autocomplete="off" aria-label="Название рулона"></label>
+  <label>Количество, шт.<input id="editRollQuantity" type="number" min="1" step="1" aria-label="Количество штук на рулоне"></label>
+  <p class="workHelp" id="editRollHelp"></p>
+  <p class="workHelp" id="editRollAllocation"></p>
+  <div class="deleteDialogError" id="editRollError" role="alert" aria-live="assertive"></div>
+  <div class="deleteDialogActions"><button class="secondary" id="cancelEditRoll" type="button">Закрыть</button><button id="saveEditRoll" type="button">Сохранить</button></div>
+</dialog>
+<script>
+var panelVersion='2026-11-14.1';
+var state={orders:[],signature:'',revision:''}, busy=false, pollBusy=false, auditBusy=false, auditQueued=false, loadVersion=0, deleteContext=null, deleteInFlight=false, editContext=null, editPending=null;
+function esc(value){return String(value==null?'':value).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+function num(value,digits){return Number(value||0).toLocaleString('ru-RU',{maximumFractionDigits:digits==null?0:digits});}
+function node(tag,cls,text){var el=document.createElement(tag);if(cls)el.className=cls;if(text!=null)el.textContent=text;return el;}
+function msg(text,ok){var host=document.getElementById('message');host.innerHTML=text?'<div class="'+(ok?'ok':'error')+'">'+esc(text)+'</div>':'';}
+function setBusy(value){busy=!!value;if(busy)loadVersion++;document.querySelectorAll('button').forEach(function(b){b.disabled=busy||b.dataset.locked==='true'||b.id==='checkKpi'&&auditBusy;});document.querySelectorAll('.workForm input,.workForm textarea,.workspaceCreate input,.workspaceArticleChoice input,.workspaceSelectAll input,.workspaceRoll input').forEach(function(field){field.disabled=busy||!!workspace.pending||!!state.preview;});}
+// Only idempotent reads may retry Google's transient RPC INTERNAL errors.
+function panelRead(method,args,success,failure){
+  if(['r2PanelData','r2PanelRefreshData','r2PanelPoll','r2PanelKpiAudit'].indexOf(method)<0)throw Error('Нельзя автоматически повторять запись.');
+  var attempt=0,version=loadVersion;
+  function send(){
+    function failed(error){
+      var text=error&&error.message?error.message:String(error);
+      if(attempt<2&&version===loadVersion&&(!error||error.retryable!==false)&&/INTERNAL|ошибка сервера|server error|timed? ?out|temporar|unavailable|временно не ответил/i.test(text)){
+        attempt++;setTimeout(function(){if(version===loadVersion)send();else failure('Чтение отменено: выполняется другая операция.');},attempt*1200);return;
+      }
+      failure(text);
+    }
+    var runner=google.script.run.withSuccessHandler(function(result){
+      if(result&&result.readError){failed(result);return;}
+      success(result);
+    }).withFailureHandler(failed);runner[method].apply(runner,args||[]);
+  }
+  send();
+}
+function server(method,args,success,failure){
+  setBusy(true);
+  var done=function(result){setBusy(false);success(result);},failed=function(text){setBusy(false);if(failure)failure(text);else msg(text,false);};
+  if(method==='r2PanelData'||method==='r2PanelRefreshData')panelRead(method,args,done,failed);
+  else{var runner=google.script.run.withSuccessHandler(done).withFailureHandler(function(error){failed(error&&error.message?error.message:String(error));});runner[method].apply(runner,args||[]);}
+}
+function button(text,cls,fn,locked){var b=node('button',cls,text);b.type='button';b.dataset.locked=String(!!locked);b.disabled=busy||!!locked;b.addEventListener('click',fn);return b;}
+function action(method,args,message){server(method,args,function(result){msg(result&&result.message||message||'Сохранено.',true);pollSelection();refreshAuditWhenIdle();});}
+function addRollsAction(o,add){
+  if(deleteInFlight){msg('Сначала дождитесь удаления рулона. Панель и выбор вкладки остаются доступны.',false);return;}
+  var nameInput=add.querySelector('.newName'),piecesInput=add.querySelector('.newPieces'),countInput=add.querySelector('.newCount');
+  var name=nameInput.value.trim(),quantity=Number(piecesInput.value),countText=String(countInput.value||'').trim();
+  var count=countText?Number(countText):1;
+  if(!name){msg('Введите название рулона, например д17.',false);nameInput.focus();return;}
+  if(!Number.isInteger(quantity)||quantity<1){msg('Укажите целое количество штук на каждом рулоне.',false);piecesInput.focus();return;}
+  if(!countText)countInput.value='1';
+  if(!Number.isInteger(count)||count<1||count>500){msg('Укажите количество рулонов от 1 до 500.',false);countInput.focus();return;}
+  var args=orderArgs(o).concat([name,quantity,count]);
+  server('r2PanelAddRolls',args,function(result){
+    msg(result&&result.message||'Рулоны добавлены.',true);
+    if(!result||!result.order)return;
+    if(result.signature!==state.signature){pollSelection();return;}
+    var replaced=false;
+    var orders=(state.orders||[]).map(function(current){
+      if(current.uid===result.order.uid&&current.sheetName===result.order.sheetName&&current.row===result.order.row){replaced=true;return result.order;}
+      return current;
+    });
+    if(replaced)drawOrders({orders:orders,signature:state.signature,revision:result.revision});
+  });
+}
+function openDeleteRollDialog(o,r){
+  if(busy||deleteInFlight)return;
+  deleteContext={order:o,roll:r};
+  document.getElementById('deleteRollTitle').textContent='Удалить рулон «'+r.name+'» №'+num(r.number)+'?';
+  document.getElementById('deleteRollCopy').textContent='Заказ '+o.article+': удалятся записи печати и порезки этого рулона из «Журнал выпуска» и его сохранённые факты. Отчёт «Выпуск по дням» будет пересчитан. Отменить действие нельзя.';
+  document.getElementById('deleteRollError').textContent='';
+  var dialog=document.getElementById('deleteRollDialog');
+  dialog.showModal();
+  document.getElementById('cancelDeleteRoll').focus();
+}
+function focusAfterRollDelete(groupName){
+  var groups=Array.prototype.slice.call(document.querySelectorAll('#orders .roll'));
+  var sameGroup=groups.find(function(group){return group.dataset.rollGroup===groupName;});
+  var target=sameGroup&&sameGroup.querySelector('.row button');
+  if(!target&&groups.length)target=groups[0].querySelector('.row button');
+  if(!target)target=document.querySelector('#orders .addBox .newName');
+  if(target)target.focus();
+}
+document.getElementById('cancelDeleteRoll').addEventListener('click',function(){document.getElementById('deleteRollDialog').close();});
+document.getElementById('deleteRollDialog').addEventListener('cancel',function(event){if(busy)event.preventDefault();});
+document.getElementById('deleteRollDialog').addEventListener('close',function(){deleteContext=null;document.getElementById('deleteRollError').textContent='';});
+function markRollDeleteButton(rollId,mode){
+  Array.prototype.forEach.call(document.querySelectorAll('.rollDeleteButton'),function(button){
+    if(button.dataset.rollId!==rollId)return;
+    if(mode==='deleting'){button.disabled=true;button.textContent='Удаляем…';}
+    else if(mode==='deleted'){button.disabled=true;button.textContent='Удалён';}
+    else{button.disabled=busy||button.dataset.locked==='true';button.textContent='Удалить рулон';}
+  });
+}
+document.getElementById('confirmDeleteRoll').addEventListener('click',function(){
+  if(!deleteContext||busy||deleteInFlight)return;
+  var context=deleteContext,dialog=document.getElementById('deleteRollDialog'),rollId=context.roll.rollId;
+  document.getElementById('deleteRollError').textContent='';
+  if(dialog.open)dialog.close();
+  deleteInFlight=true;
+  markRollDeleteButton(rollId,'deleting');
+  msg('Удаляем рулон «'+context.roll.name+'» №'+num(context.roll.number)+'… Можно переключать вкладки.',true);
+  google.script.run.withSuccessHandler(function(result){
+    deleteInFlight=false;
+    markRollDeleteButton(rollId,'deleted');
+    msg(result&&result.message||'Рулон удалён.',true);
+    pollSelection();
+    refreshAuditWhenIdle();
+  }).withFailureHandler(function(error){
+    deleteInFlight=false;
+    markRollDeleteButton(rollId,'retry');
+    msg(error&&error.message?error.message:String(error),false);
+  }).r2PanelDeleteRoll(rollId,context.order.sheetName,context.order.row);
+});
+function meter(label,done,total,green){var percent=total>0?Math.max(0,Math.min(100,done/total*100)):0;return '<div class="progressRow"><div class="progressLabel"><span>'+esc(label)+'</span><span>'+num(done)+' / '+num(total)+'</span></div><div class="bar'+(green?' green':'')+'"><i style="width:'+percent+'%"></i></div></div>';}
+
+function drawAudit(a){
+  var host=document.getElementById('kpiAudit');
+  if(!a||a.error){
+    host.innerHTML='<div class="card auditCard"><div class="auditTop"><div class="auditTitle">Контроль KPI</div><button class="secondary small" id="checkKpi">Проверить</button></div><div class="auditWarning">'+esc(a&&a.error||'Не удалось прочитать KPI.')+'</div></div>';
+    var retry=document.getElementById('checkKpi');retry.disabled=busy||auditBusy;retry.addEventListener('click',refreshAudit);return;
+  }
+  var html='<div class="card auditCard"><div class="auditTop"><div class="auditTitle">Контроль KPI</div><button class="secondary small" id="checkKpi">Проверить</button></div><div class="auditGrid">'+
+    '<div class="auditMetric"><span>Напечатано рулонов</span><b>'+num(a.printed)+'</b></div>'+
+    '<div class="auditMetric"><span>Есть в KPI</span><b class="auditGood">'+num(a.inLog)+'</b></div>'+
+    '<div class="auditMetric"><span>Не начислено</span><b class="'+(a.missing?'auditWarn':'auditGood')+'">'+num(a.missing)+'</b></div>'+
+    '<div class="auditMetric"><span>Восстановить метку</span><b>'+num(a.repair)+'</b></div></div>';
+  if(a.stale)html+='<div class="auditWarning">'+num(a.stale)+' записей KPI относятся к рулонам, у которых печать сейчас снята.</div>';
+  if(a.missing)html+='<div class="auditWarning">'+num(a.missing)+' напечатанных рулонов отсутствуют в журнале начислений KPI.</div>';
+  if(!a.missing&&!a.conflicts&&!a.errors&&a.hasLog)html+='<div class="kpi" style="margin-top:9px">Всё доступное KPI уже начислено</div>';
+  var details=[];
+  if(!a.hasKpiSheet)details.push('Лист KPI не найден.');
+  if(!a.hasLog)details.push('Журнал начислений KPI не найден.');
+  if(a.conflicts)details.push('Метка начисления без записи в журнале: '+num(a.conflicts)+'.');
+  if(a.errors)details.push('Недостаточно данных для проверки: '+num(a.errors)+' рулонов.');
+  if(a.orphan)details.push('Записи KPI без текущего рулона: '+num(a.orphan)+'.');
+  if(a.unresolved)details.push('Рулоны из истории без найденного заказа: '+num(a.unresolved)+'.');
+  if(details.length||a.missingItems&&a.missingItems.length){
+    html+='<details class="auditDetails"><summary>Подробности проверки</summary>';
+    details.forEach(function(text){html+='<p>'+esc(text)+'</p>';});
+    (a.missingItems||[]).forEach(function(item){html+='<div class="missingItem"><span>'+esc(item.article)+'<br><b>'+esc(item.roll)+' · '+num(item.quantity)+' шт.</b></span><span>'+esc(item.employee)+'<br><b>'+num(item.area,2)+' м²</b></span></div>';});
+    html+='</details>';
+  }
+  host.innerHTML=html+'</div>';
+  var checkButton=document.getElementById('checkKpi');checkButton.disabled=busy||auditBusy;
+  checkButton.addEventListener('click',refreshAudit);
+}
+function refreshAudit(){
+  if(auditBusy){auditQueued=true;return;}
+  auditBusy=true;var b=document.getElementById('checkKpi');if(b)b.disabled=true;
+  function finish(a){auditBusy=false;drawAudit(a);if(auditQueued){auditQueued=false;refreshAudit();}}
+  panelRead('r2PanelKpiAudit',[],finish,function(error){finish({error:error});});
+}
+function drawOrders(result){
+  workspaceDrawOrders(result);
+}
+function load(refresh,afterLoad){
+  state.nextPollAt=0;
+  server(refresh?'r2PanelRefreshData':'r2PanelData',[],function(result){drawOrders(result);state.lastReadFailed=false;if(afterLoad)afterLoad();},function(error){
+    state.lastReadFailed=true;state.pollFailures=(state.pollFailures||0)+1;state.nextPollAt=Date.now()+15000;
+    msg('Не удалось обновить заказ. Последние загруженные данные сохранены. '+error,false);
+    if(afterLoad)afterLoad();
+  });
+}
+function orderArgs(o){return [o.uid,o.sheetName,o.row];}
+function buildAdvancedOrder(o){
+  var card=node('section','card orderCard'),rolls=o.rolls||[],p=o.print||{},c=o.cut||{};
+  var done=!!p.complete&&!!c.complete;
+  card.setAttribute('aria-label','Заказ '+o.article);card.dataset.uid=o.uid;
+  card.innerHTML='<div class="orderTop"><span class="blue" title="'+esc(o.sheetName)+'">'+esc(o.sheetName)+' · строка '+num(o.row)+'</span><span class="badge'+(done?' done':'')+'">'+(done?'ГОТОВО':'В РАБОТЕ')+'</span></div>'+
+    '<div class="orderArt" title="'+esc(o.sheetName)+'">'+esc(o.article)+'</div><div class="grid">'+
+    '<div class="metric"><label>Станок</label><b>'+esc(o.machine)+'</b></div><div class="metric"><label>Размер</label><b>'+esc(o.size)+'</b></div>'+
+    '<div class="metric"><label>Листов</label><b>'+num(o.sheetsPerPiece)+'</b></div><div class="metric"><label>Количество</label><b>'+num(o.orderQty)+'</b></div>'+
+    '<div class="metric"><label>Печать рулонов</label><b>'+num(p.readyCount)+' из '+num(rolls.length)+'</b></div><div class="metric"><label>Напечатано</label><b>'+num(p.actual)+' / '+num(o.orderQty)+'</b></div>'+
+    '<div class="metric"><label>Резчик</label><b>'+esc(o.cutter||'Лукман')+'</b></div><div class="metric"><label>Порезано, м²</label><b>'+num(o.cutArea,2)+'</b></div></div>';
+  var distribution=o.allocated<o.orderQty?'Осталось распределить: '+num(o.orderQty-o.allocated)+' шт.':o.allocated>o.orderQty?'Распределено лишних: '+num(o.allocated-o.orderQty)+' шт.':'Распределено полностью';
+  var allocation=node('div','allocation');
+  allocation.innerHTML='<div class="allocTop"><span>Распределение по рулонам</span><span>'+esc(distribution)+'</span></div>'+meter('Распределено',o.allocated,o.orderQty,false)+
+    '<div class="allocGrid"><div class="allocCell"><span>Заказ</span><b>'+num(o.orderQty)+'</b></div><div class="allocCell"><span>В рулонах</span><b>'+num(o.allocated)+'</b></div><div class="allocCell"><span>Напечатано</span><b>'+num(p.actual)+'</b></div></div>';
+  card.appendChild(allocation);
+  var actions=node('div','actions');
+  actions.appendChild(button('Завершить печать','orange',function(){action('r2PanelComplete',orderArgs(o).concat(['Печать','']),'Печать завершена.');},!rolls.length));
+  actions.appendChild(button('Завершить порезку','green',function(){action('r2PanelComplete',orderArgs(o).concat(['Резка','']),'Порезка завершена.');},!rolls.length));
+  card.appendChild(actions);
+  var add=node('div','addBox');
+  add.innerHTML='<div class="section">Добавить рулоны этой строке</div><label class="label">Номер / название рулона</label><input class="newName" aria-label="Номер / название рулона" placeholder="Например: д17">'+
+    '<label class="label">Штук на каждом рулоне</label><input class="newPieces" aria-label="Штук на каждом рулоне" type="number" min="1" step="1" value="'+Math.max(1,Number(o.remaining)||0)+'">'+
+    '<label class="label">Количество рулонов</label><input class="newCount" aria-label="Количество рулонов" type="number" min="1" max="500" step="1" value="1">';
+  add.appendChild(button('Добавить рулоны','',function(){
+    addRollsAction(o,add);
+  },!(Number(o.areaPerPiece)>0)));
+  if(!(Number(o.areaPerPiece)>0)){
+    var missing=[];
+    if(!(Number(o.sheetsPerPiece)>0))missing.push('количество листов');
+    if(!(Number(o.widthM)>0&&Number(o.heightM)>0))missing.push('размер или ширину и высоту');
+    add.appendChild(node('div','error','Добавление рулонов недоступно: заполните '+(missing.length?missing.join(' и '):'данные размера')+' в строке '+o.row+' листа «'+o.sheetName+'». Они нужны для расчёта м².'));
+  }
+  card.appendChild(add);
+  var summary=node('div','');card.appendChild(summary);drawGroups(o,summary);
+  card.appendChild(buildFacts(o));return card;
+}
+function groupsFor(o){var map={};(o.rolls||[]).forEach(function(r){if(!map[r.name])map[r.name]={name:r.name,rolls:[],pieces:0,print:0,cut:0};var g=map[r.name];g.rolls.push(r);g.pieces+=Number(r.quantity)||0;g.print+=r.print?1:0;g.cut+=r.cut?1:0;});return Object.keys(map).map(function(name){return map[name];});}
+function drawGroups(o,host){
+  var groups=groupsFor(o),rolls=o.rolls||[];
+  host.innerHTML='<div class="section">Рулоны <span class="muted" style="float:right">'+num(groups.length)+' групп</span></div>'+meter('Печать',o.print.readyCount,rolls.length,false)+meter('Порезка',o.cut.readyCount,rolls.length,true);
+  if(!groups.length){host.appendChild(node('div','empty','Рулоны ещё не добавлены'));return;}
+  groups.forEach(function(g){
+    var box=node('div','roll'),head=node('div','rollHead'),input=node('input','');box.dataset.rollGroup=g.name;input.value=g.name;input.setAttribute('aria-label','Название группы '+g.name);head.appendChild(input);
+    head.appendChild(button('Сохранить','secondary small',function(){action('r2PanelRenameGroup',orderArgs(o).concat([g.name,input.value]),'Рулон изменён.');}));box.appendChild(head);
+    box.appendChild(node('div','muted rollMeta','Штук: '+num(g.pieces)+' · Печать: '+g.print+'/'+g.rolls.length+' · Порезка: '+g.cut+'/'+g.rolls.length));
+    var row=node('div','row');row.appendChild(button('Открыть','secondary small',function(){showDetails(o,g,box);}));
+    row.appendChild(button('Печать готова','orange small',function(){action('r2PanelComplete',orderArgs(o).concat(['Печать',g.name]),'Печать завершена.');}));
+    row.appendChild(button('Порезка готова','green small',function(){action('r2PanelComplete',orderArgs(o).concat(['Резка',g.name]),'Порезка завершена.');}));
+    box.appendChild(row);host.appendChild(box);
+  });
+}
+function check(label,checked,fn){var l=node('label','check'),i=node('input','');i.type='checkbox';i.checked=!!checked;i.addEventListener('change',function(){fn(i.checked);});l.appendChild(i);l.appendChild(document.createTextNode(label));return l;}
+function showDetails(o,g,box){
+  var old=box.querySelector('.detailsBox');if(old){old.remove();return;}
+  var details=node('div','detailsBox');
+  g.rolls.forEach(function(r){
+    var d=node('div','detail');
+    [['№',r.number,'r2PanelUpdateNumber'],['Штук',r.quantity,'r2PanelUpdateRoll']].forEach(function(field){
+      var edit=node('div','numberEdit');edit.appendChild(node('span','muted',field[0]));var input=node('input','');input.type='number';input.min='1';input.step='1';input.value=field[1];input.setAttribute('aria-label',field[0]+' '+r.name+' №'+r.number);edit.appendChild(input);
+      edit.appendChild(button('Сохранить','secondary small',function(){var args=[r.rollId,o.sheetName,o.row];if(field[2]==='r2PanelUpdateRoll')args.push(r.name);args.push(Number(input.value));action(field[2],args,'Сохранено.');}));d.appendChild(edit);
+    });
+    var checks=node('div','checks');
+    checks.appendChild(check('Печать',r.print,function(value){action('r2PanelSetReady',[r.rollId,o.sheetName,o.row,'Печать',value]);}));
+    checks.appendChild(check('Порезка',r.cut,function(value){action('r2PanelSetReady',[r.rollId,o.sheetName,o.row,'Резка',value]);}));d.appendChild(checks);
+    if(r.printDoneAt||r.cutDoneAt)d.appendChild(node('div','muted',(r.printDoneAt?'Печать: '+r.printDoneAt:'')+(r.printDoneAt&&r.cutDoneAt?' · ':'')+(r.cutDoneAt?'Порезка: '+r.cutDoneAt:'')));
+    var removeButton=button('Удалить рулон','danger small rollDeleteButton',function(){openDeleteRollDialog(o,r);});
+    removeButton.dataset.rollId=r.rollId;
+    d.appendChild(removeButton);
+    details.appendChild(d);
+  });box.appendChild(details);
+}
+function buildFacts(o){
+  var box=node('details','factBox');box.appendChild(node('summary','','Фактический выпуск'));var form=node('div','addBox');
+  form.innerHTML='<div class="factGrid"><select class="factRoll" aria-label="Рулон для фактического выпуска"><option value="">Выберите рулон</option>'+(o.rolls||[]).map(function(r){return '<option value="'+esc(r.rollId)+'">'+esc(r.name)+' · №'+r.number+'</option>';}).join('')+'</select><input class="factQty" aria-label="Фактически сделано, шт." type="number" step="1" placeholder="шт."></div>'+
+    '<select class="factOp" aria-label="Операция выпуска"><option>Печать</option><option value="Резка">Порезка</option></select><textarea class="factComment" rows="2" aria-label="Комментарий к выпуску" placeholder="Комментарий или причина исправления" style="margin-top:7px"></textarea>';
+  var requestId='';form.addEventListener('input',function(){requestId='';});form.addEventListener('change',function(){requestId='';});
+  form.appendChild(button('Сохранить факт','secondary',function(){
+    if(deleteInFlight){msg('Сначала дождитесь удаления рулона. Панель и выбор вкладки остаются доступны.',false);return;}
+    if(!requestId)requestId='R2'+Date.now().toString(36)+Math.random().toString(36).slice(2,10);
+    var payload={requestId:requestId,rollId:form.querySelector('.factRoll').value,uid:o.uid,sheetName:o.sheetName,row:o.row,operation:form.querySelector('.factOp').value,quantity:Number(form.querySelector('.factQty').value),comment:form.querySelector('.factComment').value};
+    server('r2PanelSaveFact',[payload],function(result){requestId='';msg(result.message,true);pollSelection();refreshAuditWhenIdle();});
+  },!(o.rolls||[]).length));
+  form.appendChild(node('p','muted','Положительное число добавляет факт, отрицательное исправляет его. Выпуск попадает в журнал после готовности рулона. Для исправления укажите причину.'));
+  box.appendChild(form);return box;
+}
+document.getElementById('refreshSelection').addEventListener('click',function(){load(true);});
+document.getElementById('openJournal').addEventListener('click',function(){server('r2OpenJournal',[],function(){msg('Открыт журнал выпуска.',true);});});
+document.getElementById('openDaily').addEventListener('click',function(){server('r2OpenDailyReport',[],function(){msg('Открыт выпуск по дням.',true);});});
+function panelFieldFocused(){
+  var active=document.activeElement;
+  var panelFocused=!document.hasFocus||document.hasFocus();
+  return panelFocused&&active&&!active.readOnly&&!active.disabled&&/^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName);
+}
+function pollSelection(){
+  if(busy||pollBusy||auditBusy||document.hidden||panelFieldFocused()||Date.now()<(state.nextPollAt||0))return;
+  pollBusy=true;var version=loadVersion;
+  panelRead('r2PanelPoll',[state.signature,state.revision,!!state.preview||!state.orders||!state.orders.length,panelVersion,!workspace.pending],function(next){
+    pollBusy=false;
+    if(version!==loadVersion)return;
+    var recovered=!!state.pollFailures;
+    if(recovered){state.pollFailures=0;state.nextPollAt=0;state.lastReadFailed=false;state.lastPollErrorMessage='';msg('',false);}
+    if(next&&next.changed&&!busy&&version===loadVersion&&!panelFieldFocused()){
+      msg('',false);drawOrders(next);
+      if(next.preview)hydrateSelection(version);
+    }
+    if(recovered&&typeof refreshAuditWhenIdle==='function')setTimeout(refreshAuditWhenIdle,0);
+  },function(text){
+    pollBusy=false;if(version!==loadVersion)return;
+    // Keep one stable notice and back off instead of piling up Apps Script calls.
+    state.lastReadFailed=true;state.pollFailures=(state.pollFailures||0)+1;
+    state.nextPollAt=Date.now()+Math.min(60000,5000*Math.pow(2,Math.min(4,state.pollFailures-1)));
+    var message='Google временно не обновил заказ. Последняя карточка сохранена; повторим автоматически. Можно нажать «Обновить выделение».';
+    if(!/INTERNAL|ошибка сервера|server error|timed? ?out|temporar|unavailable|временно не ответил/i.test(text))message='Не удалось обновить заказ: '+String(text).replace(/[.\s]+$/,'')+'. Повторите «Обновить выделение».';
+    if(state.lastPollErrorMessage!==message){state.lastPollErrorMessage=message;msg(message,false);}
+  });
+}
+document.addEventListener('visibilitychange',function(){if(!document.hidden)pollSelection();});
+window.addEventListener('focus',function(){pollSelection();});
+function hydrateSelection(version){
+  if(busy||pollBusy||version!==loadVersion)return;
+  pollBusy=true;
+  panelRead('r2PanelData',[],function(result){pollBusy=false;if(version!==loadVersion||busy)return;drawOrders(result);},function(error){
+    pollBusy=false;if(version!==loadVersion)return;state.nextPollAt=Date.now()+5000;
+    msg('Артикулы выбраны. Не удалось прочитать рулоны: '+error+' Повторим автоматически.',false);
+  });
+}
+function refreshAuditWhenIdle(){
+  if(busy||pollBusy){setTimeout(refreshAuditWhenIdle,100);return;}
+  if(!document.getElementById('auditDisclosure').open)return;
+  if(state.lastReadFailed){drawAudit({error:'Проверка KPI отложена до восстановления связи с заказом.'});return;}
+  refreshAudit();
+}
+var workspace={mode:'single',operation:'Печать',signature:'',orderKey:'',selected:{},articleSelected:{},quantities:{},comment:'',search:'',page:0,pending:null,bookId:'',dirty:false,createMode:'shared',sharedName:'',createDrafts:{},createOpen:false,rollLimits:{}};
+function workspaceKey(order){return order.sheetName+'|'+order.uid;}
+function workspaceActual(roll){return Math.max(0,Number(workspace.operation==='Печать'?roll.printActual:roll.cutActual)||0);}
+function workspaceReady(roll){return !!(workspace.operation==='Печать'?roll.print:roll.cut);}
+function workspaceRemaining(roll){return Math.max(0,Number(roll.quantity)-workspaceActual(roll));}
+function workspaceEntries(){
+  var orders=state.orders||[];
+  if(workspace.mode==='single')orders=orders.filter(function(o){return workspaceKey(o)===workspace.orderKey;});
+  return orders.reduce(function(all,o){return all.concat((o.rolls||[]).map(function(r){return {order:o,roll:r};}));},[]);
+}
+function workspaceStorage(value){
+  if(!workspace.bookId)return;
+  try{var key='ritm-roll-work:'+workspace.bookId;if(value)localStorage.setItem(key,JSON.stringify(value));else localStorage.removeItem(key);}catch(ignored){}
+}
+function editRollStorage(value){
+  if(!workspace.bookId)return;
+  try{var key='ritm-roll-edit:'+workspace.bookId;if(value)localStorage.setItem(key,JSON.stringify(value));else localStorage.removeItem(key);}catch(ignored){}
+}
+function updateRollEditHelp(){
+  if(!editContext)return;
+  var q=Number(document.getElementById('editRollQuantity').value),order=editContext.order,roll=editContext.roll;
+  var total=Number(order.allocated)-Number(roll.quantity)+(Number.isInteger(q)&&q>0?q:0);
+  document.getElementById('editRollAllocation').textContent='После изменения в рулонах: '+num(total)+' из '+num(order.orderQty)+' шт.'+(total>Number(order.orderQty)?' · сверх плана '+num(total-Number(order.orderQty))+' шт.':'');
+}
+function openRollEdit(entry){
+  if(busy||state.preview||workspace.pending||editPending)return;
+  editContext=entry;var roll=entry.roll,dialog=document.getElementById('editRollDialog');
+  document.getElementById('editRollArticle').textContent=entry.order.article+' · '+roll.name;
+  document.getElementById('editRollName').value=roll.name;document.getElementById('editRollName').disabled=false;
+  document.getElementById('editRollQuantity').value=roll.quantity;
+  document.getElementById('editRollQuantity').disabled=!!roll.print||!!roll.cut;
+  document.getElementById('editRollHelp').textContent='Записано: печать '+num(roll.printActual)+' шт., порезка '+num(roll.cutActual)+' шт. Журнал и выработка сохранятся.'+((roll.print||roll.cut)?' Количество завершённого рулона не меняется: для дополнительного тиража создайте новый.':'');
+  document.getElementById('editRollError').textContent='';document.getElementById('saveEditRoll').textContent='Сохранить';
+  updateRollEditHelp();dialog.showModal();document.getElementById('editRollName').focus();
+}
+function submitRollEdit(){
+  if(busy)return;
+  if(!editPending){
+    if(!editContext)return;
+    var order=editContext.order,roll=editContext.roll,name=document.getElementById('editRollName').value.trim(),quantity=Number(document.getElementById('editRollQuantity').value);
+    if(!/^[дапadp]/i.test(name)||!Number.isInteger(quantity)||quantity<1){document.getElementById('editRollError').textContent='Укажите название с д, а или п и целое количество больше нуля.';return;}
+    if(name===roll.name&&quantity===Number(roll.quantity)){document.getElementById('editRollDialog').close();return;}
+    editPending={requestId:'RE'+Date.now().toString(36)+Math.random().toString(36).slice(2,12),rollId:roll.rollId,uid:order.uid,sheetName:order.sheetName,row:order.row,article:order.article,
+      expectedName:roll.name,name:name,expectedQuantity:Number(roll.quantity),quantity:quantity,expectedPrintActual:Number(roll.printActual)||0,expectedCutActual:Number(roll.cutActual)||0,expectedPrint:!!roll.print,expectedCut:!!roll.cut};
+    editRollStorage(editPending);
+  }
+  var submitted=editPending;document.getElementById('editRollName').disabled=true;document.getElementById('editRollQuantity').disabled=true;
+  document.getElementById('editRollError').textContent='';
+  function editProblem(text){document.getElementById('editRollError').textContent=text;if(!document.getElementById('editRollDialog').open)msg(text,false);}
+  server('r2WorkspaceEdit',[submitted],function(result){
+    if(!result||result.requestId!==submitted.requestId){editPending.resume=true;editRollStorage(editPending);editProblem('Ответ не подтверждён. Проверьте сохранение этого же изменения.');document.getElementById('saveEditRoll').textContent='Проверить сохранение';workspaceRender();return;}
+    if(result.rejected){editPending=null;editRollStorage(null);document.getElementById('editRollName').disabled=false;document.getElementById('editRollQuantity').disabled=!!(editContext&&(editContext.roll.print||editContext.roll.cut));editProblem(result.message+' Изменение не записано.');workspaceRender();return;}
+    if(!result.confirmed){editPending.resume=true;editRollStorage(editPending);editProblem('Сохранение не подтверждено. Проверьте этот же запрос.');document.getElementById('saveEditRoll').textContent='Проверить сохранение';workspaceRender();return;}
+    editPending=null;editRollStorage(null);var dialog=document.getElementById('editRollDialog');if(dialog.open)dialog.close();
+    var orders=(state.orders||[]).map(function(o){return result.order&&workspaceKey(o)===workspaceKey(result.order)?result.order:o;});
+    drawOrders({orders:orders,signature:state.signature,revision:result.revision||state.revision,workbookId:workspace.bookId});msg(result.message||'Рулон изменён.',true);
+  },function(error){editPending.resume=true;editRollStorage(editPending);editProblem('Сохранение не подтверждено: '+error+'. Проверьте этот же запрос.');document.getElementById('saveEditRoll').textContent='Проверить сохранение';workspaceRender();});
+}
+document.getElementById('editRollQuantity').addEventListener('input',updateRollEditHelp);
+document.getElementById('saveEditRoll').addEventListener('click',submitRollEdit);
+document.getElementById('cancelEditRoll').addEventListener('click',function(){if(!busy)document.getElementById('editRollDialog').close();});
+document.getElementById('editRollDialog').addEventListener('cancel',function(event){if(busy)event.preventDefault();});
+document.getElementById('editRollDialog').addEventListener('close',function(){editContext=null;workspaceRender();});
+function workspaceDrawOrders(result){
+  var oldSignature=workspace.signature,scrollY=window.scrollY;
+  state=result||{orders:[],signature:'',revision:''};
+  workspace.bookId=state.workbookId||workspace.bookId;
+  if(!editPending&&workspace.bookId){try{editPending=JSON.parse(localStorage.getItem('ritm-roll-edit:'+workspace.bookId)||'null');}catch(ignored){}}
+  if(!workspace.pending&&workspace.bookId){try{workspace.pending=JSON.parse(localStorage.getItem('ritm-roll-work:'+workspace.bookId)||'null');if(workspace.pending&&workspace.pending.kind!=='create')workspace.operation=workspace.pending.operation;}catch(ignored){}}
+  if(state.signature!==oldSignature){
+    workspace.signature=state.signature;workspace.mode=(state.orders||[]).length>1?'bulk':'single';
+    workspace.orderKey=state.orders&&state.orders.length?workspaceKey(state.orders[0]):'';
+    workspace.selected={};workspace.articleSelected={};workspace.quantities={};workspace.createDrafts={};workspace.createOpen=false;workspace.rollLimits={};workspace.search='';workspace.page=0;workspace.dirty=false;
+  }
+  if(!(state.orders||[]).some(function(o){return workspaceKey(o)===workspace.orderKey;}))workspace.orderKey=state.orders&&state.orders.length?workspaceKey(state.orders[0]):'';
+  workspaceRender();
+  if(oldSignature===state.signature)window.scrollTo(0,scrollY);
+}
+function workspaceModeButton(label,mode){return button(label,'',function(){
+  if(workspace.pending)return;workspace.mode=mode;workspace.selected={};workspace.quantities={};workspace.page=0;workspaceRender();
+});}
+function workspaceRender(){
+  var host=document.getElementById('orders');host.innerHTML='';
+  if(editPending){var pendingEdit=node('div','editRollPending','Изменение рулона '+editPending.article+' · '+editPending.name+' ещё не подтверждено. Повтор не создаст новую запись.');pendingEdit.appendChild(button('Проверить сохранение','',submitRollEdit));host.appendChild(pendingEdit);}
+  if(state.error||!state.orders||!state.orders.length){host.appendChild(node('p','workspaceEmpty',state.error||state.message||'Выберите одну или несколько строк заказов в таблице.'));return;}
+  var source=node('div','workspaceSource',state.orders[0].sheetName);host.appendChild(source);
+  var tabs=node('div','workspaceTabs'+(workspace.mode==='single'&&state.orders.length===1?' workspaceModeCompact':''));
+  [['Один заказ','single'],['Массово','bulk']].forEach(function(pair){var b=workspaceModeButton(pair[0],pair[1]);b.setAttribute('aria-pressed',workspace.mode===pair[1]);tabs.appendChild(b);});host.appendChild(tabs);
+  if(workspace.mode==='single'&&state.orders.length>1){
+    var select=node('select','orderSwitch');select.setAttribute('aria-label','Заказ из выделения');
+    state.orders.forEach(function(o){var option=node('option','',o.article);option.value=workspaceKey(o);select.appendChild(option);});select.value=workspace.orderKey;
+    select.addEventListener('change',function(){workspace.orderKey=select.value;workspace.selected={};workspace.quantities={};workspaceRender();});host.appendChild(select);
+  }
+  if(workspace.mode==='bulk')workspaceRenderBulk(host);else workspaceRenderSingle(host);
+  if(workspace.pending){var warning=node('div','error','Не подтверждено '+(workspace.pending.kind==='create'?'создание рулонов':workspace.pending.operation==='Резка'?'сохранение порезки':'сохранение печати')+' · '+workspace.pending.items.map(function(item){return item.article||item.rollId;}).join(', ')+'. Продолжите тот же запрос: повторные записи не добавятся.');host.appendChild(warning);}
+  if(state.preview){host.appendChild(node('div','workspaceLoading','Артикулы выбраны. Загружаем их рулоны и готовность…'));return;}
+  if(workspace.mode==='bulk'||workspace.pending&&workspace.pending.kind==='create')workspaceRenderCreate(host);
+  if((workspaceEntries().length||workspace.pending)&&!(workspace.pending&&workspace.pending.kind==='create'))workspaceRenderWork(host);
+  var history=node('details','workspaceAdvanced');history.appendChild(node('summary','','История и исправления'));
+  history.addEventListener('toggle',function(){if(!history.open||history.dataset.loaded)return;history.dataset.loaded='true';
+    (workspace.mode==='single'?state.orders.filter(function(o){return workspaceKey(o)===workspace.orderKey;}):state.orders).forEach(function(o){history.appendChild(buildAdvancedOrder(o));});});host.appendChild(history);
+}
+function workspaceRenderSingle(host){
+  var order=state.orders.find(function(o){return workspaceKey(o)===workspace.orderKey;});
+  host.appendChild(node('h1','workspaceArticle',order.article));
+  host.appendChild(node('div','workspaceMeta',(order.machine||'Станок не указан')+' · '+(order.size||'Размер не указан')));
+  var metrics=node('div','workspaceMetrics');
+  metrics.innerHTML='<div><span>План</span><b>'+num(order.orderQty)+' шт.</b></div><div><span>Площадь плана</span><b>'+(order.areaPerPiece>0?num(order.orderQty*order.areaPerPiece,2)+' м²':'—')+'</b></div>';host.appendChild(metrics);
+  if(state.preview)return;
+  host.appendChild(node('div','workspaceAllocation','В рулонах '+num(order.allocated)+' шт. · Осталось '+num(order.remaining)+' шт.'+(order.over?' · Сверх плана '+num(order.over):'')));
+  var progress=node('div','');progress.innerHTML=meter('Печать, шт.',order.print.actual,order.orderQty,false)+meter('Порезка, шт.',order.cut.actual,order.orderQty,true);host.appendChild(progress);
+  var section=node('section','workspaceSection'),head=node('div','workspaceSectionHead');head.appendChild(node('h2','','Рулоны · '+num((order.rolls||[]).length)));
+  var addBox=node('details','workspaceAdd');addBox.innerHTML='<summary>Добавить рулоны</summary><div class="section">Новые рулоны</div><label>Название рулона<input class="newName" aria-label="Название нового рулона" placeholder="Например, д17"></label><label>Штук на каждом рулоне<input class="newPieces" type="number" min="1" step="1" value="'+Math.max(1,Number(order.remaining)||1)+'" aria-label="Штук на каждом новом рулоне"></label><label>Количество рулонов<input class="newCount" type="number" min="1" max="500" step="1" value="1" aria-label="Количество новых рулонов"></label>';
+  addBox.appendChild(button('Добавить рулоны','workSubmit',function(){addRollsAction(order,addBox);},!(order.areaPerPiece>0)));
+  var add=button('+ Добавить','',function(){addBox.open=!addBox.open;});head.appendChild(add);section.appendChild(head);section.appendChild(addBox);
+  if(!(order.areaPerPiece>0))section.appendChild(node('div','workError','Заполните размер и число листов в строке заказа: они нужны для расчёта м².'));
+  var entries=workspaceEntries();
+  if(!entries.some(function(e){return workspace.selected[e.roll.rollId];})){
+    var first=entries.find(function(e){return !workspaceReady(e.roll);})||entries[0];if(first)workspace.selected[first.roll.rollId]=true;
+  }
+  entries.forEach(function(entry){section.appendChild(workspaceRollRow(entry,false));});
+  if(!entries.length)section.appendChild(node('p','workspaceEmpty','Рулонов пока нет. Добавьте первый.'));
+  host.appendChild(section);
+}
+function workspaceRollRow(entry,mass){
+  var roll=entry.roll,row=node('div','workspaceRoll'+(workspace.selected[roll.rollId]?' isSelected':'')),label=node('label','workspaceRollChoice');
+  var check=node('input','');check.type=mass?'checkbox':'radio';check.name='selectedRoll';check.checked=!!workspace.selected[roll.rollId];check.disabled=!!workspace.pending;
+  check.setAttribute('aria-label',(mass?'Выбрать рулон ':'Рулон ')+roll.name+' №'+roll.number+' · '+entry.order.article);
+  check.addEventListener('change',function(){if(!mass)workspace.selected={};workspace.selected[roll.rollId]=check.checked;if(mass)workspace.articleSelected[workspaceKey(entry.order)]=(entry.order.rolls||[]).some(function(r){return workspace.selected[r.rollId];});workspace.dirty=true;workspaceRender();});
+  label.appendChild(check);var info=node('div','rollInfo');info.appendChild(node('span','rollName',roll.name+(roll.number>1?' · №'+num(roll.number):'')));
+  info.appendChild(node('span','rollState'+(roll.print?' ready':''),roll.print?'Печать готова':'Ожидает печати'));
+  info.appendChild(node('span','rollState'+(roll.cut?' ready':''),roll.cut?'Порезка готова':(Number(roll.cutActual)>0?'Порезано '+num(roll.cutActual)+' шт.':'Не порезан')));
+  label.appendChild(info);label.appendChild(node('span','rollQuantity',num(roll.quantity)+' шт.'));row.appendChild(label);
+  var edit=button('Изменить','workspaceEditButton',function(){openRollEdit(entry);},!!workspace.pending||!!editPending||!!state.preview);
+  edit.setAttribute('aria-label','Изменить рулон '+roll.name+' · '+entry.order.article);row.appendChild(edit);return row;
+}
+function workspaceRenderBulk(host){
+  host.appendChild(node('div','workspaceCount','Артикулов в выделении: '+num(state.orders.length)));
+  var search=node('input','workspaceSearch');search.type='search';search.placeholder='Артикул или рулон';search.setAttribute('aria-label','Найти артикул или рулон');search.value=workspace.search;
+  search.addEventListener('input',function(){workspace.search=search.value;workspace.page=0;workspaceRenderBulkList(list);});host.appendChild(search);
+  var list=node('div','workspaceBulkList');host.appendChild(list);workspaceRenderBulkList(list);
+}
+function workspaceFilteredEntries(){var query=workspace.search.trim().toLowerCase();return workspaceEntries().filter(function(e){return !query||(e.order.article+' '+e.roll.name+' '+e.order.machine).toLowerCase().indexOf(query)>=0;});}
+function workspaceFilteredOrders(){
+  var query=workspace.search.trim().toLowerCase();
+  return state.orders.filter(function(o){return !query||(o.article+' '+o.machine).toLowerCase().indexOf(query)>=0||(o.rolls||[]).some(function(r){return r.name.toLowerCase().indexOf(query)>=0;});});
+}
+function workspaceChooseArticle(order,selected){
+  workspace.articleSelected[workspaceKey(order)]=selected;
+  workspaceFilteredEntries().filter(function(e){return workspaceKey(e.order)===workspaceKey(order);}).forEach(function(e){workspace.selected[e.roll.rollId]=selected;});
+}
+function workspaceRenderBulkList(host){
+  host.innerHTML='';var entries=workspaceFilteredEntries(),all=workspaceEntries(),orders=workspaceFilteredOrders();
+  var toolbar=node('label','workspaceSelectAll'),check=node('input','');check.type='checkbox';check.setAttribute('aria-label','Выбрать все найденные рулоны');
+  check.setAttribute('aria-label','Выбрать все найденные артикулы');
+  check.checked=orders.length>0&&orders.every(function(o){return workspace.articleSelected[workspaceKey(o)];});check.disabled=!!workspace.pending||!!state.preview||!orders.length;
+  check.addEventListener('change',function(){orders.forEach(function(o){workspaceChooseArticle(o,check.checked);});workspaceRender();});toolbar.appendChild(check);toolbar.appendChild(document.createTextNode('Выбрать найденные'));toolbar.appendChild(node('b','',num(state.orders.filter(function(o){return workspace.articleSelected[workspaceKey(o)];}).length)+' из '+num(state.orders.length)+' арт.'));host.appendChild(toolbar);
+  var size=12,pages=Math.max(1,Math.ceil(orders.length/size));workspace.page=Math.min(workspace.page,pages-1);
+  orders.slice(workspace.page*size,(workspace.page+1)*size).forEach(function(order){
+    var key=workspaceKey(order),group=node('section','workspaceOrderGroup');
+    var label=node('label','workspaceArticleChoice'),pick=node('input','');pick.type='checkbox';pick.checked=!!workspace.articleSelected[key];pick.disabled=!!workspace.pending||!!state.preview;pick.setAttribute('aria-label','Выбрать артикул '+order.article);
+    var rollSelection=(order.rolls||[]).filter(function(r){return workspace.selected[r.rollId];}).length;pick.indeterminate=rollSelection>0&&rollSelection<(order.rolls||[]).length;
+    pick.addEventListener('change',function(){workspaceChooseArticle(order,pick.checked);workspaceRender();});label.appendChild(pick);label.appendChild(node('h2','',order.article));group.appendChild(label);
+    group.appendChild(node('div','workHelp',(order.machine||'Станок не указан')+' · План '+num(order.orderQty)+' шт.'));
+    var matching=entries.filter(function(e){return workspaceKey(e.order)===key;}),limit=workspace.rollLimits[key]||12;matching.slice(0,limit).forEach(function(entry){group.appendChild(workspaceRollRow(entry,true));});
+    if(matching.length>limit)group.appendChild(button('Ещё рулоны · '+num(matching.length-limit),'',function(){workspace.rollLimits[key]=limit+12;workspaceRender();},!!workspace.pending));
+    if(!matching.length)group.appendChild(node('div','workHelp',state.preview?'Загружаем рулоны…':(order.rolls||[]).length?'Нет рулонов с таким названием.':'Рулонов ещё нет. Выберите артикул, чтобы создать.'));
+    host.appendChild(group);
+  });
+  if(!orders.length)host.appendChild(node('p','workspaceEmpty','По этому запросу артикулы и рулоны не найдены.'));
+  if(pages>1){var paging=node('div','workspacePage');paging.appendChild(button('Назад','',function(){workspace.page--;workspaceRenderBulkList(host);},workspace.page===0));paging.appendChild(node('span','',num(workspace.page*size+1)+'–'+num(Math.min(orders.length,(workspace.page+1)*size))+' из '+num(orders.length)));paging.appendChild(button('Далее','',function(){workspace.page++;workspaceRenderBulkList(host);},workspace.page===pages-1));host.appendChild(paging);}
+}
+function workspaceRenderCreate(host){
+  var pending=workspace.pending&&workspace.pending.kind==='create';
+  var orders=state.orders.filter(function(o){return workspace.articleSelected[workspaceKey(o)];});
+  var section=node('details','workspaceCreate');section.open=pending||!workspace.pending&&(workspace.createOpen||!workspaceEntries().length);
+  section.addEventListener('toggle',function(){if(section.isConnected){workspace.createOpen=section.open;host.querySelectorAll('.workForm').forEach(function(form){form.hidden=section.open;});}});
+  section.appendChild(node('summary','','Создать рулоны'+(orders.length?' · '+num(orders.length)+' арт.':'')));
+  var help=node('p','workHelp','Одинаковое название не объединяет артикулы: каждый получит свой рулон. Пустое количество — весь план своего артикула.');section.appendChild(help);
+  if(pending){section.appendChild(node('p','workHelp','Создание ожидает подтверждения. Продолжите тот же запрос.'));section.appendChild(button('Продолжить создание','workSubmit',workspaceCreate));host.appendChild(section);return;}
+  if(!orders.length){section.appendChild(node('p','workHelp','Отметьте артикулы в списке выше или нажмите «Выбрать найденные».'));host.appendChild(section);return;}
+  var tabs=node('div','workspaceTabs');[['Одно название','shared'],['Каждому своё','individual']].forEach(function(pair){var b=button(pair[0],'',function(){workspace.createMode=pair[1];workspaceRender();},!!workspace.pending);b.setAttribute('aria-pressed',workspace.createMode===pair[1]);tabs.appendChild(b);});section.appendChild(tabs);
+  if(workspace.createMode==='shared'){var label=node('label','fieldLabel','Название для всех выбранных'),input=node('input','');input.placeholder='Например, д17';input.value=workspace.sharedName;input.disabled=!!workspace.pending;input.setAttribute('aria-label','Название рулона для всех');input.addEventListener('input',function(){workspace.sharedName=input.value;update();});label.appendChild(input);section.appendChild(label);}
+  var rowHost=section;
+  if(workspace.createMode==='shared'){rowHost=node('details','workspaceCreateAmounts');rowHost.appendChild(node('summary','','Изменить количество по артикулам'));section.appendChild(rowHost);}
+  orders.forEach(function(order){var key=workspaceKey(order),draft=workspace.createDrafts[key]||(workspace.createDrafts[key]={name:'',quantity:'',count:'1'}),row=node('div','workspaceCreateRow');
+    row.appendChild(node('b','',order.article));row.appendChild(node('div','workHelp','План '+num(order.orderQty)+' шт. · Уже в рулонах '+num(order.allocated)+' шт.'));
+    var fields=[];if(workspace.createMode==='individual')fields.push(['Название рулона','name','Например, а12']);fields.push(['Штук на рулоне','quantity','План '+num(order.orderQty)],['Количество рулонов','count','1']);
+    fields.forEach(function(field){var label=node('label','fieldLabel',field[0]),input=node('input','');input.setAttribute('aria-label',field[0]+' '+order.article);input.value=draft[field[1]];input.placeholder=field[2];input.disabled=!!workspace.pending;if(field[1]!=='name'){input.type='number';input.min='1';input.step='1';}input.addEventListener('input',function(){draft[field[1]]=input.value;update();});label.appendChild(input);row.appendChild(label);});rowHost.appendChild(row);
+  });
+  var warning=node('div','workHelp'),error=node('div','workError');error.setAttribute('role','alert');section.appendChild(warning);section.appendChild(error);
+  var save=button('Создать рулоны','workSubmit',workspaceCreate,!!workspace.pending);section.appendChild(save);host.appendChild(section);
+  function update(){var count=0,pieces=0,invalid='',over=[];orders.forEach(function(order){var draft=workspace.createDrafts[workspaceKey(order)],name=workspace.createMode==='shared'?workspace.sharedName:draft.name,q=draft.quantity.trim()===''?Number(order.orderQty):Number(draft.quantity),n=draft.count.trim()===''?1:Number(draft.count);
+      if(!/^[дап]/i.test(name.trim()))invalid='Введите название с д, а или п для каждого рулона.';
+      if(!Number.isInteger(q)||q<1||!Number.isInteger(n)||n<1)invalid='Количество штук и рулонов должно быть целым и больше нуля.';
+      count+=n;pieces+=q*n;if(q*n+Number(order.allocated)>order.orderQty)over.push(order.article);
+    });if(count>500)invalid='За один запрос — до 500 рулонов.';
+    warning.textContent=over.length?'Распределение превысит план: '+over.slice(0,5).join(', ')+(over.length>5?' и ещё '+num(over.length-5):'')+'. Новые рулоны добавятся к существующим.':'';error.textContent=invalid;
+    save.textContent='Создать '+num(count)+' рул. · '+num(pieces)+' шт.';save.dataset.locked=String(!!invalid||!!workspace.pending);save.disabled=busy||save.dataset.locked==='true';
+  }update();
+}
+function workspaceCreate(){
+  if(busy||deleteInFlight)return;
+  if(!workspace.pending){var orders=state.orders.filter(function(o){return workspace.articleSelected[workspaceKey(o)];});if(!orders.length)return;
+    workspace.pending={kind:'create',requestId:'RA'+Date.now().toString(36)+Math.random().toString(36).slice(2,12),items:orders.map(function(o){var draft=workspace.createDrafts[workspaceKey(o)];return {uid:o.uid,sheetName:o.sheetName,row:o.row,article:o.article,name:workspace.createMode==='shared'?workspace.sharedName:draft.name,quantity:draft.quantity.trim()===''?null:Number(draft.quantity),count:draft.count.trim()===''?1:Number(draft.count),expectedPlan:Number(o.orderQty),expectedAllocated:Number(o.allocated)};})};workspaceStorage(workspace.pending);
+  }
+  var submitted=workspace.pending;if(submitted.kind!=='create')return;msg('Создаём рулоны…',true);
+  server('r2WorkspaceCreate',[submitted],function(result){
+    if(!result||result.requestId!==submitted.requestId){msg('Ответ не подтверждён. Продолжите создание того же запроса.',false);workspaceRender();return;}
+    if(result.rejected){workspace.pending=null;workspaceStorage(null);msg(result.message+' Рулоны не созданы.',false);load(true);return;}
+    workspace.pending=null;workspaceStorage(null);workspace.dirty=false;workspace.createDrafts={};workspace.createOpen=false;workspace.articleSelected={};workspace.selected={};
+    var updates=result.orders||[];drawOrders({orders:state.orders.map(function(o){return updates.find(function(n){return workspaceKey(n)===workspaceKey(o);})||o;}),signature:state.signature,revision:state.revision,workbookId:workspace.bookId});msg(result.message,true);
+  },function(error){workspace.pending.resume=true;workspaceStorage(workspace.pending);msg('Создание не подтверждено: '+error+' Продолжите тот же запрос — копии не добавятся.',false);workspaceRender();});
+}
+function workspaceDraft(entry){return workspace.quantities[workspace.operation+'|'+entry.roll.rollId]||'';}
+function workspaceAmount(entry){var draft=workspaceDraft(entry);return draft.trim()===''?workspaceRemaining(entry.roll):Number(draft);}
+function workspaceRenderWork(host){
+  var entries=workspaceEntries().filter(function(e){return workspace.selected[e.roll.rollId];});
+  var form=node('section','workForm');form.setAttribute('aria-label','Запись работы');form.appendChild(node('h2','',workspace.mode==='bulk'?'Действие для выбранных':entries.length?'Рулон '+entries[0].roll.name:'Запись работы'));
+  var tabs=node('div','workspaceTabs');[['Печать','Печать'],['Порезка','Резка']].forEach(function(pair){var b=button(pair[0],'',function(){workspace.operation=pair[1];workspace.dirty=true;workspaceRender();},!!workspace.pending);b.setAttribute('aria-pressed',workspace.operation===pair[1]);tabs.appendChild(b);});form.appendChild(tabs);
+  var employeeLabel=node('label','fieldLabel','Сотрудник'),employee=node('input','workEmployee');employee.readOnly=true;employee.setAttribute('aria-label','Сотрудник для записи');
+  var employees={};entries.forEach(function(e){employees[e.roll.employee||'По имени рулона']=true;});employee.value=workspace.operation==='Резка'?(entries.length?entries[0].order.cutter||'Лукман':'Лукман'):Object.keys(employees).length===1?Object.keys(employees)[0]:'По имени каждого рулона';employeeLabel.appendChild(employee);form.appendChild(employeeLabel);
+  if(workspace.mode==='single'&&entries.length){var label=node('label','fieldLabel','Количество, шт.');form.appendChild(label);var quantity=node('input','');quantity.type='number';quantity.min='1';quantity.step='1';quantity.placeholder='Пусто — весь остаток';quantity.value=workspaceDraft(entries[0]);quantity.setAttribute('aria-label','Количество для выбранного рулона');quantity.disabled=!!workspace.pending;
+    var quantityRow=node('div','quantityRow');quantityRow.appendChild(quantity);quantityRow.appendChild(button('Весь остаток','',function(){quantity.value='';workspace.quantities[workspace.operation+'|'+entries[0].roll.rollId]='';update();},!!workspace.pending));form.appendChild(quantityRow);
+    quantity.addEventListener('input',function(){workspace.quantities[workspace.operation+'|'+entries[0].roll.rollId]=quantity.value;workspace.dirty=true;update();});
+  }
+  if(workspace.mode==='bulk'){
+    var quantities=node('details','');quantities.appendChild(node('summary','','Количество по рулонам'));
+    entries.forEach(function(entry){var row=node('div','workspaceBulkInput'),label=node('label','','');label.appendChild(node('b','',entry.order.article+' · '+entry.roll.name));label.appendChild(document.createTextNode('Осталось '+num(workspaceRemaining(entry.roll))+' шт.'));
+      var input=node('input','');input.type='number';input.min='1';input.step='1';input.placeholder='Пусто — весь остаток';input.setAttribute('aria-label','Количество '+entry.order.article+' '+entry.roll.name);input.value=workspaceDraft(entry);input.disabled=!!workspace.pending;
+      input.addEventListener('input',function(){workspace.quantities[workspace.operation+'|'+entry.roll.rollId]=input.value;workspace.dirty=true;update();});label.appendChild(input);row.appendChild(label);quantities.appendChild(row);
+    });form.appendChild(quantities);
+  }
+  var total=node('div','workTotal'+(workspace.mode==='single'?' singleTotal':''));form.appendChild(total);var help=node('div','workHelp',workspace.mode==='bulk'?'Пустое количество — весь остаток каждого выбранного рулона.':'Пусто — весь остаток выбранного рулона.');form.appendChild(help);
+  var error=node('div','workError');error.setAttribute('role','alert');form.appendChild(error);
+  var comment=node('details','');comment.appendChild(node('summary','','Комментарий'));var textarea=node('textarea','');textarea.maxLength=2000;textarea.setAttribute('aria-label','Комментарий к работе');textarea.value=workspace.comment;textarea.disabled=!!workspace.pending;textarea.addEventListener('input',function(){workspace.comment=textarea.value;workspace.dirty=true;textarea.style.height='auto';textarea.style.height=textarea.scrollHeight+'px';});comment.appendChild(textarea);form.appendChild(comment);
+  var save=button('Записать работу','workSubmit',function(){workspaceSave(entries);});var dock=node('div','workspaceSubmitDock');if(workspace.mode==='bulk')dock.appendChild(total);dock.appendChild(save);form.appendChild(dock);host.appendChild(form);
+  function update(){var sum=0,invalid='';entries.forEach(function(entry){var amount=workspaceAmount(entry);if(workspaceReady(entry.roll))return;sum+=Number.isFinite(amount)?amount:0;if(!Number.isInteger(amount)||amount<0||amount>workspaceRemaining(entry.roll)||(workspaceDraft(entry).trim()!==''&&amount===0))invalid='Количество должно быть целым и не превышать остаток.';});
+    var actionable=entries.filter(function(e){return !workspaceReady(e.roll);});
+    total.textContent='К записи: '+num(actionable.length)+' рул. · '+num(sum)+' шт.'+(entries.length>actionable.length?' · Уже готовы: '+num(entries.length-actionable.length):'');error.textContent=invalid||(!entries.length?'Выберите рулоны.':!actionable.length?'Этот этап по выбранным рулонам уже завершён.':'');
+    save.textContent=workspace.pending?'Продолжить сохранение':(workspace.operation==='Печать'?'Записать печать':'Записать порезку')+(sum>0?' · '+num(sum)+' шт.':'');save.dataset.locked=String(!workspace.pending&&(!entries.length||!!invalid||!actionable.length));save.disabled=busy||save.dataset.locked==='true';
+  }update();
+}
+function workspaceSave(entries){
+  if(busy||deleteInFlight)return;
+  if(!workspace.pending){var items=entries.filter(function(e){return !workspaceReady(e.roll);}).map(function(e){return {rollId:e.roll.rollId,article:e.order.article,uid:e.order.uid,sheetName:e.order.sheetName,row:e.order.row,quantity:workspaceDraft(e).trim()===''?null:Number(workspaceDraft(e)),expectedActual:workspaceActual(e.roll),expectedQuantity:Number(e.roll.quantity)};});
+    if(!items.length)return;workspace.pending={requestId:'RW'+Date.now().toString(36)+Math.random().toString(36).slice(2,12),operation:workspace.operation,items:items,comment:workspace.comment};workspaceStorage(workspace.pending);
+  }
+  var submitted=workspace.pending;msg('Сохраняем работу…',true);
+  server('r2WorkspaceSave',[submitted],function(result){
+    if(!result||result.requestId!==submitted.requestId){msg('Ответ не подтверждён. Продолжите сохранение того же запроса.',false);workspaceRender();return;}
+    if(result.rejected){workspace.pending=null;workspaceStorage(null);msg(result.message+' Работа не записана. Обновляем данные.',false);load(true);return;}
+    workspace.pending=null;workspaceStorage(null);workspace.dirty=false;workspace.quantities={};workspace.comment='';
+    var updates=result.orders||[];var orders=(state.orders||[]).map(function(o){return updates.find(function(next){return workspaceKey(next)===workspaceKey(o);})||o;});
+    drawOrders({orders:orders,signature:state.signature,revision:state.revision,workbookId:workspace.bookId});msg(result.message||'Работа сохранена.',true);refreshAuditWhenIdle();
+  },function(error){workspace.pending.resume=true;workspaceStorage(workspace.pending);msg('Сохранение не подтверждено: '+error+' Продолжите тот же запрос; новая копия записи не создаётся.',false);workspaceRender();});
+}
+document.getElementById('auditDisclosure').addEventListener('toggle',function(){if(this.open)refreshAuditWhenIdle();});
+document.getElementById('checkKpi').addEventListener('click',refreshAudit);
+load(false);setInterval(pollSelection,1200);
+</script>
+</body>
+</html>

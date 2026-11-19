@@ -1,0 +1,2 @@
+ALTER TABLE `av2_commands` ADD `carton_id` text GENERATED ALWAYS AS (json_extract("payload", '$.cartonId')) VIRTUAL;--> statement-breakpoint
+CREATE INDEX `av2_command_carton_lookup` ON `av2_commands` (`action`,`carton_id`);

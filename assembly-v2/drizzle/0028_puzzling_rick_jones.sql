@@ -1,0 +1,1 @@
+CREATE INDEX `av2_active_positions_sku` ON `av2_positions` ("sku" collate nocase) WHERE "av2_positions"."source_active" = 1;

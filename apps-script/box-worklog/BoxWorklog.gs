@@ -85,7 +85,7 @@ function boxBooks_(){
   if(!p.getProperty('BOX_JOURNAL_ID') || source.getId()!==p.getProperty('BOX_SOURCE_ID'))throw new Error('Учёт ещё не подключён. Владелец должен выполнить «Подключить учёт».');
   return {source:source,journal:SpreadsheetApp.openById(p.getProperty('BOX_JOURNAL_ID'))};
 }
-function boxLocked_(fn){var lock=LockService.getScriptLock();if(!lock.tryLock(10000))throw new Error('Сейчас сохраняется другая запись. Повторите с тем же запросом.');try{return fn();}finally{lock.releaseLock();}}
+function boxLocked_(fn){var lock=LockService.getScriptLock();if(!lock.tryLock(10000))throw new Error('BOX_BUSY: Сейчас сохраняется другая запись. Повторите с тем же запросом.');try{return fn();}finally{lock.releaseLock();}}
 function boxFind_(sh,col,value){if(sh.getLastRow()<2)return null;var cells=sh.getRange(2,col,sh.getLastRow()-1,1).createTextFinder(String(value)).matchEntireCell(true).useRegularExpression(false).findAll();if(cells.length>1)throw new Error('Повторный идентификатор в журнале. Запись остановлена.');return cells[0]||null;}
 function boxIdentity_(sh,row){
   var range=sh.getRange(row+':'+row);
@@ -105,20 +105,30 @@ function boxRow_(sh,id){
   return matches[0].getLocation().getRow().getRow();
 }
 function boxNumber_(v){if(v===''||v===null||typeof v==='boolean')return null;var n=Number(String(v).replace(',','.'));return isFinite(n)?n:null;}
-function boxPosition_(sh,row){
-  var schema=boxSchema_(sh);if(row<5)throw new Error('Выберите строку с артикулом.');
-  var values=sh.getRange(row,1,1,Math.min(35,sh.getMaxColumns())).getValues()[0], article=String(values[schema.article-1]||'').trim();
+function boxPosition_(sh,row,read,forMove){
+  var schema=read?read.schema:boxSchema_(sh);if(row<5)throw new Error('Выберите строку с артикулом.');
+  if(boxMoveLock_(sh,row))throw new Error('Артикул переносится в рулонную печать. Запись работы временно закрыта.');
+  var values=read?read.values:sh.getRange(row,1,1,Math.min(35,sh.getMaxColumns())).getValues()[0], article=String(values[schema.article-1]||'').trim();
   if(!article || article[0]==='#')throw new Error('В выбранной строке нет подтверждённого артикула.');
   var kits=boxNumber_(values[schema.plan-1]),factor=boxNumber_(values[schema.factor-1]),multiplicity=boxNumber_(values[schema.multiplicity-1]);
   var machine=boxFold_(values[schema.machine-1]),xerox=/^(xerox|ксерокс|x|х)$/.test(machine);
   if(!machine)throw new Error('У артикула не указан станок. Заполните колонку «Станок».');
   if(!Number.isSafeInteger(kits)||kits<=0)throw new Error('Не подтверждён план в штуках в колонке P.');
-  if(xerox&&(!Number.isSafeInteger(factor)||factor<=0||!Number.isSafeInteger(multiplicity)||multiplicity<=0))throw new Error('Для Xerox заполните кратность и количество листов на товар.');
+  var missingNorm=xerox&&(!Number.isSafeInteger(factor)||factor<=0||!Number.isSafeInteger(multiplicity)||multiplicity<=0);
+  if(missingNorm&&forMove){
+    var workColumns=[schema.taken,schema.printed,schema.cut,schema.printedAt,schema.cutAt];
+    if(boxCompact_(sh))workColumns=workColumns.concat([21,25,26,28,29]);
+    if(workColumns.some(function(col){
+      if(!col)return false;
+      var value=values[col-1];
+      return value!==false&&value!==''&&value!==null&&value!==0;
+    }))throw new Error('Работа по артикулу уже начата или отметки требуют сверки.');
+  }else if(missingNorm)throw new Error('Для Xerox заполните кратность и количество листов на товар.');
   if(!xerox){factor=1;multiplicity=1;}
   var width=schema.width?boxNumber_(values[schema.width-1]):null,height=schema.height?boxNumber_(values[schema.height-1]):null,planArea=schema.planArea?boxNumber_(values[schema.planArea-1]):null;
-  var position={sheetId:sh.getSheetId(),row:row,shipment:sh.getName(),article:article,xerox:xerox,machine:machine,planKits:kits,sheetsPerKit:factor,multiplicity:multiplicity,planSheets:kits/multiplicity*factor,planArea:planArea>0?planArea:null,widthM:width>0?width:null,heightM:height>0?height:null,schema:schema};
+  var position={sheetId:sh.getSheetId(),row:row,shipment:sh.getName(),article:article,xerox:xerox,machine:machine,planKits:kits,sheetsPerKit:factor,multiplicity:multiplicity,planSheets:missingNorm?null:kits/multiplicity*factor,planArea:planArea>0?planArea:null,widthM:width>0?width:null,heightM:height>0?height:null,schema:schema};
   function dateAt(col){var v=col?values[col-1]:null;return v instanceof Date&&!isNaN(v.getTime())?v.toISOString():'';}
-  position.legacyDates={takenAt:dateAt(boxCompact_(sh)?21:35),printedAt:dateAt(schema.printedAt),cutAt:dateAt(schema.cutAt)};
+  position.legacyDates={takenAt:dateAt((read?read.compact:boxCompact_(sh))?21:35),printedAt:dateAt(schema.printedAt),cutAt:dateAt(schema.cutAt)};
   position.fingerprint=boxHash_([position.sheetId,article,kits,factor,multiplicity,position.widthM,position.heightM,machine,position.planArea]);
   position.legacy={taken:schema.taken&&values[schema.taken-1]===true?position.planSheets:0,printed:values[schema.printed-1]===true?position.planSheets:0,cut:values[schema.cut-1]===true?position.planSheets:0};
   return position;
@@ -130,7 +140,18 @@ function boxBaseline_(books,p,id,create){
   if(hit){var v=sh.getRange(hit.getRow(),1,1,BOXW.positionHeaders.length).getValues()[0];if(v[1]!==books.source.getId()||Number(v[2])!==p.sheetId||v[3]!==p.article)throw new Error('Изменилась связь позиции с журналом.');return {taken:p.xerox?Number(v[4]):(Number(v[4])>0?p.planKits:0),printed:p.xerox?Number(v[5]):(Number(v[5])>0?p.planKits:0),cut:p.xerox?Number(v[6]):(Number(v[6])>0?p.planKits:0),defect:Number(v[7]),surplus:Number(v[8]),takenAt:v[10]||'',printedAt:v[11]||'',cutAt:v[12]||'',positionId:id};}
   if(create!==false)sh.appendRow([id,books.source.getId(),p.sheetId,p.article,p.legacy.taken,p.legacy.printed,p.legacy.cut,0,0,new Date().toISOString(),p.legacyDates.takenAt,p.legacyDates.printedAt,p.legacyDates.cutAt]);return Object.assign({taken:p.legacy.taken,printed:p.legacy.printed,cut:p.legacy.cut,defect:0,surplus:0,positionId:id},p.legacyDates);
 }
-function boxEvents_(journal,id){var sh=journal.getSheetByName('Журнал');if(sh.getLastRow()<2)return [];return sh.getRange(2,4,sh.getLastRow()-1,1).createTextFinder(id).matchEntireCell(true).useRegularExpression(false).findAll().map(function(cell){var v=sh.getRange(cell.getRow(),1,1,BOXW.eventHeaders.length).getValues()[0],e={};BOXW.eventHeaders.forEach(function(k,i){e[k]=v[i];});Object.keys(BOXW.actions).forEach(function(k){if(e.action===BOXW.actions[k])e.action=k;});return e;});}
+function boxEvents_(journal,id){return boxEventsMany_(journal,[id])[id]||[];}
+// Read-only batch lookup; saving still uses the authoritative single-position
+// validation under the writer lock and creates a baseline only when needed.
+function boxBaselinesMany_(books,positions){
+  var sh=books.journal.getSheetByName('_Позиции'),last=sh.getLastRow(),byId={},wanted={},result={},sourceId=books.source.getId();
+  positions.forEach(function(entry){wanted[entry.id]=true;});
+  if(last>1)sh.getRange(2,1,last-1,BOXW.positionHeaders.length).getValues().forEach(function(v){var id=String(v[0]||'');if(!wanted[id])return;if(byId[id])throw new Error('Повторный идентификатор в журнале. Запись остановлена.');byId[id]=v;});
+  positions.forEach(function(entry){var p=entry.p,id=entry.id,v=byId[id];
+    if(v){if(v[1]!==sourceId||Number(v[2])!==p.sheetId||v[3]!==p.article)throw new Error('Изменилась связь позиции с журналом.');result[id]={taken:p.xerox?Number(v[4]):(Number(v[4])>0?p.planKits:0),printed:p.xerox?Number(v[5]):(Number(v[5])>0?p.planKits:0),cut:p.xerox?Number(v[6]):(Number(v[6])>0?p.planKits:0),defect:Number(v[7]),surplus:Number(v[8]),takenAt:v[10]||'',printedAt:v[11]||'',cutAt:v[12]||'',positionId:id};}
+    else result[id]=Object.assign({taken:p.legacy.taken,printed:p.legacy.printed,cut:p.legacy.cut,defect:0,surplus:0,positionId:id},p.legacyDates);
+  });return result;
+}
 function boxEventsMany_(journal,ids){
   var wanted={};ids.forEach(function(id){wanted[id]=true;});var result={};ids.forEach(function(id){result[id]=[];});
   var sh=journal.getSheetByName('Журнал'),last=sh.getLastRow();if(last<2)return result;
@@ -164,19 +185,19 @@ function boxSelection_(){
   return {sheet:sh,rows:rows};
 }
 function getBoxPanelSelection(){var selection=boxSelection_(),sh=selection.sheet,props=PropertiesService.getScriptProperties();return {eligible:boxEligible_(sh),signature:sh?[sh.getSheetId(),selection.rows.join(','),props.getProperty('BOX_REVISION')||''].join(':'):''};}
-function getBoxMachineList(){
+function getBoxMachineList(personal){
   var source=SpreadsheetApp.getActiveSpreadsheet(),sh=source.getActiveSheet();
   if(!boxEligible_(sh))throw new Error('Откройте лист поставки OZON или WB.');
   var schema=boxSchema_(sh),last=sh.getLastRow(),machines={};
-  if(last>=5){var rows=sh.getRange(5,1,last-4,Math.max(schema.article,schema.machine)).getDisplayValues();rows.forEach(function(row,i){var n=i+5,article=String(row[schema.article-1]||'').trim(),machine=String(row[schema.machine-1]||'').trim();if(!article||!machine||sh.isRowHiddenByFilter(n)||sh.isRowHiddenByUser(n))return;var key=boxFold_(machine);if(!machines[key])machines[key]={key:key,name:machine,count:0};machines[key].count++;});}
+  if(last>=5){var rows=sh.getRange(5,1,last-4,Math.max(schema.article,schema.machine)).getDisplayValues();rows.forEach(function(row,i){var n=i+5,article=String(row[schema.article-1]||'').trim(),machine=String(row[schema.machine-1]||'').trim();if(!article||!machine||(!personal&&sh.isRowHiddenByFilter(n))||sh.isRowHiddenByUser(n))return;var key=boxFold_(machine);if(!machines[key])machines[key]={key:key,name:machine,count:0};machines[key].count++;});}
   return {sheetId:sh.getSheetId(),shipment:sh.getName(),machines:Object.keys(machines).sort().map(function(key){return machines[key];})};
 }
-function getBoxMachineContext(sheetId,machine,offset,limit){
+function getBoxMachineContext(sheetId,machine,offset,limit,personal){
   var source=SpreadsheetApp.getActiveSpreadsheet(),sh=source.getActiveSheet();
   if(!boxEligible_(sh)||sh.getSheetId()!==Number(sheetId))throw new Error('Лист поставки изменился. Обновите список станков.');
   if(!machine)throw new Error('Выберите станок.');
   var schema=boxSchema_(sh),last=sh.getLastRow(),rows=[];
-  if(last>=5){var values=sh.getRange(5,1,last-4,Math.max(schema.article,schema.machine)).getDisplayValues();values.forEach(function(row,i){var n=i+5;if(String(row[schema.article-1]||'').trim()&&boxFold_(row[schema.machine-1])===machine&&!sh.isRowHiddenByFilter(n)&&!sh.isRowHiddenByUser(n))rows.push(n);});}
+  if(last>=5){var values=sh.getRange(5,1,last-4,Math.max(schema.article,schema.machine)).getDisplayValues();values.forEach(function(row,i){var n=i+5;if(String(row[schema.article-1]||'').trim()&&boxFold_(row[schema.machine-1])===machine&&(personal||!sh.isRowHiddenByFilter(n))&&!sh.isRowHiddenByUser(n))rows.push(n);});}
   if(!rows.length)throw new Error('Для станка нет видимых артикулов. Обновите фильтр или список станков.');
   offset=Number(offset)||0;limit=Number(limit)||10;
   if(!Number.isSafeInteger(offset)||offset<0||!Number.isSafeInteger(limit)||limit<1||limit>20||offset>=rows.length)throw new Error('Список станка изменился. Обновите его.');
@@ -193,13 +214,14 @@ function getBoxPanelContext(lastKey){
 function boxPanelContextForRows_(source,sh,rows,lastKey,forceBatch){
   var props=PropertiesService.getScriptProperties();
   if(props.getProperty('BOX_SOURCE_ID')!==source.getId())throw new Error('Учёт ещё не подключён.');
-  var rowKeys=rows.map(function(row){return row+':'+boxHash_(sh.getRange(row,4,1,13).getValues()[0]);}),key=['units-v3',sh.getSheetId(),rowKeys.join('|'),props.getProperty('BOX_REVISION')||''].join(':');
+  var firstRow=Math.min.apply(null,rows),lastRow=Math.max.apply(null,rows),selectionValues=sh.getRange(firstRow,4,lastRow-firstRow+1,13).getValues();
+  var rowKeys=rows.map(function(row){return row+':'+boxHash_(selectionValues[row-firstRow]);}),key=['units-v3',sh.getSheetId(),rowKeys.join('|'),props.getProperty('BOX_REVISION')||''].join(':');
   // Unchanged selections never open the journal, wait for a writer or rewrite cells.
   if(lastKey===key)return {unchanged:true,key:key};
   var cache=null,cacheKey='boxcard:'+boxHash_([source.getId(),props.getProperty('BOX_JOURNAL_ID'),key]);
   try{cache=CacheService.getScriptCache();var cached=lastKey&&cache.get(cacheKey);if(cached){var card=JSON.parse(cached);if(card.key===key)return card;}}catch(ignore){}
-  var result=(function(){var books=boxBooks_(),employees=boxEmployees_(books.journal),positions=rows.map(function(row){var p=boxPosition_(sh,row);return {p:p,id:boxIdentity_(sh,p.row)};}),eventMap=rows.length>1?boxEventsMany_(books.journal,positions.map(function(x){return x.id;})):null,items=positions.map(function(entry){
-    var p=entry.p,id=entry.id,base=boxBaseline_(books,p,id,false),events=eventMap?eventMap[id]:boxEvents_(books.journal,id),state=boxTotals_(base,events,p);
+  var result=(function(){var books=boxBooks_(),employees=boxEmployees_(books.journal),batchRead=rows.length>1?{schema:boxSchema_(sh),compact:boxCompact_(sh),values:sh.getRange(firstRow,1,lastRow-firstRow+1,Math.min(35,sh.getMaxColumns())).getValues()}:null,positions=rows.map(function(row){var p=boxPosition_(sh,row,batchRead?{schema:batchRead.schema,compact:batchRead.compact,values:batchRead.values[row-firstRow]}:null);return {p:p,id:boxIdentity_(sh,p.row)};}),eventMap=rows.length>1?boxEventsMany_(books.journal,positions.map(function(x){return x.id;})):null,baseMap=rows.length>1?boxBaselinesMany_(books,positions):null,items=positions.map(function(entry){
+    var p=entry.p,id=entry.id,base=baseMap?baseMap[id]:boxBaseline_(books,p,id,false),events=eventMap?eventMap[id]:boxEvents_(books.journal,id),state=boxTotals_(base,events,p);
     return {positionId:id,row:p.row,sheetId:p.sheetId,shipment:p.shipment,article:p.article,fingerprint:p.fingerprint,planKits:p.planKits,sheetsPerKit:p.sheetsPerKit,multiplicity:p.multiplicity,planSheets:p.planSheets,xerox:p.xerox,machine:p.machine,totals:state.totals,history:boxHistory_(base,events,state.cancelled,p)};
   });
     var common={key:key,shipment:sh.getName(),sheetId:sh.getSheetId(),employees:employees,journalUrl:books.journal.getUrl()};
@@ -230,8 +252,9 @@ function boxSaveCore_(request,outcome,sharedBooks,sharedEmployees,sharedEvents){
     if(!prior&&!employee)throw new Error('Выберите сотрудника из отдельного списка бокса. Без имени запись и отмена запрещены.');
     if(prior){outcome.written=true;var v=journal.getRange(prior.getRow(),1,1,BOXW.eventHeaders.length).getValues()[0];if(v[1]!==hash)throw new Error('Этот ID уже относится к другой записи.');}
     var sh=books.source.getSheetById(Number(request.sheetId));if(!sh)throw new Error('Поставка удалена.');
+    if(request.personalSelection&&books.source.getActiveSheet().getSheetId()!==sh.getSheetId())throw new Error('Лист изменился. Обновите личный список перед записью.');
     var row=boxRow_(sh,request.positionId);
-    if(sharedEvents&&!prior&&(sh.isRowHiddenByFilter(row)||sh.isRowHiddenByUser(row)))throw new Error('Строка скрыта. Обновите выделение перед записью.');
+    if(sharedEvents&&!prior&&((!request.personalSelection&&sh.isRowHiddenByFilter(row))||sh.isRowHiddenByUser(row)))throw new Error('Строка скрыта. Обновите выделение перед записью.');
     var p=boxPosition_(sh,row),base=boxBaseline_(books,p,request.positionId),events=sharedEvents?sharedEvents[request.positionId]||[]:boxEvents_(books.journal,request.positionId),state=boxTotals_(base,events,p);
     if(!prior){
       if(request.fingerprint!==p.fingerprint)throw new Error('План или размеры изменились. Обновите панель перед записью.');
@@ -253,14 +276,15 @@ function boxSaveCore_(request,outcome,sharedBooks,sharedEmployees,sharedEvents){
         if(request.action==='defect'&&['print','cut'].indexOf(stage)<0)throw new Error('Выберите этап возникновения брака.');
         if(unit==='kits'){
           var conversionNumerator=quantity*p.sheetsPerKit;
-          if(!Number.isSafeInteger(conversionNumerator)||conversionNumerator%p.multiplicity!==0)throw new Error('Это количество товара не даёт целое число физических листов по кратности. Введите фактическое количество листов.');
+          // Whole goods may represent a fractional sheet equivalent. Only direct sheet entry must be whole.
+          if(!Number.isSafeInteger(conversionNumerator))throw new Error('Не удалось пересчитать количество товара в листы. Обновите панель.');
           sheets=conversionNumerator/p.multiplicity;
         }else sheets=quantity;
         if(request.action==='take'&&state.totals.taken+sheets>p.planSheets)throw new Error('Взятое в работу количество превышает план.');
         if(request.action==='print'&&state.totals.printed+sheets>p.planSheets)throw new Error('Годная печать превысит план. Листы сверх плана добавьте как излишек.');
         if(request.action==='cut'&&state.totals.cut+sheets>state.totals.printed)throw new Error('Порезка превышает подтверждённое количество годных напечатанных листов.');
       }
-      var goods=p.xerox?sheets/p.sheetsPerKit*p.multiplicity:sheets;
+      var goods=unit==='kits'?quantity:p.xerox?sheets/p.sheetsPerKit*p.multiplicity:sheets;
       var area=p.planArea>0&&p.planKits>0&&request.action!=='cancel'&&(!p.xerox||['take','print','cut'].indexOf(request.action)>=0)?p.planArea*goods/p.planKits:'';
       var event={eventId:request.requestId,requestHash:hash,at:new Date().toISOString(),positionId:request.positionId,sourceId:books.source.getId(),sheetId:p.sheetId,shipment:p.shipment,article:p.article,employeeId:employee.id,employee:employee.name,action:request.action,unit:unit,enteredQuantity:quantity,sheets:p.xerox?sheets:'',kits:goods,areaM2:area,planKits:p.planKits,sheetsPerKit:p.sheetsPerKit,planSheets:p.planSheets,widthM:p.widthM||'',heightM:p.heightM||'',stage:stage,reason:reason,reverses:request.reverses||''};
       outcome.written=true;
@@ -357,5 +381,32 @@ function migrateBoxWorklogLayout(){
     });
     props.deleteProperty('BOX_LAYOUT_V2_MIGRATING');props.setProperty('BOX_REVISION','layout-v2-'+Date.now());
     console.log(JSON.stringify({ok:true,sheets:report}));return {ok:true,sheets:report};
+  });
+}
+
+// The same ScriptLock serializes movement with saveBoxWork. Lock acquisition
+// waits for an in-flight save, then checks the authoritative journal again.
+function boxMoveLock_(sh,row){
+  var found=sh.getRange(row+':'+row).getDeveloperMetadata().filter(function(m){return m.getKey()==='RITM_BOX_MOVE';});
+  if(found.length>1)throw new Error('Неоднозначная блокировка переноса.');
+  return found.length?found[0].getValue():null;
+}
+function boxAcquireMove_(books,sh,request){
+  return boxLocked_(function(){
+    if(!/^[a-f0-9-]{36}$/i.test(String(request.operationId||''))||!Number.isSafeInteger(request.row)||request.row<5)throw new Error('Не подтверждена операция переноса.');
+    var previous=boxMoveLock_(sh,request.row);
+    var identity=String(sh.getRange(request.row,30).getValue()||'');
+    if(identity!==request.uid||String(sh.getRange(request.row,5).getValue())!==request.article||Number(sh.getRange(request.row,16).getValue())!==request.quantity)throw new Error('Исходная позиция изменилась.');
+    if(previous){if(previous!==request.operationId)throw new Error('Строка уже переносится другой операцией.');return {ok:true,locked:true,repeated:true};}
+    var p=boxPosition_(sh,request.row,null,true),metadata=sh.getRange(request.row+':'+request.row).getDeveloperMetadata().filter(function(m){return m.getKey()==='RITM_BOX_POSITION';});
+    if(metadata.length>1)throw new Error('Неоднозначный идентификатор строки.');
+    var id=metadata.length?metadata[0].getValue():Utilities.getUuid();
+    if(!metadata.length)sh.getRange(request.row+':'+request.row).addDeveloperMetadata('RITM_BOX_POSITION',id);
+    var base=boxBaseline_(books,p,id,false),events=boxEvents_(books.journal,id);
+    if(events.length||['taken','printed','cut','defect','surplus'].some(function(k){return Number(base[k])>0;})||base.takenAt||base.printedAt||base.cutAt)throw new Error('Работа по артикулу уже начата.');
+    sh.getRange(request.row+':'+request.row).addDeveloperMetadata('RITM_BOX_MOVE',request.operationId);
+    SpreadsheetApp.flush();
+    if(boxMoveLock_(sh,request.row)!==request.operationId)throw new Error('Блокировка переноса не подтверждена.');
+    return {ok:true,locked:true,repeated:false};
   });
 }

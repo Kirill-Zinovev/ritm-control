@@ -1,0 +1,33 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {openDatabase} from "../server/local-db";
+import {bootstrap} from "./fixtures";
+import {readRitmWarehousePage} from "../server/ritm-warehouse";
+import {cartonFingerprint} from "../shared/ritm-warehouse";
+import {accountWorkbook} from "../src/exports/excel";
+import type {ExportSnapshot} from "../shared/model";
+test("короб из сборки виден РИТМ: свежий состав, повтор отправки, возврат и неизменный Excel прошлого выезда",async(t)=>{
+  const db=await openDatabase();t.after(()=>db.sqlite.close());const f=await bootstrap(db);
+  db.sqlite.prepare("update av2_supplies set origin_shipment_id='RITM-ROLL-10' where id=?").run(f.supply.id);
+  await f.cmd("work.save",{positionId:f.a.id,employeeId:f.employee.id,operation:"packing",qty:50,newCarton:true});
+  // A separate placement uses exactly the collector's packing ledger.
+  await f.cmd("allocation.add",{positionId:f.a.id,qty:50,newCarton:true});
+  const before=await readRitmWarehousePage(db.store,new URL("https://assembly.test/api/ritm/warehouse"));
+  const box=before.cartons[0];assert.equal(box.quantity,50);assert.equal(box.sourceSystem,"assembly-v2");
+  await assert.rejects(f.cmd("ritm.carton.dispatch",{cartonId:box.assemblyV2Id,status:"sent",fingerprint:cartonFingerprint(box)}),/закрытый/);
+  const snap=await db.snapshot(f.supply.id) as {cartons:{id:string;items:{id:string;qty:number}[]}[]};
+  await f.cmd("carton.close",{cartonId:box.assemblyV2Id,items:snap.cartons[0].items.map(i=>({id:i.id,qty:i.qty})).sort((a,b)=>a.id.localeCompare(b.id))});
+  const closed=(await readRitmWarehousePage(db.store,new URL("https://assembly.test/api/ritm/warehouse"))).cartons[0];
+  await assert.rejects(f.cmd("ritm.carton.dispatch",{cartonId:box.assemblyV2Id,status:"sent",fingerprint:cartonFingerprint(box)}),/изменился/);
+  const payload={cartonId:box.assemblyV2Id,status:"sent",fingerprint:cartonFingerprint(closed),changedBy:"Менеджер"},key=crypto.randomUUID();
+  await f.cmd("ritm.carton.dispatch",payload,key);await f.cmd("ritm.carton.dispatch",payload,key);
+  assert.equal(db.sqlite.prepare("select count(*) n from av2_dispatches").get()!.n,1);
+  const sent=(await readRitmWarehousePage(db.store,new URL("https://assembly.test/api/ritm/warehouse"))).cartons[0];assert.equal(sent.dispatchStatus,"sent");
+  const frozen=String(db.sqlite.prepare("select sent_payload from av2_dispatches").get()!.sent_payload);
+  await f.cmd("ritm.carton.dispatch",{cartonId:box.assemblyV2Id,status:"pending",fingerprint:cartonFingerprint(sent)});
+  assert.equal((await readRitmWarehousePage(db.store,new URL("https://assembly.test/api/ritm/warehouse"))).cartons[0].dispatchStatus,"pending");
+  assert.equal(db.sqlite.prepare("select sent_payload from av2_dispatches").get()!.sent_payload,frozen);
+  const workbook=accountWorkbook({id:"test",createdAt:new Date().toISOString(),dispatchId:"test",kind:"account",payload:JSON.parse(frozen)} as ExportSnapshot);
+  assert.equal(workbook.getWorksheet("Состав")!.getCell("H2").value,50);
+  await assert.rejects(readRitmWarehousePage(db.store,new URL("https://assembly.test/api/ritm/warehouse?revision="+before.revision)),/изменились/);
+});

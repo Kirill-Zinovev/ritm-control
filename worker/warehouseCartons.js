@@ -44,11 +44,17 @@ function catalogNorms(catalog) {
   };
 }
 
-export function buildWarehouseSnapshot(boxRows, contentRows, { catalog = null, photos = null, checkedAt = new Date().toISOString(), activeShipmentIds = null } = {}) {
+export function buildWarehouseSnapshot(boxRows, contentRows, { catalog = null, photos = null, checkedAt = new Date().toISOString(), activeShipmentIds = null, shipmentInfo = null, stockOnly = false, includeArchived = false } = {}) {
+  // Warehouse surplus cartons are reported separately and must never be
+  // counted as marketplace shipment cartons or orphaned allocations.
+  const stockSnapshot = stockOnly ? null : buildWarehouseSnapshot(boxRows, contentRows, { catalog, photos, checkedAt, shipmentInfo, stockOnly: true });
+  boxRows = boxRows.filter((row) => text(row.cartonId).startsWith('carton-stock-') === stockOnly);
+  contentRows = contentRows.filter((row) => text(row.cartonId).startsWith('carton-stock-') === stockOnly);
   const activeIds = activeShipmentIds instanceof Set ? activeShipmentIds : null;
+  const linkedActiveCartons = new Set(activeIds ? contentRows.filter(row => activeIds.has(text(row.shipmentId))).map(row => text(row.cartonId)).filter(Boolean) : []);
   const currentBoxRows = activeIds ? boxRows.filter((row) => {
     const shipmentId = text(row.shipmentId);
-    return !shipmentId || activeIds.has(shipmentId);
+    return !shipmentId || activeIds.has(shipmentId) || linkedActiveCartons.has(text(row.cartonId));
   }) : boxRows;
   const currentCartonIds = new Set(currentBoxRows.map((row) => text(row.cartonId)).filter(Boolean));
   const currentContentRows = activeIds ? contentRows.filter((row) => {
@@ -65,6 +71,7 @@ export function buildWarehouseSnapshot(boxRows, contentRows, { catalog = null, p
     const closed = ["закрыт", "closed"].includes(rawStatus);
     const record = { id, number: text(row["Номер"]), shipmentId: text(row.shipmentId), directionId: text(row.directionId), shipment: text(row["Направление"]), market: marketOf(row["Направление"]), boxType: text(row["Тип короба"]), status: cancelled ? "cancelled" : open ? "open" : closed ? "closed" : "unknown", createdAt: text(row.createdAt), closedAt: text(row.closedAt), recordedOccupied: text(row["Занято, шт"]) === "" ? null : whole(row["Занято, шт"]), issues: [], allocations: [], history: [] };
     if (!record.number || !record.shipmentId || !record.directionId || !record.shipment) record.issues.push("Не подтверждена связь с поставкой или номер короба");
+    if (activeIds && record.shipmentId && !activeIds.has(record.shipmentId)) record.issues.push("Исходная поставка общего короба недоступна");
     if (record.status === "unknown") record.issues.push("Статус короба не подтверждён");
     if (closed && (!record.closedAt || !Number.isFinite(Date.parse(record.closedAt)))) record.issues.push("Закрытие ещё не подтверждено временем");
     if (open && record.closedAt) record.issues.push("Статус и время закрытия противоречат друг другу");
@@ -80,16 +87,22 @@ export function buildWarehouseSnapshot(boxRows, contentRows, { catalog = null, p
     if (!id || seenAllocations.has(id)) { box.issues.push("Повторная или неполная запись состава"); continue; }
     seenAllocations.add(id);
     if (!Number.isSafeInteger(quantity) || !sku || !text(row.positionId) || !text(row.shipmentId) || !text(row.directionId)) { box.issues.push("Некорректная запись состава"); continue; }
-    if (text(row.shipmentId) !== box.shipmentId || text(row.directionId) !== box.directionId) box.issues.push("Состав относится к другой поставке или направлению");
-    const entry = { id, cartonId, sku, quantity, positionId: text(row.positionId), createdAt, action, sourceAllocationId: text(row.sourceAllocationId), reason: text(row.reason) };
+    const manual = stockOnly && text(row.allocationId).startsWith('stock-manual-') && text(row.eventId).startsWith('MANUAL_STOCK_') && text(row.directionId) === "WAREHOUSE"
+      ? text(row.shipmentId).match(/^RITM-WAREHOUSE-MANUAL-(OZON|WB)-(\d+)$/) : null;
+    const manualOrigin = manual && text(row.positionId) === text(row.shipmentId)+'|'+sku && String(Number(manual[2])) === String(Number(text(box.number).match(/^(\d+)/)?.[1])) && manual[1] === marketOf(box.shipment)
+      ? {name:`${manual[1]} · Поступление на склад · Магазин ${Number(manual[2])}`,directionId:"WAREHOUSE"} : null;
+    const itemShipmentId = text(row.shipmentId), origin = itemShipmentId.startsWith('RITM-WAREHOUSE-MANUAL-') ? manualOrigin : (itemShipmentId === "RITM-STOCK-WAREHOUSE" ? {name:"OZON · Запасы склад",directionId:"ROLL"} : itemShipmentId === box.shipmentId
+      ? { name: box.shipment, directionId: box.directionId } : shipmentInfo?.[itemShipmentId]);
+    if (!origin?.name || !marketOf(origin.name) || !origin.directionId || text(row.directionId) !== origin.directionId) box.issues.push("Не подтверждена поставка товара в общем коробе");
+    const entry = { id, cartonId, sku, quantity, shipmentId: itemShipmentId, shipment: text(origin?.name), market: marketOf(origin?.name), manualStore: manualOrigin ? String(Number(manual[2])) : '', positionId: text(row.positionId), createdAt, action, sourceAllocationId: text(row.sourceAllocationId), reason: text(row.reason) };
     if (action === "REMOVE") { if (quantity >= 0 || !entry.sourceAllocationId) { box.issues.push("Некорректная корректировка состава"); continue; } removals.push(entry); }
     else if ((action === "" || action === "ADD") && quantity > 0) { allocations.set(id, { ...entry, removed: 0 }); }
     else { box.issues.push("Неизвестное действие в журнале короба"); continue; }
-    box.history.push({ action: action === "REMOVE" ? "remove" : "add", article: sku, quantity, createdAt, reason: entry.reason, employee: null });
+    box.history.push({ action: action === "REMOVE" ? "remove" : "add", article: sku, quantity, shipmentId: itemShipmentId, shipment: entry.shipment, createdAt, reason: entry.reason, employee: text(row['Сотрудник']) || null });
   }
   for (const removal of removals) {
     const source = allocations.get(removal.sourceAllocationId), box = boxes.get(removal.cartonId);
-    if (!source || source.cartonId !== removal.cartonId || source.positionId !== removal.positionId || skuKey(source.sku) !== skuKey(removal.sku)) { box.issues.push("Не найдена исходная запись корректировки"); continue; }
+    if (!source || source.cartonId !== removal.cartonId || source.shipmentId !== removal.shipmentId || source.positionId !== removal.positionId || skuKey(source.sku) !== skuKey(removal.sku)) { box.issues.push("Не найдена исходная запись корректировки"); continue; }
     source.removed += Math.abs(removal.quantity);
     if (source.removed > source.quantity) box.issues.push("Корректировка превышает исходное количество");
   }
@@ -102,17 +115,20 @@ export function buildWarehouseSnapshot(boxRows, contentRows, { catalog = null, p
   for (const box of boxes.values()) {
     const grouped = new Map();
     for (const item of box.allocations) {
-      const key = `${item.positionId}\u0000${skuKey(item.sku)}`;
-      const entry = grouped.get(key) || { article: item.sku, positionId: item.positionId, quantity: 0 };
+      const key = `${item.shipmentId}\u0000${item.positionId}\u0000${skuKey(item.sku)}`;
+      const entry = grouped.get(key) || { article: item.sku, shipmentId: item.shipmentId, shipment: item.shipment, market: item.market, manualStore: item.manualStore, positionId: item.positionId, quantity: 0 };
       entry.quantity += item.quantity; grouped.set(key, entry);
     }
     box.contents = [...grouped.values()];
-    for (const item of box.contents) { const row = { article: item.article, sheetName: box.shipment }; lookup.push({ box, item, row }); }
+    for (const item of box.contents) { const row = { article: item.article, sheetName: item.shipment || box.shipment }; lookup.push({ box, item, row }); }
   }
   const lookups = lookup.map((entry) => entry.row);
   assignCatalogStores(lookups, catalog);
   assignWorkloadDetails(lookups, catalog, photos);
-  for (const { item, row } of lookup) Object.assign(item, { store: row.shopCatalogStatus === "matched" ? text(row.shop) : "", storeStatus: row.shopCatalogStatus || "unavailable", productName: text(row.productName), photoUrl: text(row.photoUrl) });
+  for (const { box, item, row } of lookup) {
+    if(item.manualStore && row.shopCatalogStatus === "matched" && Number(row.shop)!==Number(item.manualStore))box.issues.push('Магазин поступления отличается от текущей базы');
+    Object.assign(item, { store: item.manualStore || (row.shopCatalogStatus === "matched" ? text(row.shop) : ""), storeStatus: item.manualStore ? "manual_receipt" : row.shopCatalogStatus || "unavailable", productName: text(row.productName), photoUrl: text(row.photoUrl) });
+  }
   const result = [];
   for (const box of boxes.values()) {
     if (box.status === "cancelled") continue;
@@ -126,11 +142,21 @@ export function buildWarehouseSnapshot(boxRows, contentRows, { catalog = null, p
     const numberStore = text(box.number).match(/^(\d+)[a-zа-яё]/i)?.[1] || "";
     if (!numberStore) box.issues.push("Магазин в номере короба не подтверждён");
     if (stores.length === 1 && numberStore && Number(stores[0]) !== Number(numberStore)) box.issues.push("Магазин в номере короба не совпадает с базой");
-    const norms = box.contents.map((item) => resolveNorm(box.market, item.article));
+    const norms = box.contents.map((item) => resolveNorm(item.market, item.article));
     const fill = box.contents.length && norms.every(Boolean) ? box.contents.reduce((sum, item, index) => sum + item.quantity / norms[index].capacity, 0) * 100 : null;
     const uniqueIssues = [...new Set(box.issues)];
     if (box.closedAt && Number.isFinite(Date.parse(box.closedAt))) box.history.push({ action: "close", article: "", quantity: null, createdAt: box.closedAt, reason: "", employee: null });
     result.push({ id: box.id, number: box.number, shipmentId: box.shipmentId, shipment: box.shipment, directionId: box.directionId, market: box.market, store: stores.length === 1 && box.contents.every((item) => item.store) ? stores[0] : "", boxType: box.boxType, status: box.status, createdAt: box.createdAt, closedAt: box.closedAt, quantity, fillPercent: fill, ready: box.status === "closed" && uniqueIssues.length === 0 && issues.length === 0, issues: uniqueIssues, contents: box.contents, history: box.history.sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))) });
   }
-  return { ok: true, schemaVersion: 1, checkedAt, stale: false, cartons: result, cancelledCount: [...boxes.values()].filter((box) => box.status === "cancelled").length, issues: [...new Set(issues)], catalogAvailable: !!catalog };
+  const snapshot = { ok: true, schemaVersion: 1, warehouseStockVersion: 1, checkedAt, stale: false, cartons: result, stockCartons: stockSnapshot?.cartons || [], cancelledCount: [...boxes.values()].filter((box) => box.status === "cancelled").length, issues: [...new Set(issues)], catalogAvailable: !!catalog };
+  if (!stockOnly && includeArchived && activeIds) {
+    // Keep removed production supplies out of current warehouse totals, but
+    // retain their cartons separately for an explicitly requested lookup.
+    const archivedRows = boxRows.filter((row) => text(row.cartonId) && !currentCartonIds.has(text(row.cartonId)));
+    const archivedIds = new Set(archivedRows.map((row) => text(row.cartonId)));
+    const archivedContents = contentRows.filter((row) => archivedIds.has(text(row.cartonId)));
+    snapshot.archivedCartons = buildWarehouseSnapshot(archivedRows, archivedContents, { catalog, photos, checkedAt, shipmentInfo }).cartons;
+    snapshot.warehouseArchiveVersion = 1;
+  }
+  return snapshot;
 }

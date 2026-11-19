@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Dataset, Roll } from "./model";
+import { printingRefreshDelay } from "./printingSnapshotRefresh";
 export const PRINTING_URL = import.meta.env.VITE_PRINTING_SOURCE_URL || "";
 export const ROLL_PRINTING_URL =
   import.meta.env.VITE_ROLL_PRINTING_SOURCE_URL || "";
@@ -10,6 +11,7 @@ export const PRINTERS = [
   { id: "printer-andrey", name: "Андрей" },
 ];
 export type LiveEvent = {
+  machine?: string | null;
   id: string;
   uid: string;
   roll: string;
@@ -28,6 +30,13 @@ export type LiveEvent = {
   sourceUrl?: string;
 };
 export type LiveOrder = {
+  sheetsInProduct?: number | null;
+  multiplicity?: number | null;
+  archived?: boolean;
+  planningMachine?: string|null;
+  planningPrinted?: number|null;
+  planningCut?: number|null;
+  planningPhysicalUnits?: boolean;
   assemblyShipmentId?: string | null;
   areaKnown?: boolean;
   areaIssue?: string | null;
@@ -41,6 +50,7 @@ export type LiveOrder = {
   quantity: number;
   plannedArea: number;
   machine?: string | null;
+  sourceMachine?: string | null;
   machineSource?: "supply" | "catalog" | null;
   machineIssue?: string | null;
   productName?: string | null;
@@ -49,7 +59,10 @@ export type LiveOrder = {
   cutProgress?: number | null;
   remainingPrint?: number | null;
   packed?: number | null;
+  assemblyMachineCut?: number | null;
+  assemblyManualCut?: number | null;
   packingRecords?: number | null;
+  packingEventIds?: string[] | null;
   shop?: string | null;
   shopCatalogStatus?: "matched" | "missing" | "ambiguous" | "unavailable" | "unknown_marketplace";
   shopCatalogReason?: string | null;
@@ -88,9 +101,11 @@ export type LivePrinting = {
     missing: number;
     ambiguous: number;
   };
-  boxPrinting?: {status: "available" | "unavailable"; reason: string | null; exceptions?: {id: string; date: string; timestamp: string; shipment: string; sheetId: number; article: string; employee: string; kind: "defect" | "surplus"; quantity: number; unit: "sheets" | "pieces" | "unknown"; stage: string; comment: string}[]; events: BoxPrintingEvent[]; cutEvents?: BoxPrintingEvent[]};
+  boxPrinting?: {stockStatus?: string; status: "available" | "unavailable"; reason: string | null; exceptions?: {id: string; date: string; timestamp: string; shipment: string; sheetId: number; article: string; employee: string; kind: "defect" | "surplus"; quantity: number; unit: "sheets" | "pieces" | "unknown"; stage: string; comment: string}[]; events: BoxPrintingEvent[]; cutEvents?: BoxPrintingEvent[]};
   events: LiveEvent[];
   cutEvents?: LiveEvent[];
+  stockRoll?: {status:string;orders:LiveOrder[];reason?:string|null};
+  stockBox?: {status:string;orders:LiveOrder[];reason?:string|null};
   supplies: LiveOrder[];
   issues: { source: string; row: number; message: string }[];
   sheets: {
@@ -113,6 +128,9 @@ export type LivePrinting = {
 };
 
 export type BoxPrintingEvent = {
+  machine?: string | null;
+  spreadsheetId?: string;
+  positionId?: string;
   id: string;
   employee: string;
   date: string;
@@ -159,6 +177,7 @@ export function useLivePrinting(enabled = true) {
   const retryTimer = useRef<number | null>(null);
   const pending = useRef(false);
   const pendingForce = useRef(false);
+  const queuedResolvers = useRef<(() => void)[]>([]);
   const reloadRef = useRef<(force?: boolean) => Promise<void>>(async () => {});
   const scheduleRetry = useCallback((delayMs: number) => {
     if (retryTimer.current !== null) window.clearTimeout(retryTimer.current);
@@ -171,7 +190,9 @@ export function useLivePrinting(enabled = true) {
     if (active.current) {
       pending.current = true;
       pendingForce.current ||= force;
-      return;
+      // A mutation caller must await the queued fresh read, rather than return
+      // immediately while an older periodic request is still in flight.
+      return new Promise<void>(resolve => queuedResolvers.current.push(resolve));
     }
     if (retryTimer.current !== null) {
       window.clearTimeout(retryTimer.current);
@@ -257,7 +278,9 @@ export function useLivePrinting(enabled = true) {
       if (!controller.signal.aborted) {
         setValue({ ...j, cutEvents });
         if (j.stale === true) {
-          setError(j.staleReason || "Данные устарели. Повторяю обновление.");
+          // A valid stale response has its own notice. Only failed requests
+          // use the error channel; duplicating staleReason shows two banners.
+          setError("");
           scheduleRetry(
             Number.isFinite(j.refreshRetryAfterMs)
               ? Math.max(5000, Math.min(120000, j.refreshRetryAfterMs))
@@ -292,12 +315,24 @@ export function useLivePrinting(enabled = true) {
           const nextForce = pendingForce.current;
           pending.current = false;
           pendingForce.current = false;
-          window.setTimeout(() => void reloadRef.current(nextForce), 0);
+          const resolvers=queuedResolvers.current.splice(0);
+          window.setTimeout(() => void reloadRef.current(nextForce).finally(() => resolvers.forEach(resolve=>resolve())), 0);
         }
       }
     }
   }, [scheduleRetry]);
   reloadRef.current = reload;
+  useEffect(() => {
+    if (!enabled || !value || value.stale || value.refreshInProgress) return;
+    const delay = printingRefreshDelay(value.snapshotAt || value.updatedAt);
+    if (delay === null) return;
+    // Refresh just before the write guard expires, even if the snapshot was
+    // already several minutes old when this tab first received it.
+    const timer = window.setTimeout(() => {
+      if (document.visibilityState === "visible") void reload(true);
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [enabled, reload, value?.snapshotAt, value?.updatedAt, value?.stale, value?.refreshInProgress]);
   useEffect(() => {
     if (!enabled) return;
     const updateIfVisible = () => {
@@ -314,5 +349,31 @@ export function useLivePrinting(enabled = true) {
     };
   }, [reload, enabled]);
   useEffect(() => () => active.current?.abort(), []);
+  useEffect(() => {
+    if (!enabled) return;
+    const abort = new AbortController();
+    let checking = false, observed: string | null = null;
+    const check = async () => {
+      if (checking || abort.signal.aborted || document.visibilityState !== "visible") return;
+      checking = true;
+      try {
+        const response = await fetch("/api/printing/revision", {cache:"no-store",signal:AbortSignal.any([abort.signal,AbortSignal.timeout(10000)])});
+        if (!response.ok) return;
+        const data = await response.json();
+        if (typeof data.revision !== "string") return;
+        const changed = observed !== null && observed !== data.revision;
+        if (changed || data.refreshNeeded === true) {
+          if (!active.current) { observed = data.revision; void reload(false); }
+        } else observed = data.revision;
+      } catch { /* Preserve the loaded snapshot; the next visible poll retries. */ }
+      finally { checking = false; }
+    };
+    void check();
+    const timer = window.setInterval(() => void check(), 5000);
+    const visible = () => {if(document.visibilityState === "visible") void check();};
+    document.addEventListener("visibilitychange",visible);
+    window.addEventListener("online",visible);
+    return () => {abort.abort();window.clearInterval(timer);document.removeEventListener("visibilitychange",visible);window.removeEventListener("online",visible);};
+  },[enabled,reload]);
   return { value, loading, error, reload };
 }

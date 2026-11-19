@@ -6,6 +6,7 @@ import { IncidentStore } from "../agent/store.js";
 import { createAgentServer } from "../agent/server.js";
 import {
   ProductionSupplyService,
+  ProductionSupplyWriter,
   routeSupplyLines,
   machineDepartment,
   shipmentMarketplace,
@@ -68,6 +69,95 @@ const payload = () => ({
     { article: "ROLL", quantity: 10 },
     { article: "BOX", quantity: 7 },
   ],
+});
+
+test('urgent supply keeps marketplace prefix and propagates fire to both new sheets', async () => {
+  const f = fixture();
+  const input = {...payload(), priority:'urgent'};
+  const preview = await f.service.preview(input);
+  const result = await f.service.execute({...input, previewId:preview.id});
+  assert.equal(result.status, 'verified');
+  assert.equal(result.name, 'OZON Общая поставка 🔥');
+  const op = f.service.operations().find(item => item.id === input.operationId);
+  assert.equal(op.priority, 'urgent');
+  assert.deepEqual(op.steps.map(step => step.plan.name), [result.name, result.name]);
+  assert.match(result.name, /^(OZON|WB)\s/);
+});
+test('changing priority after preview requires a new preview before writes', async () => {
+  const f=fixture(), input={...payload(),priority:'normal'};
+  const preview=await f.service.preview(input);
+  await assert.rejects(f.service.execute({...input,priority:'urgent',previewId:preview.id}),/Проверьте распределение/);
+  assert.equal(f.writers.box.writes,0);assert.equal(f.writers.roll.writes,0);
+});
+
+test("Xerox preview reads the same OZON, WB and layout columns as the new box sheet", async () => {
+  const samples = [
+    ["Артикул", "A", "B", "C", "B"],
+    ["Xerox", 8, 8, 4, 12],
+    ["A", "B", "C"],
+    [16, 12, 12],
+    [2, "A", "B"],
+    [6, 20, 0],
+  ];
+  const reader = {
+    documentId: "box-test",
+    async request(url) {
+      const query = new URL(url).searchParams;
+      assert.equal(query.get("majorDimension"), "COLUMNS");
+      assert.equal(query.get("valueRenderOption"), "UNFORMATTED_VALUE");
+      const ranges = query.getAll("ranges");
+      assert.deepEqual(ranges.slice(0, 4), ["'_RITM_МАКЕТЫ'!A:A", "'_RITM_МАКЕТЫ'!P:P", "'_RITM_WB_SOURCE'!A:A", "'_RITM_WB_SOURCE'!B:B"]);
+      return { spreadsheetId: "box-test", valueRanges: ranges.map((_, index) => ({ values: [samples[index]] })) };
+    },
+  };
+  const ozon = await ProductionSupplyWriter.prototype.xeroxFormats.call(reader, "OZON", ["A", "B", "C"]);
+  const wb = await ProductionSupplyWriter.prototype.xeroxFormats.call(reader, "WB", ["A"]);
+  assert.deepEqual([...ozon.values()], [
+    { factor: 20, multiplicity: 8 }, { factor: 12, multiplicity: 8 }, { factor: 12, multiplicity: 4 },
+  ]);
+  assert.deepEqual(wb.get("A"), { factor: 16, multiplicity: 8 });
+});
+
+test("creating a mixed supply requires one Xerox choice and writes the chosen quantity once", async () => {
+  for (const [direction, expected] of [["down", 18], ["up", 20]]) {
+    const f = fixture();
+    f.writers.box.xeroxFormats = async () => new Map([["BOX", { factor: 20, multiplicity: 8 }]]);
+    const input = {...payload(), lines: [{article: "ROLL", quantity: 10}, {article: "BOX", quantity: 19}]};
+    const preview = await f.service.preview(input);
+    assert.deepEqual(preview.lines[1].rounding.choices, [
+      {direction: "down", quantity: 18, sheets: 45},
+      {direction: "up", quantity: 20, sheets: 50},
+    ]);
+    const request = {...input, previewId: preview.id};
+    await assert.rejects(f.service.execute(request), {code: "production_xerox_rounding_required"});
+    await assert.rejects(f.service.execute({...request, xeroxRounding: [{article: "ROLL", direction}, {article: "BOX", direction}]}), {code: "production_xerox_rounding_required"});
+    await assert.rejects(f.service.execute({...request, xeroxRounding: [{article: "BOX", direction, quantity: 25}]}), {code: "production_xerox_rounding_required"});
+    assert.equal(f.writers.box.writes + f.writers.roll.writes, 0);
+    const confirmed = {...request, xeroxRounding: [{article: "BOX", direction}]};
+    assert.equal((await f.service.execute(confirmed)).status, "verified");
+    assert.equal((await f.service.execute(confirmed)).status, "verified");
+    const saved = f.service.operations().find(op => op.id === input.operationId);
+    assert.deepEqual(saved.steps.map(step => [step.department, step.plan.lines[0].quantity]), [["roll", 10], ["box", expected]]);
+    assert.equal(f.writers.box.writes + f.writers.roll.writes, 2);
+  }
+});
+
+test("Xerox catalog changes require a new preview and a zero choice creates no empty box sheet", async () => {
+  const f = fixture();
+  let multiplicity = 8;
+  f.writers.box.xeroxFormats = async () => new Map([["BOX", { factor: 20, multiplicity }]]);
+  const input = {...payload(), lines: [{article: "ROLL", quantity: 10}, {article: "BOX", quantity: 1}]};
+  const preview = await f.service.preview(input);
+  const request = {...input, previewId: preview.id, xeroxRounding: [{article: "BOX", direction: "down"}]};
+  multiplicity = 16;
+  await assert.rejects(f.service.execute(request), {code: "production_routing_changed"});
+  assert.equal(f.writers.box.writes + f.writers.roll.writes, 0);
+  const current = await f.service.preview(input);
+  const result = await f.service.execute({...request, previewId: current.id});
+  assert.equal(result.status, "verified");
+  assert.deepEqual(result.skippedLines, []);
+  assert.equal(f.writers.box.writes, 0);
+  assert.equal(f.writers.roll.writes, 1);
 });
 
 test("production preview and execution require a local owner cookie and reject foreign origins, bearer-only and proxy requests", async () => {
@@ -213,6 +303,9 @@ function fixture() {
       reject: false,
       lost: false,
       unreadable: false,
+      async xeroxFormats() {
+        return new Map([["BOX", { factor: 4, multiplicity: 4 }]]);
+      },
       async verifyEditAccess() {
         if (this.forbidden) throw new Error("forbidden destination");
       },
@@ -234,6 +327,7 @@ function fixture() {
         return [...sheets.values()].map((s) => ({
           sheetId: s.sheetId,
           title: s.name,
+          hidden: s.hidden === true,
           gridProperties: { rowCount: 600 },
         }));
       },
@@ -478,7 +572,7 @@ test("two destinations are preflighted before writes; fresh catalog routing must
   f.service.catalog = async () => changed;
   await assert.rejects(
     () => f.service.execute({ ...p, previewId: preview.id }),
-    /Станки в базе изменились/,
+    {code: "production_routing_changed"},
   );
   assert.equal(f.writers.roll.writes, 0);
 });
@@ -561,6 +655,36 @@ for (const department of ["roll", "box"]) {
     assert.equal(targetWriter.writes, writesAfterDelete, "repeating the same confirmation never deletes or writes twice");
   });
 }
+
+test("whole-supply deletion verifies both hidden tabs before continuing and retires only after both are gone", async () => {
+  const f = fixture();
+  const input = payload();
+  const preview = await f.service.preview(input);
+  await f.service.execute({ ...input, previewId: preview.id });
+  const supply = f.store.meta("productionSupplies")[0];
+  for (const part of supply.parts) f.writers[part.department].sheets.get(part.sheetId).hidden = true;
+  const deletion = {
+    action: "deleteSupply", shipmentId: supply.id, name: supply.name,
+    operationId: randomUUID(), explicitWriteApproval: true,
+  };
+  const second = supply.parts[1].department;
+  const first = supply.parts[0].department;
+  f.writers[second].reject = true;
+  const partial = await f.service.execute(deletion);
+  assert.equal(partial.status, "partial");
+  assert.equal(f.writers[first].sheets.size, 0);
+  assert.equal(f.writers[second].sheets.size, 1);
+  assert.equal(f.store.meta("productionSupplies").length, 1);
+  assert.equal(f.store.meta("retiredProductionTabs"), null);
+  f.writers[second].reject = false;
+  const done = await f.service.execute({ action: "resume", operationId: deletion.operationId, explicitWriteApproval: true });
+  assert.equal(done.status, "verified");
+  assert.equal(f.writers[first].writes, 2);
+  assert.equal(f.writers[second].sheets.size, 0);
+  assert.deepEqual(f.store.meta("productionSupplies"), []);
+  assert.deepEqual(f.store.meta("retiredProductionTabs").sort(),
+    supply.parts.map(part => `${part.department}:${part.sheetId}`).sort());
+});
 
 test("an uncertain absent create waits for Google then resumes with the identical sheet ID", async () => {
   const f = fixture(), p = payload(), preview = await f.service.preview(p);
@@ -708,4 +832,31 @@ test("cancel refuses a created department and a still running request", async ()
   const service = f.createService(); service.now = () => Date.now() + 181000;
   await assert.rejects(() => service.execute(input), /уже есть/);
   assert.equal(service.operations().find(op => op.id === p.operationId).status, "partial");
+});
+test('per-shipment urgent reminder is retained and changes require a new preview', async () => {
+  const f=fixture(), input={...payload(),priority:'urgent',reminderMinutes:30};
+  const preview=await f.service.preview(input);
+  await assert.rejects(f.service.execute({...input,reminderMinutes:60,previewId:preview.id}),/Проверьте распределение/);
+  const result=await f.service.execute({...input,previewId:preview.id});
+  assert.equal(result.status,'verified');const op=f.service.operations().find(item=>item.id===input.operationId);
+  assert.equal(op.reminderMinutes,30);assert.ok(Number.isFinite(Date.parse(op.createdAt)));
+});
+test('reminder is rejected for normal shipment and unsupported durations', async()=>{
+  const f=fixture();await assert.rejects(f.service.preview({...payload(),priority:'normal',reminderMinutes:30}),/время напоминания/);
+  await assert.rejects(f.service.preview({...payload(),priority:'urgent',reminderMinutes:7}),/время напоминания/);
+});
+
+
+test('production deadlines are included in preview identity and saved with verified supply, never to source cells', async()=>{
+  const f=fixture(), dates={readyAt:'2026-11-13T18:00:00+03:00',packingAt:'2026-11-13T20:00:00+03:00',shipAt:'2026-11-14T12:00:00+03:00'},input={...payload(),planning:dates};
+  const preview=await f.service.preview(input);
+  await assert.rejects(()=>f.service.execute({...input,planning:{...dates,readyAt:'2026-11-13T17:00:00+03:00'},previewId:preview.id}));
+  await assert.rejects(()=>f.service.execute({...input,planning:{...dates,packingAt:'2026-11-13T21:00:00+03:00'},previewId:preview.id}));
+  assert.equal(f.writers.roll.writes+f.writers.box.writes,0);
+  const result=await f.service.execute({...input,previewId:preview.id});
+  assert.equal(result.status,'verified');
+  assert.deepEqual(f.store.meta('productionSupplies')[0].planning,{readyAt:'2026-11-13T15:00:00.000Z',packingAt:'2026-11-13T17:00:00.000Z',shipAt:'2026-11-14T09:00:00.000Z'});
+  assert.equal(f.store.meta('productionSupplyOperations')[0].planning.readyAt,'2026-11-13T15:00:00.000Z');
+  const before=f.writers.roll.writes+f.writers.box.writes;
+  await f.service.execute({...input,previewId:preview.id});assert.equal(f.writers.roll.writes+f.writers.box.writes,before);
 });

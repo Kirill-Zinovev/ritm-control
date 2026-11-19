@@ -82,13 +82,22 @@ function collectJournalOperation(index, journal, options, operation) {
     const id = String(r[0] || "").trim(),
       resolvedOrder = ritmBridgeResolve_(index, r[7], String(r[4] || "")),
       journalSheetName = String(r[4] || "").trim(),
-      fallback = options.orderFallback,
+      // The journal stores the historical article and area at completion time.
+      // A transfer/removal from today's plan must not erase that production fact.
+      // Only explicitly configured source sheets qualify; ambiguous identities do not.
+      fallbacks = (options.orderFallbacks || [options.orderFallback]).filter(Boolean),
+      matchingFallbacks = fallbacks.filter(candidate => candidate.journalAliases?.includes(journalSheetName)),
+      fallback = matchingFallbacks.length === 1 ? matchingFallbacks[0]
+        : matchingFallbacks.length === 0 && journalSheetName && options.journalOrderFallback
+          ? {...options.journalOrderFallback, sheetName:journalSheetName}
+          : null,
+      matchingCurrentOrders = (index.byRaw[String(r[7] || '').trim()] || []).filter(candidate => candidate.sheetName === journalSheetName || candidate.journalAliases?.includes(journalSheetName)),
       historicalOrder =
         !resolvedOrder &&
-        fallback?.journalAliases?.includes(journalSheetName) &&
+        fallback && matchingCurrentOrders.length === 0 &&
         String(r[6] || "").trim() &&
         String(r[7] || "").trim()
-          ? { ...fallback, uid: String(r[7]).trim(), article: String(r[6]).trim() }
+          ? { ...fallback, uid: String(r[7]).trim(), article: String(r[6]).trim(), historical: true }
           : null,
       order = resolvedOrder || historicalOrder,
       employee = ritmBridgeEmployee_(r[2], operation, options.sourceId || order?.sourceId || options.orderFallback?.sourceId),
@@ -149,6 +158,7 @@ function collectJournalOperation(index, journal, options, operation) {
       roll: String(r[8] || ""),
       employee,
       date,
+      machine: order.historical ? null : order.machine || null,
       quantity,
       area: area > 0 ? area : 0,
       article: order.article,
@@ -159,6 +169,7 @@ function collectJournalOperation(index, journal, options, operation) {
       sourceId: order.sourceId || "seasonal-printing",
       spreadsheetId: order.spreadsheetId || SHEET_ID,
       sourceUrl: order.sourceUrl || sheetUrl(SHEET_ID, order.sheetId),
+      ...(order.historical ? { historical: true } : {}),
     });
   });
   return { events, issues };
@@ -333,6 +344,8 @@ export function indexOrders(sheets) {
       spreadsheetId = SHEET_ID,
       sourceUrl = sheetUrl(SHEET_ID, gid),
       assemblyShipmentId = null,
+      stockUidColumn = null,
+      stockHistoryAllows = null,
     } = sheet;
     const headers = rows[headerRow - 1] || [];
     const shopColumn = headers.findIndex((header) => normal(header) === "магазин");
@@ -370,12 +383,17 @@ export function indexOrders(sheets) {
       return found >= 0 ? found : legacyLayout ? fallback : -1;
     };
     const sheetsColumn = fieldColumn(5, "Кол-во листов");
+    const multiplicityColumn = fieldColumn(-1, "Кратность");
     const widthColumn = fieldColumn(7, "Ширина");
     const heightColumn = fieldColumn(8, "Высота");
     const areaColumn = fieldColumn(9, "Объем на все кол-во скинули");
     const rollPrintColumn = fieldColumn(19, "Прогресс печати");
     const rollCutColumn = fieldColumn(20, "Прогресс порезки");
     const rollRemainingColumn = fieldColumn(23, "Остаток по печати:", "Остаток по печати");
+    // The stock-only header can occur more than once on unrelated seasonal
+    // templates. Resolve it only when the stock history proof is available.
+    const stockRemainingColumn = typeof stockHistoryAllows === 'function' ? findColumn("Кол-во осталось") : -1;
+    const rollStartEvidenceColumns = [findColumn('Печать'),findColumn('Порезка'),findColumn('Дата готовности печати'),findColumn('Дата готовности порезки'),findColumn('Рулоны')];
     const boxPrintColumn = fieldColumn(
       17,
       "Готовность печати",
@@ -390,8 +408,15 @@ export function indexOrders(sheets) {
       "Порезка завершена",
       "Завершена порезка",
     );
+    const planningPrintColumn=headers.findIndex(h=>normal(h).startsWith('напечатано годных'));
+    const planningCutColumn=headers.findIndex(h=>normal(h).startsWith('порезано годных'));
     const uidHeaderCol = (rows[uidHeaderRow - 1] || []).indexOf("UID");
-    const uidCol = uidHeaderCol >= 0
+    // The dedicated stock-box template stores its UID in AD without a header.
+    // Only its caller may supply that schema; ordinary box sheets keep their
+    // existing UID/row identities.
+    const uidCol = stockUidColumn !== null
+      ? stockUidColumn
+      : uidHeaderCol >= 0
       ? uidHeaderCol
       : sourceId === "box-printing" && legacyLayout
         ? 28
@@ -482,6 +507,26 @@ export function indexOrders(sheets) {
         sourceId === "roll-printing"
           ? optionalProgress(r[rollPrintColumn], quantity)
           : null;
+      const readyStatus = value => /^(?:TRUE|Готов|Готово|Готова)$/iu.test(String(value ?? "").trim());
+      const productionTabComplete = sourceId === "box-printing"
+        ? readyStatus(r[boxPrintColumn]) && readyStatus(r[boxCutColumn])
+        : sourceId === "roll-printing" && rollStartEvidenceColumns.slice(0, 2).every(column =>
+          column >= 0 && readyStatus(r[column]));
+      // Fresh RITM-created orders have an explicit full remaining-print plan,
+      // but templates leave status/progress cells blank. Forecast zero work only
+      // when every start-evidence column is present and empty. Legacy, started,
+      // missing-column and error states remain unknown; no source cell changes.
+      // The stock template has a separate remaining column. Accept it only
+      // after all three stock histories were read and no trace of this order
+      // exists. A blank/error or missing history remains unknown.
+      const stockRemainingConfirmed = typeof stockHistoryAllows === 'function' &&
+        rollRemainingColumn >= 0 && String(r[rollRemainingColumn] ?? '').trim() === '' &&
+        stockRemainingColumn >= 0 && optionalNonnegative(r[stockRemainingColumn]) === quantity &&
+        stockHistoryAllows(raw, name, article);
+      const unstartedRitmRoll = sourceId === 'roll-printing' && quantity > 0 &&
+        /^ritm-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[1-9]\d*$/i.test(raw) &&
+        (remainingPrint === quantity || stockRemainingConfirmed) && rollPrintColumn >= 0 && rollCutColumn >= 0 &&
+        [rollPrintColumn,rollCutColumn,...rollStartEvidenceColumns].every(col=>col >= 0 && String(r[col] ?? '').trim() === '');
       const o = {
         uid,
         rawUid: raw || null,
@@ -495,12 +540,21 @@ export function indexOrders(sheets) {
         article,
         ...(extensionColumn >= 0 ? { extension: String(r[extensionColumn] || "").trim() } : {}),
         machine: machineColumn >= 0 ? String(r[machineColumn] || "").trim() : "",
+        // Preserve the machine written on the actual source sheet even when
+        // catalog enrichment changes the display grouping later.
+        sourceMachine: machineColumn >= 0 ? String(r[machineColumn] || "").trim() : "",
         machineSource: machineColumn >= 0 && String(r[machineColumn] || "").trim() ? "supply" : null,
         productName: nameColumn >= 0 ? String(r[nameColumn] || "").trim() : "",
         photoUrl: safeWorkloadPhoto(photoColumn >= 0 ? r[photoColumn] : ""),
         assemblyShipmentId,
         quantity,
+        productionTabComplete,
         plannedArea,
+        // Extra planning facts preserve partial completion; existing readiness output is unchanged.
+        ...(sourceId === 'box-printing' && planningPrintColumn >= 0 ? {planningPrinted:optionalNonnegative(r[planningPrintColumn]),planningCut:optionalNonnegative(r[planningCutColumn]),planningPhysicalUnits:true} : {}),
+        ...(unstartedRitmRoll ? {planningPrinted:0,planningCut:0,planningPhysicalUnits:false} : {}),
+        sheetsInProduct: optionalNonnegative(r[sheetsColumn]),
+        multiplicity: optionalNonnegative(r[multiplicityColumn]),
         areaKnown,
         areaIssue,
         // The roll-printing sheet carries live per-order progress in T/U and
@@ -565,7 +619,7 @@ export async function loadPrinting(fetcher = fetch, options = {}) {
   const managedRollSheets = managed
     .filter(part => part.department === "roll" && part.documentId === ROLL_PRINTING_SHEET_ID)
     .map(part => ({ gid: part.sheetId, name: part.name }));
-  const sources = printingSources([...(options.additionalSheets || []), ...managedRollSheets]).map(source => ({ ...source,
+  let sources = printingSources([...(options.additionalSheets || []), ...managedRollSheets]).map(source => ({ ...source,
     supplies: source.supplies.map(sheet => ({ ...sheet,
       assemblyShipmentId: managed.find(p => p.documentId === source.spreadsheetId && p.sheetId === sheet.gid)?.shipmentId,
     })),
@@ -596,28 +650,37 @@ export async function loadPrinting(fetcher = fetch, options = {}) {
   }
   if (boxes.size) sources.push({ id: "box-printing", name: "OZON БОКС", site: "Бокс", spreadsheetId: BOX_PRINTING_SHEET_ID,
     supplies: [...boxes.values()].map(p => ({ gid: p.sheetId, name: p.name, headerRow: 4, dataStartRow: 5, uidHeaderRow: 1, assemblyShipmentId: p.shipmentId })), journal: null });
-  const
-    descriptors = sources.flatMap((source) => [
-    ...source.supplies.map((sheet) => ({
-      ...sheet,
-      source,
-      kind: "supply",
-    })),
-    ...(source.journal ? [{ ...source.journal, source, kind: "journal" }] : []),
-  ]);
-  const exports = await Promise.all(
-    descriptors.map(async (sheet) => {
+  if (options.supplyTarget) {
+    const { department, sheetId, name } = options.supplyTarget;
+    const sourceId = department + "-printing";
+    const candidates = sources.flatMap(source => source.supplies.map(sheet => ({source, sheet})));
+    const selected = candidates.filter(({source,sheet}) =>
+      source.id === sourceId && sheet.gid === sheetId && sheet.name === name);
+    if (selected.length !== 1) throw new Error("Не подтверждён лист выбранной поставки.");
+    const {source, sheet} = selected[0];
+    const shipmentId = sheet.assemblyShipmentId || (department === "roll" ? `RITM-ROLL-${sheetId}` : `RITM-BOX-${sheetId}`);
+    sources = sources.map(entry => ({...entry, supplies: entry.supplies.filter(item =>
+      (entry.id === source.id && item.gid === sheet.gid) || item.assemblyShipmentId === shipmentId
+    )})).filter(entry => entry.supplies.length);
+  }
+  const readSheet = async (sheet, source) => {
+    const isProduction = sheet.kind === "supply" && ["roll-printing", "box-printing"].includes(source.id);
       const response = await fetcher(
-        `https://docs.google.com/spreadsheets/d/${sheet.source.spreadsheetId}/export?format=csv&gid=${sheet.gid}`,
+        `https://docs.google.com/spreadsheets/d/${source.spreadsheetId}/export?format=csv&gid=${sheet.gid}`,
         { signal: AbortSignal.timeout(20000) },
       );
-      if (!response.ok)
+    if (!response.ok) {
+      if (isProduction && options.readHiddenSupply) {
+        await response.body?.cancel();
+        const rows = await options.readHiddenSupply(source.spreadsheetId, sheet.gid, sheet.name);
+        if (rows) return { ...sheet, source, rows };
+      }
         throw new Error(
-          `Source unavailable: ${sheet.source.name} · ${sheet.name}`,
+          `Source unavailable: ${source.name} · ${sheet.name}`,
         );
-      return { ...sheet, rows: parseCsv(await response.text()) };
-    }),
-  );
+    }
+      return { ...sheet, source, rows: parseCsv(await response.text()) };
+  };
     const supplies = [],
     sheets = [],
     events = [],
@@ -625,7 +688,22 @@ export async function loadPrinting(fetcher = fetch, options = {}) {
     issues = [],
     sourceTimes = [];
   for (const source of sources) {
-    const sourceExports = exports.filter((sheet) => sheet.source.id === source.id),
+    // Keep only one workbook's raw grids alive and bound concurrent CSV
+    // responses. The parsed order facts and original sheet row numbers stay
+    // unchanged; journal rows still include every source entry.
+    const descriptors = [
+      ...source.supplies.map(sheet => ({...sheet, kind:"supply"})),
+      ...(source.journal ? [{...source.journal, kind:"journal"}] : []),
+    ];
+    const sourceExports = new Array(descriptors.length);
+    let nextSheet = 0;
+    await Promise.all(Array.from({length:Math.min(4,descriptors.length)}, async () => {
+      while (nextSheet < descriptors.length) {
+        const index = nextSheet++;
+        sourceExports[index] = await readSheet(descriptors[index], source);
+      }
+    }));
+    const
       supplyExports = sourceExports.filter((sheet) => sheet.kind === "supply"),
       journalExport = sourceExports.find((sheet) => sheet.kind === "journal");
     if (!journalExport && source.journal)
@@ -644,6 +722,7 @@ export async function loadPrinting(fetcher = fetch, options = {}) {
         sourceUrl: sheetUrl(source.spreadsheetId, sheet.gid),
       })),
     );
+    for (const sheet of supplyExports) sheet.rows = null;
     if (!source.journal) {
       supplies.push(...sourceIndex.orders);
       issues.push(...sourceIndex.issues);
@@ -672,7 +751,23 @@ export async function loadPrinting(fetcher = fetch, options = {}) {
           },
         },
       );
+    const historicalOrders = supplyExports.map(sheet => ({
+      sheetId: sheet.gid, sheetName: sheet.name, sourceId: source.id,
+      sourceName: source.name, site: source.site, spreadsheetId: source.spreadsheetId,
+      sourceUrl: sheetUrl(source.spreadsheetId, sheet.gid),
+      journalAliases: [...new Set([sheet.name, ...(sheet.journalAliases || [])])],
+    }));
+    // The roll journal is the ledger of completed work, including sheets that
+    // were deleted after completion. Link those facts to the actual journal;
+    // never fabricate a current supply or add them back to today's plan.
+    const journalOrderFallback = source.id === 'roll-printing' ? {
+      sheetId: journalExport.gid, sourceId: source.id, sourceName: source.name,
+      site: source.site, spreadsheetId: source.spreadsheetId,
+      sourceUrl: sheetUrl(source.spreadsheetId,journalExport.gid),
+    } : null;
     const facts = collectJournalPrinting(sourceIndex, journal.slice(1), {
+      orderFallbacks: historicalOrders,
+      journalOrderFallback,
       name: journalExport.sourceName,
       sourceId: source.id,
       eventIdPrefix: source.eventIdPrefix,
@@ -688,6 +783,8 @@ export async function loadPrinting(fetcher = fetch, options = {}) {
       },
     });
     const cuts = collectJournalCutting(sourceIndex, journal.slice(1), {
+      orderFallbacks: historicalOrders,
+      journalOrderFallback,
       name: journalExport.sourceName,
       sourceId: source.id,
       eventIdPrefix: source.eventIdPrefix + "cut:",
@@ -756,6 +853,108 @@ export async function loadPrinting(fetcher = fetch, options = {}) {
   };
 }
 
+// Stock work is read independently of the shipment roster, so it never
+// acquires an Assembly identity or enters the ordinary supply lists.
+async function appendStockArchivedOrders(fetcher,index,{spreadsheetId,sheets,archiveId,sourceId}) {
+  if(archiveId===undefined)return;
+  if(!Number.isSafeInteger(archiveId))throw new Error('stock archive id');
+  const response=await fetcher(`https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${archiveId}`,{signal:AbortSignal.timeout(20000)});
+  if(!response.ok)throw new Error('stock archive unavailable');
+  const rows=parseCsv(await response.text()), expected=['Операция','Дата','Лист','Строка','UID','Артикул','План','Данные строки'];
+  if(expected.some((x,i)=>String(rows[0]?.[i]||'').trim()!==x))throw new Error('stock archive schema');
+  const seen=new Set();
+  for(const row of rows.slice(1)) {
+    if(!row.some(x=>String(x||'').trim()))continue;
+    const [op,date,sheetName,,rawUid,article,quantity,raw]=row, sheet=sheets.find(s=>s.name===sheetName);
+    if(!op||seen.has(op)||!Number.isFinite(Date.parse(date))||!sheet||!rawUid||!article||!(Number(quantity)>0))throw new Error('stock archive entry');
+    seen.add(op);
+    let data;try{data=JSON.parse(raw)}catch{throw new Error('stock archive data')}
+    if(!Array.isArray(data?.values)||String(data.values[4]||'').trim()!==article||String(data.values[29]||'').trim()!==rawUid||Number(data.values[15])!==Number(quantity))throw new Error('stock archive mismatch');
+    const uid=rawUid.includes('::')?rawUid:`${sheet.gid}::${rawUid}`;
+    if(index.byUid[uid])throw new Error('duplicate archived stock uid');
+    const order={uid,rawUid,article,sheetId:sheet.gid,sheetName,sourceId,spreadsheetId,site:sourceId==='box-printing'?'Бокс':'Запасы · рулонная печать',machine:String(data.values[3]||''),boxPositionId:data.boxPositionId||null,archived:true};
+    index.byUid[uid]=order;(index.byRaw[rawUid]||= []).push(order);index.orders.push(order);
+  }
+}
+export async function loadStockRollPrinting(fetcher, printing, {spreadsheetId, sheets, journalId, archiveId, historyIds} = {}) {
+  if (!spreadsheetId || !Array.isArray(sheets) || !Number.isSafeInteger(journalId)) return printing;
+  try {
+    if (sheets.length !== 2 || sheets.some(s => !Number.isSafeInteger(s.gid) || !['Запасы склад','Срочные 2 этаж'].includes(s.name))) throw new Error('invalid stock sheets');
+    const descriptors = [...sheets, {gid:journalId, name:'Журнал выпуска'}];
+    const historyPromise = Array.isArray(historyIds) && historyIds.length === 2 && historyIds.every(Number.isSafeInteger)
+      ? Promise.all(historyIds.map(async gid => {
+          const response=await fetcher(`https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${gid}`,{signal:AbortSignal.timeout(5000)});
+          if(!response.ok)throw new Error('stock history unavailable');
+          return parseCsv(await response.text());
+        })).catch(()=>null) : Promise.resolve(null);
+    const exports = await Promise.all(descriptors.map(async s => {
+      const response = await fetcher(`https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${s.gid}`, {signal:AbortSignal.timeout(20000)});
+      if (!response.ok) throw new Error('stock source unavailable');
+      return {...s, rows:parseCsv(await response.text())};
+    }));
+    const journal=exports.pop().rows;
+    const expected=PRINTING_SOURCES.find(s=>s.id==='roll-printing').journal.expectedHeaders;
+    if(Object.entries(expected).some(([column,header])=>journal[0]?.[column]!==header))throw new Error('stock journal schema');
+    const histories=await historyPromise;
+    const historyHeaders=[
+      ['ROLL_ID','ORDER_UID','SHEET_SOURCE','ORDER_ROW','ARTICLE','ROLL_NAME','ROLL_NUMBER','PRINT_READY','CUT_READY','CREATED_AT','UPDATED_AT','ROLL_QUANTITY','PRINT_DONE_AT','PRINT_EMPLOYEE','CUT_DONE_AT','CUT_EMPLOYEE','LEGACY_SOURCE'],
+      ['EVENT_ID','ROLL_ID','ORDER_UID','SHEET_SOURCE','ORDER_ROW','ARTICLE','OPERATION','EMPLOYEE','DATE','QUANTITY','AREA_PER_ITEM','AREA','ENTERED_AT','COMMENT'],
+    ];
+    const historyValid=histories && historyHeaders.every((headers,i)=>headers.every((header,col)=>String(histories[i][0]?.[col]||'').trim()===header)) &&
+      journal[0]?.[4]==='Лист-источник' && journal[0]?.[6]==='Артикул' && journal[0]?.[7]==='UID заказа';
+    let stockHistoryAllows=null;
+    if(historyValid){
+      const uids=new Set(), pairs=new Set(), ambiguousArticles=new Set();
+      let unidentifiable=false;
+      for(const [rows,uidCol,sheetCol,articleCol] of [[journal,7,4,6],[histories[0],1,2,4],[histories[1],2,3,5]]){
+        for(const row of rows.slice(1)){
+          const values=row.map(value=>String(value??'').trim());
+          if(!values.some(Boolean))continue;
+          const uid=values[uidCol],sheet=values[sheetCol],article=values[articleCol];
+          if(uid)uids.add(uid);
+          if(sheet&&article)pairs.add(JSON.stringify([sheet,article]));
+          else if(article)ambiguousArticles.add(article);
+          else if(!uid)unidentifiable=true;
+        }
+      }
+      if(!unidentifiable)stockHistoryAllows=(uid,sheetName,article)=>!uids.has(uid)&&!pairs.has(JSON.stringify([sheetName,article]))&&!ambiguousArticles.has(article);
+    }
+    const index=indexOrders(exports.map(sheet=>({...sheet,headerRow:4,dataStartRow:5,uidHeaderRow:1,journalAliases:[],sourceId:'roll-printing',sourceName:'Запасы · рулонная печать',site:'Запасы · рулонная печать',spreadsheetId,sourceUrl:sheetUrl(spreadsheetId,sheet.gid),stockHistoryAllows})));
+    await appendStockArchivedOrders(fetcher,index,{spreadsheetId,sheets,archiveId,sourceId:'roll-printing'});
+    const common={name:'Журнал запасов · рулонная печать',sourceId:'roll-printing'};
+    const facts=collectJournalPrinting(index,journal.slice(1),{...common,eventIdPrefix:'journal:stock-roll:'});
+    const cuts=collectJournalCutting(index,journal.slice(1),{...common,eventIdPrefix:'journal:stock-roll:cut:'});
+    return {...printing,events:[...printing.events,...facts.events],cutEvents:[...printing.cutEvents,...cuts.events],issues:[...(printing.issues||[]),...facts.issues,...cuts.issues],stockRoll:{status:'available',orders:index.orders,reason:null}};
+  } catch(error) {
+    return {...printing,stockRoll:{status:'unavailable',orders:[],reason:'Журнал запасов рулонной печати недоступен или не подтверждён.'}};
+  }
+}
+
+export async function loadStockBoxOrders(fetcher, printing, {spreadsheetId, sheets, archiveId} = {}) {
+  if (!spreadsheetId || !Array.isArray(sheets)) return printing;
+  try {
+    if(sheets.length!==2 || sheets.some(s=>!Number.isSafeInteger(s.gid)||!['Запасы склад','Срочные 2 этаж'].includes(s.name)))throw new Error('invalid stock sheets');
+    const exports=await Promise.all(sheets.map(async s=>{
+      const response=await fetcher(`https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${s.gid}`,{signal:AbortSignal.timeout(20000)});
+      if(!response.ok)throw new Error('stock source unavailable');
+      const rows = parseCsv(await response.text());
+      const header = rows[3] || [], top = rows[0] || [];
+      const uidHeader = top.indexOf('UID');
+      // Match the stock adapter's E/P/AD layout. Never interpret another
+      // populated header or a conflicting UID column as a stock UID.
+      if (normal(header[4]) !== 'артикул' || normal(header[15]) !== 'кол-во' ||
+          String(header[29] || '').trim() || (uidHeader >= 0 && uidHeader !== 29) ||
+          (String(top[29] || '').trim() && String(top[29]).trim() !== 'UID'))
+        throw new Error('stock uid schema changed');
+      return {...s,rows,headerRow:4,dataStartRow:5,uidHeaderRow:1,stockUidColumn:29,journalAliases:[],sourceId:'box-printing',sourceName:'Запасы · бокс',site:'Бокс',spreadsheetId,sourceUrl:sheetUrl(spreadsheetId,s.gid)};
+    }));
+    const index=indexOrders(exports);
+    if(index.issues.length)throw new Error('stock source invalid');
+    await appendStockArchivedOrders(fetcher,index,{spreadsheetId,sheets,archiveId,sourceId:'box-printing'});
+    return {...printing,stockBox:{status:'available',orders:index.orders,reason:null}};
+  } catch(error) {return {...printing,stockBox:{status:'unavailable',orders:[],reason:'Планы запасов бокса недоступны или не подтверждены.'}};}
+}
+
 function safeWorkloadPhoto(value) {
   try {
     const url = new URL(String(value || "").trim());
@@ -794,6 +993,8 @@ export function assignWorkloadDetails(orders, catalog, photos = null) {
       machine: headers.findIndex(h => h === (market === "WB" ? "вид станка по умолчанию" : "станок")),
       productName: headers.findIndex(h => ["наименование", "название", "название товара"].includes(h)),
       photoUrl: headers.findIndex(h => ["фото", "ссылка на фото", "ссылка на фотографию"].includes(h)),
+      store: headers.findIndex(h => h === "магазин"),
+      boxCapacity: headers.findIndex(h => h === "в коробке"),
     };
     const records = new Map();
     for (const row of rows.slice(headerIndex + 1)) {
@@ -809,9 +1010,18 @@ export function assignWorkloadDetails(orders, catalog, photos = null) {
     indices.set(market, records);
   }
   for (const order of orders) {
+    order.catalogUnitsPerBox = null;
     const articleKey = normalizeCatalogArticle(order.article);
     const entries = indices.get(marketplaceForSupply(order.sheetName))?.get(articleKey);
     if (entries?.length) {
+      if (order.shopCatalogStatus === "matched") {
+        const scoped = entries.filter(entry => entry.store === String(order.shop));
+        const capacities = scoped.map(entry => {
+          const match = entry.boxCapacity.match(/^(\d+)(?:\s+[\p{L}]+)?$/u);
+          return match ? Number(match[1]) : null;
+        });
+        if (capacities.length && capacities.every(n => Number.isSafeInteger(n) && n > 0 && n === capacities[0])) order.catalogUnitsPerBox = capacities[0];
+      }
       for (const field of ["machine", "productName"]) {
         if (field !== "machine" && order[field] && !String(order[field]).trim().startsWith("#")) continue;
         const values = new Set(entries.map(entry => entry[field]));

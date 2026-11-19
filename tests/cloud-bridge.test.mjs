@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { LocalCloudBridge, localRepairOutcome } from "../agent/cloudBridge.js";
-import { bridgeSignature, verifyBridge } from "../worker/cloud/bridge.js";
+import { bridgeSignature, verifyBridge, verifyAssemblyControlApp } from "../worker/cloud/bridge.js";
 import { externalLease } from "../worker/cloud/externalLease.js";
 import { requireCutover } from "../worker/cloud/services.js";
 import { CloudStore } from "../worker/cloud/store.js";
@@ -14,6 +14,16 @@ import { createAgentServer } from "../agent/server.js";
 
 const origin = "https://isolated-ritm.chatgpt.site", secret = "a".repeat(64), id = "local-owner";
 const documentId = bindings.RITM_GOOGLE_ROLL_PRINTING_ID;
+test('Assembly stock source is signed, read-only and protected against replay',async()=>{
+  const {db,env}=fixture(),secret='ab'.repeat(32),path='/api/assembly-stocks',timestamp=String(Date.now()),nonce=randomUUID();
+  const request=new Request(origin+path,{headers:{'x-ritm-assembly-at':timestamp,'x-ritm-assembly-nonce':nonce,'x-ritm-assembly-signature':bridgeSignature(secret,{method:'GET',path,timestamp,nonce})}});
+  try {
+    const configured={...env,RITM_ASSEMBLY_SYNC_SECRET:secret};
+    assert.equal(await verifyAssemblyControlApp(request.clone(),configured),'assembly-control-app');
+    await assert.rejects(verifyAssemblyControlApp(request.clone(),configured),{code:'assembly_control_replay'});
+    await assert.rejects(verifyAssemblyControlApp(new Request(origin+path,{method:'POST',body:'{}'}),configured),{code:'assembly_control_forbidden'});
+  } finally { db.close(); }
+});
 function fixture() {
   const db = new LocalD1(); db.db.exec(cloudSchemaStatements().join(";\n"));
   let now = Date.now();

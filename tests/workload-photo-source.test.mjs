@@ -1,7 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assignWorkloadDetails } from '../worker/printing.js';
-import { readWorkloadPhotos } from '../agent/adapters.js';
+import { readWorkloadPhotos, assignStockPlanningMachines } from '../agent/adapters.js';
+
+test('stock machine lookup indexes the catalog once and preserves archived and ambiguous facts',()=>{
+ let reads=0;
+ const rows=[['Артикул','Станок'],['SKU','XEROX'],['AMB','A'],['AMB','B']];
+ const catalog={get OZON(){reads++;return rows;}};
+ const orders=Array.from({length:100},()=>({article:'SKU',sheetName:'Запасы склад'}));
+ const archived={article:'SKU',archived:true,planningMachine:'saved'};
+ const ambiguous={article:'AMB',sheetName:'Срочные 2 этаж'};
+ assignStockPlanningMachines({stockRoll:{orders},stockBox:{orders:[archived,ambiguous]}},catalog,[]);
+ assert.ok(reads<=2);assert.ok(orders.every(o=>o.planningMachine==='XEROX'));
+ assert.equal(archived.planningMachine,'saved');assert.equal(ambiguous.planningMachine,null);
+});
 test('shared source photo is attached by article regardless of store or marketplace catalog',()=>{
  const catalog={OZON:[['Артикул','Артикул','','','','','','','','','','','','','Станок'],['KS0006.A8368(OZ)','KS0006.A8368','','','','','','','','','','','','','XEROX']]};
  const orders=[{sheetName:'OZON Тест',article:'KS0006.A8368',shop:'1'},{sheetName:'OZON Тест',article:'KS0006.A8368',shop:'2'},{sheetName:'WB Тест',article:'KS0006.A8368',shop:'9'}];

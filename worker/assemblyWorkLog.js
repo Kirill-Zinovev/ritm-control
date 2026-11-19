@@ -11,6 +11,7 @@ export const RITM_ASSEMBLY_WORKLOG_SOURCE = "WEB_APP_RITM";
 
 export function isRitmAssemblyShipmentId(value) {
   if (typeof value !== "string") return false;
+  if (value === 'RITM-STOCK-WAREHOUSE') return true;
   const sheet = /^RITM-(?:ROLL|BOX)-(\d+)$/.exec(value);
   if (sheet) return Number.isSafeInteger(Number(sheet[1]));
   return /^RITM-SUPPLY-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value);

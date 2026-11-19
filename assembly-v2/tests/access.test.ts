@@ -1,0 +1,42 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {accessApi,authenticate,hmac} from "../server/access";
+import {digest} from "../shared/catalog";
+import {api} from "../server/api";
+import {openDatabase} from "../server/local-db";
+import {bootstrap} from "./fixtures";
+const origin="https://assembly.test",token="cd".repeat(32);
+const env={AV2_OWNER_USER_ID:"owner",AV2_OWNER_API_TOKEN:"owner-api-secret",AV2_SESSION_SECRET:"ef".repeat(32),AV2_COLLECTOR_ACCESS_TOKEN:token,AV2_COLLECTOR_ACCESS_HASH:await digest(token),RITM_ASSEMBLY_V2_FEED_SECRET:"ab".repeat(32)};
+test("рабочая ссылка без логина выдаёт только защищённый сеанс сборщика; подмена, чужой сайт и отзыв отклоняются",async()=>{
+  assert.equal(await authenticate(new Request(origin),env),null);
+  assert.equal((await accessApi(new Request(origin+"/api/access/link"),env)).status,403);
+  const response=await accessApi(new Request(origin+"/api/access/collector",{method:"POST",headers:{origin,"content-type":"application/json"},body:JSON.stringify({token})}),env);
+  assert.equal(response.status,200);
+  const cookie=response.headers.get("set-cookie")!;
+  assert.match(cookie,/HttpOnly; Secure; SameSite=Lax/);
+  const request=new Request(origin,{headers:{cookie:cookie.split(";")[0]}});
+  assert.equal((await authenticate(request,env))?.role,"collector");
+  assert.equal(await authenticate(request,{...env,AV2_COLLECTOR_ACCESS_HASH:"00".repeat(32)}),null);
+  assert.equal(await authenticate(new Request(origin,{headers:{cookie:cookie.replace("1.","2.").split(";")[0]}}),env),null);
+  assert.equal((await accessApi(new Request(origin+"/api/access/collector",{method:"POST",headers:{origin:"https://foreign.test"},body:JSON.stringify({token})}),env)).status,403);
+  assert.equal((await authenticate(new Request(origin,{headers:{"oai-authenticated-user-id":"other"}}),env)),null);
+  assert.equal((await authenticate(new Request(origin,{headers:{"oai-authenticated-user-id":"owner"}}),env))?.role,"owner");
+});
+test("сервер ограничивает сборщика даже при прямом запросе: разрешает имя/количество, запрещает импорт и отгрузки",async(t)=>{
+  const db=await openDatabase();t.after(()=>db.sqlite.close());const f=await bootstrap(db);
+  const command=(action:string,payload:Record<string,unknown>)=>api(new Request(origin+"/api/command",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action,payload,key:crypto.randomUUID(),supplyId:f.supply.id})}),db,"workplace:one","collector");
+  for(const action of ["employee.create","legacy.restore","legacy.adoptCarton","catalog.activate","catalog.save","supply.import","dispatch.send","ritm.carton.dispatch","export.create"])assert.equal((await command(action,{name:"Запрещено"})).status,403,action);
+  assert.equal((await command("work.save",{positionId:f.a.id,employeeId:f.employee.id,operation:"packing",qty:12})).status,200);
+  assert.equal(db.sqlite.prepare("select sum(qty) n from av2_work").get()!.n,12);
+  const state=await (await api(new Request(origin+"/api/state?cartons=all"),db,"workplace:one","collector")).json();
+  assert.equal(state.cartonScope,"supply");assert.deepEqual(state.dispatches,[]);assert.deepEqual(state.exports,[]);
+  assert.equal((await api(new Request(origin+"/api/exports/example"),db,"workplace:one","collector")).status,403);
+});
+test("служебная подпись привязана к методу, маршруту и телу; она не даёт общего доступа",async()=>{
+  const path="/api/ritm/sync",at=String(Date.now()),nonce=crypto.randomUUID(),body='{"force":true}';
+  const signature=await hmac(env.RITM_ASSEMBLY_V2_FEED_SECRET,JSON.stringify([1,"POST",path,at,nonce,await digest(body)]));
+  const headers={"x-assembly-v2-at":at,"x-assembly-v2-nonce":nonce,"x-assembly-v2-signature":signature};
+  assert.equal((await authenticate(new Request(origin+path,{method:"POST",headers,body}),env))?.role,"service");
+  assert.equal(await authenticate(new Request(origin+path,{method:"POST",headers,body:'{}'}),env),null);
+  assert.equal(await authenticate(new Request(origin+"/api/command",{method:"POST",headers,body}),env),null);
+});

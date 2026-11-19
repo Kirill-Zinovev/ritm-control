@@ -1,6 +1,6 @@
 import { BoxPrintingStats } from "./BoxPrintingStats";
 import { TelegramMiniApp } from "./TelegramMiniApp";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
   ArrowsClockwise,
@@ -65,6 +65,7 @@ import { OverviewDashboard } from "./OverviewDashboard";
 import { MachineWorkload } from "./MachineWorkload";
 import { WarehouseDashboard, type WarehouseView } from "./WarehouseDashboard";
 import { useLiveWarehouse } from "./liveWarehouse";
+import { printingSnapshotTime } from "./printingSnapshotRefresh";
 import { RitmBackdrop } from "./RitmBackdrop";
 import { useCloudAuth } from "./CloudAuth";
 import { ManagerAccessPanel } from "./ManagerAccessPanel";
@@ -80,6 +81,10 @@ const LiveSuppliesWorkspace = lazy(() =>
   })),
 );
 const AICenter = lazy(() => import("./AICenter").then((module) => ({ default: module.AICenter })));
+const StockWorkspace = lazy(() => import("./StockWorkspace"));
+const ArkadySettings = lazy(() => import("./ArkadySettings"));
+const HelpWorkspace = lazy(() => import("./HelpWorkspace"));
+const FirstVisitWelcome = lazy(() => import("./HelpWorkspace").then(module => ({default:module.FirstVisitWelcome})));
 import { PrinterProfilePage, type PrinterRecord } from "./EmployeeProfiles";
 import {
   Badge,
@@ -100,11 +105,15 @@ const NAV = [
   { id: "production", label: "Производство", icon: ChartBar },
   { id: "machines", label: "Загрузка станков", icon: Factory },
   { id: "stock", label: "Склад", icon: Cube },
+  { id: "reserves", label: "Запасы", icon: Package },
   { id: "supplies", label: "Поставки", icon: Truck },
+  { id: "arkady", label: "Аркадий", icon: Bot },
   { id: "intelligence", label: "AI Center", icon: Bot },
   { id: "sources", label: "Источники данных", icon: Database },
+  { id: "help", label: "Помощь и обучение", icon: CheckCircle },
 ] as const;
 const TITLES: Record<Page, string> = {
+  help: "Помощь и обучение",
   intelligence: "AI Center",
   overview: "Обзор производства",
   assembly: "Сборщики",
@@ -112,10 +121,13 @@ const TITLES: Record<Page, string> = {
   production: "Производство",
   machines: "Загруженность станков",
   stock: "Склад",
+  reserves: "Запасы",
   supplies: "Поставки",
+  arkady: "Аркадий",
   sources: "Источники данных",
 };
 const SUBTITLES: Record<Page, string> = {
+  help: "Короткие инструкции по работе в RITM",
   intelligence: "RITM Intelligence · контроль источников и системы",
   overview: "Вся смена на одном экране",
   assembly: "Производительность сотрудников · фактические дневные итоги",
@@ -123,7 +135,9 @@ const SUBTITLES: Record<Page, string> = {
   production: "План и выполненное по каждому артикулу",
   machines: "Поставки, участки и прогресс по станкам",
   stock: "Готовый товар, ячейки хранения и свободный остаток",
+  reserves: "Запасы для склада и срочные задания производства",
   supplies: "Состав, сроки и готовность к отгрузке",
+  arkady: "Уведомления производственных участков в Битрикс24",
   sources: "Подготовка подключения и проверка исходных данных",
 };
 function readStorage<T>(key: string, fallback: T): T {
@@ -180,6 +194,7 @@ function AppShell() {
     readStorage("ritm-real-v1", emptyDataset()),
   );
   const live = useLivePrinting(page !== "intelligence");
+  const refreshLivePrinting = useCallback(() => live.reload(true), [live.reload]);
   const assemblyLive = useLiveAssembly(
     date,
     period,
@@ -954,7 +969,7 @@ function AppShell() {
                 <span>Меню</span>
               </button>
               <h1>{TITLES[page]}</h1>
-              {page !== "intelligence" && (
+              {page !== "intelligence" && page !== "arkady" && (
                 <Badge
                   tone={
                     page === "assembly"
@@ -998,7 +1013,7 @@ function AppShell() {
           </div>
           {page !== "intelligence" &&
             page !== "assembly" &&
-            page !== "production" && page !== "machines" && page !== "stock" && (
+            page !== "production" && page !== "machines" && page !== "stock" && page !== "arkady" && (
               <div className="header-controls">
                 <div
                   className="segments"
@@ -1030,7 +1045,7 @@ function AppShell() {
               </div>
             )}
         </header>
-        {page !== "intelligence" && page !== "assembly" && page !== "machines" && (
+        {page !== "intelligence" && page !== "assembly" && page !== "machines" && page !== "arkady" && (
           <div className="context-bar">
             {page !== "sources" && (
               <span>
@@ -1064,21 +1079,6 @@ function AppShell() {
               </span>
             )}
             <div>
-              {page !== "production" && (
-                <select
-                  aria-label="Режим данных"
-                  value={mode}
-                  onChange={(e) => {
-                    setMode(e.target.value as "demo" | "imported");
-                    setEmployee("");
-                    setSupplyId("");
-                    setQuery("");
-                  }}
-                >
-                  <option value="demo">Демонстрация</option>
-                  <option value="imported">Рабочие данные</option>
-                </select>
-              )}
               <Button disabled={busy || activeSourceLoading} onClick={refresh}>
                 <ArrowsClockwise size={17} className={busy ? "spin" : ""} />
                 {busy || activeSourceLoading ? "Обновление" : "Обновить"}
@@ -1087,6 +1087,10 @@ function AppShell() {
           </div>
         )}
         {page === "intelligence" && <Suspense fallback={<section className="panel"><Empty title="Открываю AI Center">Загружаю раздел.</Empty></section>}><AICenter /></Suspense>}
+        {page === "help" && <Suspense fallback={<section className="panel"><Busy label="Открываю инструкции…" /></section>}><HelpWorkspace isOwner={cloudAuth.role === "owner"} go={go} /></Suspense>}
+        {(cloudAuth.role === "owner" || cloudAuth.role === "manager") && <Suspense fallback={null}><FirstVisitWelcome key={`${cloudAuth.role}:${cloudAuth.username || cloudAuth.displayName || 'owner'}`} identity={`${cloudAuth.role}:${cloudAuth.username || cloudAuth.displayName || 'owner'}`} onOpen={()=>go('help')} /></Suspense>}
+        {page === "arkady" && <Suspense fallback={<section className="panel"><Busy label="Открываю настройки…" /></section>}><ArkadySettings /></Suspense>}
+        {page === "reserves" && <Suspense fallback={<section className="panel"><Busy label="Загружаю запасы…" /></section>}><StockWorkspace /></Suspense>}
         {page === "overview" && mode === "imported" && (
           <OverviewDashboard live={live.value} liveError={live.error} assembly={assemblyLive.value} assemblyError={assemblyLive.error} date={date} period={period} go={go} />
         )}
@@ -1221,7 +1225,7 @@ function AppShell() {
             {mode === "imported" && live.value?.stale && (
               <Notice tone="warning">
                 {live.value.staleReason || "Данные печати устарели. Показан проверенный снимок."}{" "}
-                {live.value.snapshotAt || live.value.updatedAt}
+                Данные на {printingSnapshotTime(live.value.snapshotAt || live.value.updatedAt)}
               </Notice>
             )}
             {mode === "imported" &&
@@ -1680,7 +1684,7 @@ function AppShell() {
                   live={live.value}
                   loading={live.loading}
                   error={live.error}
-                  onRefresh={() => live.reload(true)}
+                  onRefresh={refreshLivePrinting}
                 />
               </Suspense>
             ) : (

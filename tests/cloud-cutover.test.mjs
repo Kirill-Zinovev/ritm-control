@@ -44,5 +44,5 @@ test('MCP refresh requires trusted allowed owner and fixed arguments; read-only 
  assert.equal((await mcp(request('ritm_refresh'),env)).status,401);
  assert.equal((await mcp(request('ritm_refresh',{}, {'oai-authenticated-user-id':'stranger'}),env)).status,403);
  assert.equal((await mcp(request('ritm_refresh',{createSupply:true},{'oai-authenticated-user-id':'owner'}),env)).status,400);
- const result=await maintenance(env,{withScope(){throw new Error('No writer allowed');}},{refresh:false});assert.equal(result.deliverySkipped,true);
+ const result=await maintenance(env,{scope:async()=>({meta:()=>[]}),withScope(){throw new Error('No writer allowed');}},{refresh:false});assert.equal(result.deliverySkipped,true);
 });

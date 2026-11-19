@@ -3,9 +3,34 @@ import assert from 'node:assert/strict';
 import {parseBoxJournal,parseBoxCutJournal} from '../agent/boxPrintingJournal.js';
 const header=['ID записи','Контроль запроса','Время','ID позиции','ID таблицы','ID листа','Поставка','Артикул','ID сотрудника','Сотрудник','Действие','Единица','Введено','Физических листов','Комплектов','Площадь, м²','План, комплектов','Листов в комплекте','План, листов','Ширина, м','Высота, м','Этап','Комментарий / причина','Отменяет ID'];
 const row=(id,action,target='')=>[id,'hash','2026-11-02T10:00:00Z','p1','s',7,'OZON Test','A1','emp','Тест',action,'Листы',10,10,20,0.63,20,2,10,.21,.3,'','',target];
+
+test('rate metadata uses active journal rows and unambiguous machine; cancellation cannot contribute',()=>{
+ const a=row('rate','Печать'), cancelled=row('cancelled','Печать'), cancel=row('cancel','Отмена','cancelled');
+ const orders=[{sourceId:'box-printing',spreadsheetId:'s',sheetId:7,article:'A1',machine:'XEROX'}];
+ const result=boxPrintingEvents([header,a,cancelled,cancel],orders);
+ assert.equal(result.length,1);assert.equal(result[0].machine,'xerox');assert.equal(result[0].spreadsheetId,'s');
+ assert.equal(boxPrintingEvents([header,a],[...orders,{...orders[0],machine:'DTF'}])[0].machine,null);
+});
 test('cancelled records excluded, other employees and events retained',()=>{const a=row('a','Печать'),b=row('b','Печать'),cancel=row('c','Отмена','a');b[9]='Другой';const result=parseBoxJournal([header,a,b,cancel]);assert.equal(result.length,1);assert.equal(result[0].id,'b');assert.equal(result[0].employee,'Другой');});
 test('duplicate IDs and unverified cancellations fail closed',()=>{const a=row('a','Печать');assert.throws(()=>parseBoxJournal([header,a,a]),/Повторный/);assert.throws(()=>parseBoxJournal([header,a,row('c','Отмена','missing')]),/Отмена/);});
-import {boxPrintingEvents,boxCuttingEvents,loadBoxPrinting} from '../agent/boxPrintingJournal.js';
+import {boxPrintingEvents,boxCuttingEvents,loadBoxPrinting,loadStockBoxPrinting} from '../agent/boxPrintingJournal.js';
+test('an archived Xerox position keeps its sheets when the same article is reused on another machine',()=>{const event=row('old','Печать');const orders=[{sourceId:'box-printing',spreadsheetId:'s',sheetId:7,article:'A1',machine:'XEROX',archived:true,boxPositionId:'p1'},{sourceId:'box-printing',spreadsheetId:'s',sheetId:7,article:'A1',machine:'УФ планшет'}];assert.equal(boxPrintingEvents([header,event],orders)[0].sheets,10);const next=row('new','Печать');next[3]='p2';assert.equal(boxPrintingEvents([header,next],orders)[0].sheets,null)});
+test('stock box journal merges active events without requiring historical area snapshots',async()=>{
+ const print=row('stock-event','Печать');print[4]='stock-source';
+ const values=[header,print].map(r=>({values:r.map(value=>({effectiveValue:typeof value==='number'?{numberValue:value}:{stringValue:value}}))}));
+ const reader={metadata:async()=>({spreadsheetId:'stock-journal',sheets:[{properties:{title:'Журнал',sheetId:8,gridProperties:{rowCount:2}}}]}),grid:async()=>({spreadsheetId:'stock-journal',sheets:[{properties:{sheetId:8},data:[{rowData:values}]}]})};
+ const original={supplies:[],stockBox:{status:'available',orders:[]},boxPrinting:{status:'available',events:[],cutEvents:[],exceptions:[]}};
+ const result=await loadStockBoxPrinting(reader,original,{journalId:'stock-journal',sourceId:'stock-source'});
+ assert.equal(result.boxPrinting.stockStatus,'available');assert.equal(result.boxPrinting.events.length,1);
+ const wrong=await loadStockBoxPrinting(reader,original,{journalId:'stock-journal',sourceId:'different'});
+ assert.equal(wrong.boxPrinting.stockStatus,'unavailable');assert.equal(wrong.boxPrinting.events.length,0);
+});
+test('identical sheet IDs in different books cannot cross-assign Xerox equipment',()=>{
+ const event=row('stock-print','Печать');event[4]='stock-book';
+ const orders=[{sourceId:'box-printing',spreadsheetId:'old-book',sheetId:7,article:'A1',machine:'УФ планшет'},{sourceId:'box-printing',spreadsheetId:'stock-book',sheetId:7,article:'A1',machine:'XEROX'}];
+ const actual=boxPrintingEvents([header,event],orders);
+ assert.equal(actual[0].sheets,10);
+});
 test('saved event area is stable when current plan changes',()=>{const a=row('a','Печать');a[15]=1.4;const orders=[{sourceId:'box-printing',sheetId:7,article:'A1',machine:'УФ планшет',quantity:40,plannedArea:28,areaKnown:true}];assert.equal(boxPrintingEvents([header,a],orders)[0].area,1.4);});
 test('historical snapshot takes precedence over old journal formula',()=>{const a=row('a','Печать');a[15]=1.056;const history={areas:new Map([['a',4.224]]),cutoff:Date.parse(a[2])};const event=boxPrintingEvents([header,a],[{sourceId:'box-printing',sheetId:7,article:'A1',machine:'XEROX'}],history)[0];assert.equal(event.area,4.224);assert.equal(event.sheets,10);});
 test('missing old snapshot stays unknown and new missing area stays unknown',()=>{const a=row('a','Печать');a[15]=2;const history={areas:new Map(),cutoff:Date.parse(a[2])};assert.equal(boxPrintingEvents([header,a],[],history)[0].area,null);a[15]='';history.cutoff=0;assert.equal(boxPrintingEvents([header,a],[],history)[0].area,null);});

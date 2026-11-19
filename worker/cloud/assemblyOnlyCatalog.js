@@ -2,6 +2,12 @@ import {sourceId} from './config.js';
 const normalize = v=>String(v??'').trim().toLocaleUpperCase('ru-RU');
 const photoSafe = url=>/^https:\/\/(?:basket-\d+\.wbbasket\.ru|mow-basket-cdn-\d+\.geobasket\.ru)\/[A-Za-z0-9_./%-]+(?:\?[A-Za-z0-9_=&%-]*)?$/i.test(url)?url:'';
 async function values(reader,id,range){const u=new URL(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values:batchGet`);u.searchParams.append('ranges',range);u.searchParams.set('valueRenderOption','FORMATTED_VALUE');const response=await reader.request(u.href,{});const d=await response.json();if(d.spreadsheetId!==id||!Array.isArray(d.valueRanges)||d.valueRanges.length!==1)throw Error('catalog_response_invalid');return d.valueRanges[0].values||[];}
+export async function findProductPhotos(reader,bindings,articles){
+ const wanted=new Set(articles.map(normalize)), found=new Map();
+ const rows=await values(reader,sourceId(bindings,'assemblyPhotosId'),"'Ссылки'!A:B");
+ for(const row of rows.slice(1)){const key=normalize(row[0]),url=photoSafe(String(row[1]||'').trim());if(!wanted.has(key)||!url)continue;const prior=found.get(key);found.set(key,prior===undefined?url:prior===url?prior:'');}
+ return found;
+}
 export async function findAssemblyCatalog(reader,bindings,market,articles){
  if(!['OZON','WB'].includes(market))throw Error('market_unknown');
  const requested=[...new Set(articles.map(normalize).filter(Boolean))];if(requested.length>501)throw Error('too_many_articles');if(!requested.length)return [];

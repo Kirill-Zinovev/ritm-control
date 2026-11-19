@@ -1,4 +1,5 @@
 export type Page =
+  | "help"
   | "intelligence"
   | "overview"
   | "assembly"
@@ -6,6 +7,8 @@ export type Page =
   | "production"
   | "machines"
   | "stock"
+  | "reserves"
+  | "arkady"
   | "supplies"
   | "sources";
 export type Kind = "assembly" | "printing" | "stock";

@@ -30,6 +30,21 @@
   background: linear-gradient(115deg, #edf6fc, #e4f0f7 60%, #d9ecf2);
 }
 
+/* Botanical detail stays behind the live title, marketplace art and actions. */
+.shipment-hero-banner::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: -12px;
+  right: -12px;
+  width: min(40%, 390px);
+  height: 190px;
+  background: url("/images/shipment-leaves.png") top right / contain no-repeat;
+  filter: saturate(2.5) hue-rotate(12deg) brightness(1.06);
+  opacity: 0.9;
+  pointer-events: none;
+}
+
 .shipment-hero[data-marketplace="ozon"] .shipment-hero-banner {
   background: linear-gradient(105deg, #eaf5ff, #d8eaff 72%, #a4cbfa);
 }
@@ -249,6 +264,159 @@
 
 .shipment-hero .dp-supply-stats .dp-stat:last-child {
   border-right: 0;
+}
+
+/* Shipment workbench: retain the existing data and controls, improve hierarchy. */
+.live-supplies-layout {
+  gap: 20px;
+}
+.live-supply-list.panel {
+  padding: 18px 14px;
+  border-color: #dce8f1;
+  background: #fff;
+}
+.live-supply-list-heading {
+  padding: 2px 5px 14px;
+  font-size: 15px;
+}
+.live-supply-list-heading > span {
+  padding: 3px 9px;
+  border-radius: 20px;
+  color: #226b5a;
+  background: #e9f5ef;
+  font-size: 12px;
+}
+.live-supply-search input {
+  min-height: 42px;
+  padding-inline: 12px;
+  background: #f8fafc;
+}
+.live-supply-list-items { gap: 7px; margin-top: 13px; }
+.live-supply-list-item {
+  gap: 0 10px;
+  padding: 14px 11px;
+  border: 1px solid #e4ebf3;
+  border-radius: 13px;
+  background: #fff;
+  box-shadow: 0 3px 12px rgba(33, 62, 93, 0.045);
+}
+.live-supply-list-item.selected[data-marketplace="ozon"] {
+  border-color: #bcd7fb;
+  background: #eef5ff;
+}
+.live-supply-list-item.selected[data-marketplace="wb"] {
+  border-color: #ddc6ee;
+  background: #faf2ff;
+}
+.live-supply-market {
+  display: grid;
+  width: 46px;
+  min-height: 37px;
+  padding: 4px;
+  place-items: center;
+  border-radius: 9px;
+  letter-spacing: -0.02em;
+  font-size: 12px;
+}
+.live-supply-list-item .live-supply-market { grid-row: auto; width: 42px; min-height: 30px; font-size: 11px; }
+.supply-list-content { display: flex; flex-direction: column; min-width: 0; gap: 7px; }
+.live-supply-list-item .supply-list-content > strong { color: #142b49; font-size: 13px; line-height: 1.35; }
+.supply-list-total { color: #425b76; font-size: 11px; font-weight: 650; line-height: 1.4; font-variant-numeric: tabular-nums; }
+.supply-list-departments { display: grid; gap: 5px; font-size: 11px; color: #405a75; font-variant-numeric: tabular-nums; }
+.supply-list-departments > span { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.supply-list-dept-tag { min-width: 45px; padding: 2px 5px; border-radius: 5px; font-size: 11px; line-height: 1.3; text-align: center; }
+.supply-list-dept-tag.roll { color: #1d58c5; background: #e5efff; }
+.supply-list-dept-tag.box { color: #17694c; background: #e5f5e9; }
+.supply-list-area { display: flex; align-items: center; gap: 6px; padding-top: 7px; border-top: 1px solid #e0eaf2; color: #253f5b; font-size: 11px; font-weight: 650; }
+.supply-list-area svg { color: #32845a; flex-shrink: 0; }
+.supply-list-lock { display: inline-flex; align-items: center; align-self: flex-start; gap: 4px; padding: 3px 6px; border-radius: 6px; font-size: 11px; font-weight: 700; line-height: 1.35; }
+.supply-list-lock.is-closed { color: #a52e39; background: #fff0ef; }
+.supply-list-lock.is-partial, .supply-list-lock.is-pending { color: #805019; background: #fff3dd; }
+.live-supply-list-item.is-closed:not(.selected) { border-color: #f3d8d5; background: #fffafa; }
+.supply-lock-load-note { display: block; padding: 8px 3px 0; color: #6c5a41; font-size: 11px; line-height: 1.4; }
+.live-supply-market.ozon { color: #fff; background: #0866ed; }
+.live-supply-market.wb { background: linear-gradient(135deg, #e23bc0, #8237d0); }
+.live-supply-list-item .live-supply-assembly-link { font-size: 11px; line-height: 1.45; }
+.live-supply-detail { gap: 18px; }
+.live-supply-detail > .panel:not(.shipment-hero) {
+  border-color: #dce8f1;
+  box-shadow: 0 8px 24px rgba(39, 79, 111, 0.045);
+}
+.shipment-hero.panel { border-color: #dce8f1; border-radius: 16px; }
+.shipment-hero-banner { min-height: 196px; }
+.shipment-hero[data-marketplace="ozon"] .shipment-hero-banner {
+  background: linear-gradient(105deg, #edf7ff, #e2f2f5 70%, #c4e9df);
+}
+.shipment-hero .live-supply-summary { padding: 20px 24px; }
+.shipment-hero .live-supply-summary strong { color: #143354; font-size: 21px; }
+.live-supply-detail .shipment-hero-banner {
+  min-height: 156px;
+  padding: 22px 24px;
+}
+.live-supply-detail .shipment-hero[data-marketplace="ozon"] .shipment-hero-brand {
+  display: grid;
+  flex-basis: 52px;
+  height: 42px;
+  border-radius: 10px;
+  font-size: 13px;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+.live-supply-detail .shipment-hero-heading { gap: 13px; }
+.live-supply-detail .shipment-hero-copy h2 { font-size: clamp(21px, 1.65vw, 27px); }
+.live-supply-detail .shipment-hero .live-supply-summary {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 15px 24px;
+}
+/* The two stage totals move to the separate readiness strip directly below. */
+.live-supply-detail .live-supply-summary > div:nth-child(n + 4) { display: none; }
+.supply-overview-stages {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+  gap: 10px;
+}
+.supply-overview-stage {
+  min-width: 0;
+  padding: 14px 15px;
+  border: 1px solid #dce8f1;
+  border-radius: 13px;
+  background: #fff;
+  box-shadow: 0 5px 18px rgba(39, 79, 111, 0.045);
+}
+.supply-overview-stage-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 22px;
+  color: #47627f;
+  font-size: 12px;
+  font-weight: 650;
+}
+.supply-overview-stage.tone-blue .supply-overview-stage-label svg { color: #2466ed; }
+.supply-overview-stage.tone-orange .supply-overview-stage-label svg { color: #e57622; }
+.supply-overview-stage.tone-violet .supply-overview-stage-label svg { color: #7650e8; }
+.supply-overview-stage > strong {
+  display: block;
+  margin: 11px 0 8px;
+  color: #142f4e;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.supply-overview-stage > small { display: block; margin-top: 7px; color: #506981; font-size: 11px; }
+.live-supply-stage-card { border-radius: 13px; }
+.live-supply-stage-card.tone-blue { background: #f4f8ff; }
+.live-supply-stage-card.tone-orange { background: #fff9f2; }
+.live-supply-stage-card.tone-violet { background: #f9f7ff; }
+.live-supply-stage-card.tone-green { background: #f2faf5; }
+.live-supply-stage-percent { font-variant-numeric: tabular-nums; }
+@media (max-width: 600px) {
+  .shipment-hero-banner::after { width: 48%; height: 120px; opacity: 0.7; }
+  .live-supply-list.panel { padding: 14px; }
+  .live-supply-detail { gap: 14px; }
+  .live-supply-detail .shipment-hero-banner { min-height: 190px; }
+  .live-supply-detail .shipment-hero .live-supply-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 16px; }
+  .supply-overview-stages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 1200px) {

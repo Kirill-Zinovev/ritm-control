@@ -1,5 +1,16 @@
+import {ProductionDeadlineFields} from './ProductionDeadlineFields';
+import {inputInstant} from './productionForecastModel';
+import {validateDeadlines} from '../shared/productionPlanning';
+import { SupplyDirections } from './SupplyDirections';
+import type { DirectionJob } from './supplyDirectionData';
+import {DepartmentMove} from "./DepartmentMove";
+import {DepartmentMoveBatch} from './DepartmentMoveBatch';
+import {type DepartmentMoveOperation,type DepartmentMoveRequest} from './departmentMoveRequest';
+import ArkadyReminder from "./ArkadyReminder";
 import { AssemblyOnlyItems } from "./AssemblyOnlyItems";
+import { boxPositionKey, useBoxPositionRemoval } from "./BoxPositionRemoval";
 import { startWriterStatusPolling } from "./writerStatusPolling";
+import { recoverableSupply } from "./supplyAutoRecovery";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowSquareOut,
@@ -25,6 +36,8 @@ import { supplyMarketplace } from "./liveSupplyMarketplace";
 import { ShipmentHero } from "./ShipmentHero";
 import { AssemblyTransfer } from "./AssemblyTransfer";
 import { ProductionControls } from "./ProductionControls";
+import { LockKeyhole, Clock3, Layers3, ChevronDown, Eye, EyeOff } from "lucide-react";
+import { supplyLockState, type SupplyLockRecord } from "./supplyLockState";
 import {
   assemblyAreaTotal,
   assemblyPackingTotal,
@@ -37,7 +50,52 @@ import {
   rollPrintRemaining,
   type AssemblyBoxLink,
 } from "./liveSupplyProgress";
-import { Button, DataTable, Empty, Field, Modal } from "./ui";
+import { Button, DataTable, Empty, Field, Modal, Search } from "./ui";
+
+type RecoverableMove = DepartmentMoveOperation & {shipmentName?: string};
+function PendingMoveRecovery({onDone}:{onDone:(moves:DepartmentMoveRequest[])=>Promise<void>}) {
+  const [moves,setMoves]=useState<RecoverableMove[]>([]);
+  const [busy,setBusy]=useState('');
+  const [message,setMessage]=useState('');
+  const refresh=useCallback(async(signal?:AbortSignal)=>{
+    const response=await fetch('/api/roll-supplies/operations?departmentMoves=1',{cache:'no-store',signal});
+    const data=await response.json();
+    if(!response.ok||!Array.isArray(data.moves))throw Error(data.message||'Не удалось загрузить незавершённые переносы.');
+    setMoves(data.moves);
+  },[]);
+  useEffect(()=>{
+    const controller=new AbortController();
+    const load=()=>{void refresh(controller.signal).catch(e=>{if(!controller.signal.aborted)setMessage(e.message);});};
+    load();
+    window.addEventListener('focus',load);
+    window.addEventListener('ritm:move-changed',load);
+    return ()=>{controller.abort();window.removeEventListener('focus',load);window.removeEventListener('ritm:move-changed',load);};
+  },[refresh]);
+  async function recover(move:RecoverableMove,action:'resume'|'cancel'){
+    setBusy(move.id);setMessage('');
+    try {
+      const response=await fetch('/api/production-moves',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action,operationId:move.id})});
+      const data=await response.json();
+      if(!response.ok||!data.ok)throw Error(data.message||'Проверьте состояние переноса.');
+      const op=data.operation;
+      if(['verified','cancelled'].includes(op.status)){
+        if(sessionStorage.getItem('ritm:pending-department-move')===move.id)sessionStorage.removeItem('ritm:pending-department-move');
+        setMoves(current=>current.filter(item=>item.id!==move.id));
+        setMessage(op.status==='cancelled'?'Перенос отменён. Артикул остался на исходном участке.':'Перенос подтверждён.');
+        await onDone(op.status === 'verified' && Array.isArray(op.input?.items) ? op.input.items :
+          op.status === 'verified' && op.input ? [op.input] : []);
+      }else setMessage(op.message||'Сверка ещё не завершена.');
+    }catch(e){setMessage(e instanceof Error?e.message:'Проверьте состояние переноса.');}
+    finally{try{await refresh();}catch{/* Keep the last confirmed result. */}setBusy('');}
+  }
+  if(!moves.length&&!message)return null;
+  return <div className="supply-write-confirmation" role="status">{moves.map(move=><div key={move.id}>
+    <strong>{move.shipmentName} · {move.input?.article} · {move.input?.quantity} шт.</strong>
+    <p>{move.message||'Перенос ожидает сверки.'}</p>
+    <Button disabled={!!busy} onClick={()=>void recover(move,'resume')}>Продолжить перенос</Button>{' '}
+    {move.steps?.destination==='pending'&&<Button disabled={!!busy} onClick={()=>void recover(move,'cancel')}>Отменить перенос</Button>}
+  </div>)}{message&&<p>{message}</p>}</div>;
+}
 import {
   createSupplyWorkbook,
   createSupplyTemplate,
@@ -66,6 +124,7 @@ type SheetSummary = {
   remainingPrint: number | null;
 };
 type WriterState = {
+  assemblyV2Sync?:{pending:number;failed:number;lastDeliveredAt:number|null};
   available: boolean;
   reason: string | null;
   busy?: boolean;
@@ -92,6 +151,7 @@ type WriterState = {
   } | null;
 };
 type Operation = {
+  updatedAt?: string;
   id: string;
   action:
     | "create"
@@ -99,6 +159,7 @@ type Operation = {
     | "updateItem"
     | "removeItem"
     | "delete"
+    | "deleteSupply"
     | "deletePart";
   status: string;
   name: string;
@@ -124,6 +185,8 @@ type Operation = {
   retryTarget?: { department: "roll" | "box"; sheetId: number } | null;
   department?: "roll" | "box" | null;
 };
+const supplyPositionKey = (order: LiveOrder) => `${order.sourceId}:${boxPositionKey(order)}`;
+type XeroxDirection = "down" | "up";
 type RoutingPreview = {
   id: string;
   input: string;
@@ -137,6 +200,10 @@ type RoutingPreview = {
     machine: string;
     department: string | null;
     issue: string | null;
+    rounding?: { choices: { direction: XeroxDirection; quantity: number; sheets: number }[] };
+    xeroxSheets?: number;
+    xeroxIssue?: string;
+    roundingDirection?: XeroxDirection;
   }[];
   departments: { id: string; name: string; rows: number; quantity: number }[];
 };
@@ -184,6 +251,18 @@ function buildSummaries(live: LivePrinting | null): SheetSummary[] {
         remainingPrint: completeTotal(orders.map(rollPrintRemaining)),
       };
     });
+}
+
+function controlIdsForSummary(summary: SheetSummary, summaries: SheetSummary[], links: AssemblyBoxLink[], sheets: SupplySheet[]) {
+  const box = linkedAssemblyBoxSummary(summary, summaries, links);
+  const linkedIds = links.filter((link) => link.name === summary.sheet.name && (link.targetRollSheetId == null || link.targetRollSheetId === summary.sheet.sheetId)).map((link) => link.boxSheetId);
+  const linkedSheets = sheets.filter((sheet) => sheet.sourceId === "box-printing" && linkedIds.includes(sheet.sheetId));
+  return [...new Set([
+    summary.sheet.assemblyShipmentId || (summary.sheet.sourceId === "roll-printing" ? `RITM-ROLL-${summary.sheet.sheetId}` : summary.sheet.sourceId === "box-printing" ? `RITM-BOX-${summary.sheet.sheetId}` : ""),
+    ...summary.orders.map((order) => order.assemblyShipmentId || ""),
+    ...(box?.orders || []).map((order) => order.assemblyShipmentId || ""),
+    ...linkedSheets.map((sheet) => sheet.assemblyShipmentId || `RITM-BOX-${sheet.sheetId}`),
+  ].filter(Boolean))];
 }
 
 function stagePercent(value: number | null | undefined, plan: number | null | undefined) {
@@ -324,6 +403,31 @@ function LinkedBoxStageProgress({
   );
 }
 
+function SupplyOverviewStage({ label, value, plan, partial = false, tone }: {
+  label: string;
+  value: number | null;
+  plan: number | null;
+  partial?: boolean;
+  tone: "blue" | "orange" | "violet";
+}) {
+  const percent = stagePercent(value, plan);
+  return (
+    <div className={`supply-overview-stage tone-${tone}`}>
+      <div className="supply-overview-stage-label">
+        {tone === "blue" ? <Printer size={17} /> : tone === "orange" ? <Scissors size={17} /> : <Package size={17} />}
+        <span>{label}</span>
+      </div>
+      <strong>{value === null ? "Нет данных" : `${partial ? "≥ " : ""}${num(value)}${plan === null ? "" : ` / ${num(plan)}`} шт.`}</strong>
+      {value !== null && plan !== null && percent !== null ? (
+        <>
+          <StageMeter value={value} plan={plan} label={label} tone={tone} />
+          <small>{stagePercentLabel(percent, partial)}{partial ? " · данные неполные" : ""}</small>
+        </>
+      ) : <small>Нет подтверждённых данных</small>}
+    </div>
+  );
+}
+
 function editableLines(text: string): SupplyImportLine[] {
   const parsed = validateSupply("Поставка", "2026-01-02", "2026-01-01", text);
   if (parsed.errors.lines || !parsed.lines.length)
@@ -357,7 +461,7 @@ function supplyOperationStatus(operation: Operation) {
     if (operation.status === "failed")
       return removing ? "Артикул не удалён" : "Количество не изменено";
   }
-  if (operation.action === "delete" || operation.action === "deletePart") {
+  if (["delete", "deletePart", "deleteSupply"].includes(operation.action)) {
     if (operation.status === "writing")
       return operation.action === "deletePart"
         ? "Удаляю участок из поставки"
@@ -406,13 +510,13 @@ async function readRollSupplyResponse(response: Response) {
     );
   const value = await response.json();
   if (!response.ok || !value.ok)
-    throw new Error(
+    throw Object.assign(new Error(
       response.status === 401
         ? "Войдите в AI Center как владелец, чтобы управлять поставками."
         : value.reason ||
             value.message ||
             "Основной агент отклонил операцию с поставкой.",
-    );
+    ), {code: value.error});
   return value;
 }
 
@@ -524,10 +628,15 @@ export function LiveSuppliesWorkspace({
   error,
   onRefresh,
 }: Props) {
+  const [supplyView, setSupplyView] = useState<'directions' | 'jobs'>('directions');
   const [writer, setWriter] = useState<WriterState | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(() => new URLSearchParams(location.search).get("supplySheet"));
   const [search, setSearch] = useState("");
   const [onlyMissingArea, setOnlyMissingArea] = useState(false);
+  const [articleSearch, setArticleSearch] = useState("");
+  const [boxSearch, setBoxSearch] = useState("");
+  const [verifiedSourceChanges, setVerifiedSourceChanges] = useState<Set<string>>(() => new Set());
+  const [boxRemovalNotice, setBoxRemovalNotice] = useState("");
   const [dialog, setDialog] = useState<"create" | "append" | null>(null);
   const [appendTarget, setAppendTarget] = useState<{
     name: string;
@@ -539,7 +648,13 @@ export function LiveSuppliesWorkspace({
     sheetId: number;
     department: "roll" | "box";
     linked: boolean;
+    wholeShipmentId?: string;
+    departments?: string[];
   } | null>(null);
+  const [tabVisibility, setTabVisibility] = useState<{ key: string; hidden: boolean; available: boolean } | null>(null);
+  const [visibilityDialog, setVisibilityDialog] = useState(false);
+  const [visibilityBusy, setVisibilityBusy] = useState(false);
+  const [visibilityError, setVisibilityError] = useState("");
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [itemTarget, setItemTarget] = useState<{
     action: "updateItem" | "removeItem";
@@ -548,7 +663,12 @@ export function LiveSuppliesWorkspace({
   const [itemQuantity, setItemQuantity] = useState("");
   const [itemFormError, setItemFormError] = useState("");
   const [name, setName] = useState("");
+  const [productionReadyAt,setProductionReadyAt] = useState("");
+  const [packingAt,setPackingAt] = useState("");
+  const [shippingAt,setShippingAt] = useState("");
   const [lockAfterCreate, setLockAfterCreate] = useState(false);
+  const [supplyPriority, setSupplyPriority] = useState<"normal" | "urgent">("normal");
+  const [reminderMinutes, setReminderMinutes] = useState(60);
   const [itemsText, setItemsText] = useState("");
   const [fileName, setFileName] = useState("");
   const [formError, setFormError] = useState("");
@@ -561,13 +681,54 @@ export function LiveSuppliesWorkspace({
   const [assemblyBoxLinks, setAssemblyBoxLinks] = useState<AssemblyBoxLink[]>(
     [],
   );
+  const [listLocks, setListLocks] = useState<SupplyLockRecord[] | null>(null);
+  const listLocksRef = useRef<SupplyLockRecord[] | null>(null);
+  const lockReadSequence = useRef(0);
+  const refreshListLocks = useCallback(async () => {
+    const sequence = ++lockReadSequence.current;
+    try {
+      const response = await fetch("/api/shipment-locks", {cache: "no-store", credentials: "same-origin"});
+      const result = await response.json();
+      if (!response.ok || !result.ok || !Array.isArray(result.locks) || result.locks.some((item: SupplyLockRecord) => !item || typeof item.shipmentId !== "string" || typeof item.locked !== "boolean" || typeof item.pending !== "boolean" || !["locking", "locked", "unlocking", "unlocked"].includes(item.status))) throw new Error("Статус сборки недоступен");
+      if (sequence === lockReadSequence.current) { listLocksRef.current = result.locks; setListLocks(result.locks); }
+    } catch {
+      if (sequence === lockReadSequence.current) { listLocksRef.current = null; setListLocks(null); }
+    }
+  }, []);
+  const updateListLocks = useCallback((locks: SupplyLockRecord[]) => {
+    if (!listLocksRef.current) return;
+    ++lockReadSequence.current;
+    const merged = [...listLocksRef.current.filter((item) => !locks.some((lock) => lock.shipmentId === item.shipmentId)), ...locks];
+    listLocksRef.current = merged;
+    setListLocks(merged);
+  }, []);
+  useEffect(() => {
+    void refreshListLocks();
+    const onFocus = () => { if (document.visibilityState === "visible") void refreshListLocks(); };
+    const timer = window.setInterval(onFocus, 60000);
+    window.addEventListener("focus", onFocus);
+    return () => { ++lockReadSequence.current; window.clearInterval(timer); window.removeEventListener("focus", onFocus); };
+  }, [refreshListLocks]);
   const [routingPreview, setRoutingPreview] = useState<RoutingPreview | null>(
     null,
   );
   const [recoveryError, setRecoveryError] = useState("");
   const operationId = useRef("");
-  const routingInputKey = JSON.stringify([dialog, name, itemsText, appendTarget, dialog === "create" && lockAfterCreate]);
-  const summaries = useMemo(() => buildSummaries(live), [live]);
+  const autoRecovery = useRef(new Map<string, number>());
+  const autoRecovering = useRef(false);
+  const routingInputKey = JSON.stringify([dialog, name, itemsText, appendTarget, dialog === "create" && productionReadyAt, dialog === "create" && packingAt, dialog === "create" && shippingAt, dialog === "create" && lockAfterCreate, dialog === "create" && supplyPriority, dialog === "create" && supplyPriority === "urgent" && reminderMinutes]);
+  const summaries = useMemo(() => buildSummaries(live && verifiedSourceChanges.size ? {
+    ...live, supplies: live.supplies.filter(order => !verifiedSourceChanges.has(supplyPositionKey(order))),
+  } : live), [live, verifiedSourceChanges]);
+  useEffect(() => {
+    if (!live || live.stale || live.refreshFailed || live.refreshInProgress) return;
+    setVerifiedSourceChanges(previous => {
+      if (!previous.size) return previous;
+      const existing = new Set(live.supplies.map(supplyPositionKey));
+      const retained = new Set([...previous].filter(key => existing.has(key)));
+      return retained.size === previous.size ? previous : retained;
+    });
+  }, [live]);
   const effectiveBoxLinks = useMemo(() => {
     const links = [...assemblyBoxLinks];
     for (const supply of writer?.production?.supplies || []) {
@@ -579,6 +740,9 @@ export function LiveSuppliesWorkspace({
       if (!roll || !box) continue;
       const existing = links.findIndex((link) => link.boxSheetId === box.sheet.sheetId && link.name === roll.sheet.name && (link.targetRollSheetId === null || link.targetRollSheetId === roll.sheet.sheetId));
       if (existing >= 0) {
+        if (supply.id.startsWith('RITM-ROLL-')) {
+          links[existing] = {...links[existing],targetRollSheetId:roll.sheet.sheetId,boxRows:box.orders.length,boxQuantity:box.orders.reduce((sum,order)=>sum+order.quantity,0),positionKeys:undefined};
+        }
         if (links[existing].targetRollSheetId === null) links[existing] = { ...links[existing], targetRollSheetId: roll.sheet.sheetId };
         continue;
       }
@@ -601,8 +765,23 @@ export function LiveSuppliesWorkspace({
     }
   }, []);
   const refreshSupplyData = useCallback(async () => {
-    await Promise.all([onRefresh(), refreshAssemblyBoxLinks()]);
-  }, [onRefresh, refreshAssemblyBoxLinks]);
+    await Promise.all([onRefresh(), refreshAssemblyBoxLinks(), refreshListLocks()]);
+  }, [onRefresh, refreshAssemblyBoxLinks, refreshListLocks]);
+  const confirmMoves = async (moves: DepartmentMoveRequest[]) => {
+    if (moves.length) {
+      const keys = (live?.supplies || []).filter(order => moves.some(move =>
+        order.uid === move.uid && order.article === move.article && order.quantity === move.quantity &&
+        order.sourceId === `${move.sourceDepartment || "box"}-printing`)).map(supplyPositionKey);
+      setVerifiedSourceChanges(previous => new Set([...previous, ...keys]));
+      setBoxRemovalNotice("Перенос подтверждён. Состав Assembly обновляется.");
+    }
+    void refreshSupplyData().catch(() => {});
+  };
+  const boxRemoval = useBoxPositionRemoval(key => {
+    setVerifiedSourceChanges(previous => new Set([...previous, `box-printing:${key}`]));
+    setBoxRemovalNotice("Артикул удалён из таблицы бокса. Состав новой Assembly обновляется.");
+    void Promise.all([onRefresh(), refreshAssemblyBoxLinks()]).catch(() => {});
+  });
   useEffect(() => {
     void refreshAssemblyBoxLinks();
   }, [refreshAssemblyBoxLinks]);
@@ -621,6 +800,41 @@ export function LiveSuppliesWorkspace({
       .filter((link) => link.targetRollSheetId !== null)
       .map((link) => link.boxSheetId),
   );
+  const directionJobs = useMemo<DirectionJob[]>(() => {
+    const linked = new Set(
+      effectiveBoxLinks
+        .filter((link) => link.targetRollSheetId !== null)
+        .map((link) => link.boxSheetId),
+    );
+    return summaries
+      .filter(
+        (summary) =>
+          summary.sheet.sourceId !== "box-printing" ||
+          !linked.has(summary.sheet.sheetId),
+      )
+      .map((summary) => {
+        const box = linkedAssemblyBoxSummary(
+          summary,
+          summaries,
+          effectiveBoxLinks,
+        );
+        return {
+          id: `${summary.sheet.sourceId}:${summary.sheet.sheetId}`,
+          name: summary.sheet.name,
+          orders: [...summary.orders, ...(box?.orders || [])],
+          missingPositions: box?.missingPositions || 0,
+          lock: supplyLockState(
+            controlIdsForSummary(
+              summary,
+              summaries,
+              effectiveBoxLinks,
+              live?.sheets || [],
+            ),
+            listLocks,
+          ),
+        };
+      });
+  }, [summaries, effectiveBoxLinks, listLocks, live?.sheets]);
   const visible = summaries.filter((summary) => {
     if (
       summary.sheet.sourceId === "box-printing" &&
@@ -673,42 +887,7 @@ export function LiveSuppliesWorkspace({
   const selectedAssemblyOrders = selected
     ? [...selected.orders, ...(selectedBox?.orders || [])]
     : [];
-  const selectedLinkedBoxSheetIds = selected
-    ? effectiveBoxLinks
-        .filter(
-          (link) =>
-            link.name === selected.sheet.name &&
-            (link.targetRollSheetId == null ||
-              link.targetRollSheetId === selected.sheet.sheetId),
-        )
-        .map((link) => link.boxSheetId)
-    : [];
-  const selectedBoxSheets = (live?.sheets || []).filter(
-    (sheet) =>
-      sheet.sourceId === "box-printing" &&
-      selectedLinkedBoxSheetIds.includes(sheet.sheetId),
-  );
-  const selectedControlShipmentIds = selected
-    ? Array.from(
-        new Set(
-          [
-            selected.sheet.assemblyShipmentId ||
-              (selected.sheet.sourceId === "roll-printing"
-                ? "RITM-ROLL-" + selected.sheet.sheetId
-                : selected.sheet.sourceId === "box-printing"
-                  ? "RITM-BOX-" + selected.sheet.sheetId
-                  : ""),
-            ...selectedAssemblyOrders.map(
-              (order) => order.assemblyShipmentId || "",
-            ),
-            ...selectedBoxSheets.map(
-              (sheet) =>
-                sheet.assemblyShipmentId || "RITM-BOX-" + sheet.sheetId,
-            ),
-          ].filter(Boolean),
-        ),
-      )
-    : [];
+  const selectedControlShipmentIds = selected ? controlIdsForSummary(selected, summaries, effectiveBoxLinks, live?.sheets || []) : [];
   const selectedAssemblyArea = selectedBox
     ? assemblyAreaTotal(selectedAssemblyOrders, selectedBox.missingPositions)
     : selected
@@ -738,14 +917,21 @@ export function LiveSuppliesWorkspace({
   const packingCheckedAt = stageCheckedAt(live?.packing?.checkedAt);
   useEffect(() => {
     setOnlyMissingArea(false);
+    setArticleSearch("");
+    setBoxSearch("");
   }, [selected?.sheet.sourceId, selected?.sheet.sheetId]);
+  const activeBoxOrders = useMemo(() => selectedBox?.orders || [], [selectedBox]);
+  const boxOrders = useMemo(() => activeBoxOrders.filter(
+    order => order.article.toUpperCase().includes(boxSearch.trim().toUpperCase()),
+  ), [activeBoxOrders, boxSearch]);
   const selectedOrders = useMemo(
-    () =>
-      onlyMissingArea
-        ? selected?.orders.filter((order) => order.areaKnown === false) || []
-        : selected?.orders || [],
+    () => (selected?.orders || []).filter(order =>
+      !onlyMissingArea || order.areaKnown === false),
     [selected, onlyMissingArea],
   );
+  const visibleOrders = useMemo(() => selectedOrders.filter(
+    order => order.article.toUpperCase().includes(articleSearch.trim().toUpperCase()),
+  ), [selectedOrders, articleSearch]);
   const snapshotAtMs = live ? Date.parse(live.snapshotAt || live.updatedAt) : NaN;
   const hasFreshSnapshot =
     Number.isFinite(snapshotAtMs) &&
@@ -766,10 +952,13 @@ export function LiveSuppliesWorkspace({
     (!loading || hasFreshSnapshot) &&
     !busy &&
     !writer.busy &&
-    !pendingProduction;
+    !pendingProduction &&
+    !boxRemoval.pending;
   const writeBlockedReason = !writer?.available
     ? writer?.reason || "Проверьте доступ к управлению поставками"
-    : !live || live.stale || !hasFreshSnapshot
+    : boxRemoval.pending
+      ? "Сначала завершите проверку удаления артикула"
+      : !live || live.stale || !hasFreshSnapshot
       ? "Сначала дождитесь свежей загрузки источника"
       : live.quality?.status === "partial"
         ? "В обновлённых данных есть строки с ошибками; проверьте журнал"
@@ -782,17 +971,61 @@ export function LiveSuppliesWorkspace({
           : error || (loading && !hasFreshSnapshot)
           ? "Дождитесь завершения обновления"
           : undefined;
+  // Transfer validates both sheets, quantities and work against live sources
+  // under the server lease; a refreshing dashboard must not block it.
+  const canMove = !!writer?.available && !!live && !busy && !pendingProduction;
+  const moveBlockedReason = !writer?.available ? writer?.reason || 'Нет доступа к управлению поставками' : !live ? 'Дождитесь загрузки поставки' : busy ? 'Сохраняем операцию' : pendingProduction ? 'Предыдущая операция поставки требует проверки' : undefined;
   const selectedDepartment =
     selected?.sheet.sourceId === "box-printing" ? "box" : "roll";
-  const selectedProductionPart =
-    !!selected &&
-    !!writer?.production?.supplies?.some((s) =>
+  const selectedManagedSupply =
+    selected &&
+    writer?.production?.supplies?.find((s) =>
       s.parts.some(
         (p) =>
           p.department === selectedDepartment &&
           p.sheetId === selected.sheet.sheetId,
       ),
     );
+  const selectedProductionPart = !!selectedManagedSupply;
+  const tabName = selected?.sheet.name;
+  const tabId = selected?.sheet.sheetId;
+  const tabSource = selected?.sheet.sourceId;
+  const visibilityKey = JSON.stringify([tabSource, tabId, tabName]);
+  useEffect(() => {
+    setVisibilityDialog(false);
+    setVisibilityError("");
+    if (!tabName || tabId === undefined || !["roll-printing", "box-printing"].includes(tabSource || "") ||
+        tabId === writer?.template?.sheetId) return;
+    const abort = new AbortController();
+    const query = new URLSearchParams({ department: selectedDepartment, sheetId: String(tabId), name: tabName });
+    void fetch("/api/production-tabs?" + query, {cache:"no-store",signal:abort.signal})
+      .then(response => readRollSupplyResponse(response))
+      .then(data => setTabVisibility({ key: visibilityKey, hidden: data.hidden === true, available: data.available === true }))
+      .catch(() => {});
+    return () => abort.abort();
+  }, [visibilityKey, tabName, tabId, tabSource, selectedDepartment, writer?.template?.sheetId]);
+  const visibility = tabVisibility?.key === visibilityKey ? tabVisibility : null;
+  const changeTabVisibility = async () => {
+    if (!visibility || tabId === undefined || !tabName || visibilityBusy) return;
+    setVisibilityBusy(true);
+    setVisibilityError("");
+    try {
+      const result = await readRollSupplyResponse(await fetch("/api/production-tabs", {
+        method:"POST", credentials:"same-origin", headers:{"content-type":"application/json"},
+        body:JSON.stringify({department:selectedDepartment,sheetId:tabId,name:tabName,hidden:!visibility.hidden}),
+        signal:AbortSignal.timeout(45000),
+      }));
+      setTabVisibility({ key: visibilityKey, hidden: result.hidden === true, available: true });
+      setVisibilityDialog(false);
+      setNotice(result.hidden ? `Вкладка «${tabName}» скрыта в Google Таблицах.` : `Вкладка «${tabName}» снова видна в Google Таблицах.`);
+    } catch (error) {
+      setVisibilityError(error instanceof Error ? error.message : "Видимость листа пока не подтверждена.");
+    } finally {
+      setVisibilityBusy(false);
+    }
+  };
+  const moveShipmentIdForBox = (sheetId:number) => writer?.production?.supplies?.find(s=>s.parts.some(p=>p.department==='box'&&p.sheetId===sheetId))?.id || (()=>{const links=assemblyBoxLinks.filter(l=>l.boxSheetId===sheetId&&Number.isSafeInteger(l.targetRollSheetId));return links.length===1?`RITM-ROLL-${links[0].targetRollSheetId}`:'';})();
+  const selectedMoveShipmentId = selected ? writer?.production?.supplies?.find(s=>s.parts.some(p=>p.department===selectedDepartment&&p.sheetId===selected.sheet.sheetId))?.id || (selectedDepartment==='box'?moveShipmentIdForBox(selected.sheet.sheetId):assemblyBoxLinks.filter(l=>l.targetRollSheetId===selected.sheet.sheetId).length===1?`RITM-ROLL-${selected.sheet.sheetId}`:'') : '';
   const canDeleteSelected =
     !!writer?.available &&
     !writer.busy &&
@@ -805,12 +1038,38 @@ export function LiveSuppliesWorkspace({
     (selectedProductionPart ||
       (selectedDepartment === "roll" &&
         selected.sheet.sourceId === "roll-printing"));
+  const removalSource = boxRemoval.pending && writer?.production?.supplies?.filter(s =>
+    s.parts.some(p => p.department === 'box' && p.sheetId === boxRemoval.pending?.sheetId));
+  const removalTarget = selected && writer?.production?.supplies?.filter(s =>
+    s.parts.some(p => p.department === 'roll' && p.sheetId === selected.sheet.sheetId));
+  const independentRemoval = selectedDepartment === 'roll' && removalSource?.length === 1 &&
+    removalTarget?.length === 1 && removalSource[0].id !== removalTarget[0].id;
+  // Single-position writes verify the selected sheet and work journals on
+  // the server, so an older reporting snapshot can still supply a request.
+  const canWriteItem = !!writer?.available && !!selected && !busy && !writer.busy &&
+    !pendingProduction && (!boxRemoval.pending || !!independentRemoval);
   const canRemoveOrder = (order: LiveOrder) =>
-    live?.packing?.status === "available" &&
-    order.packed === 0 &&
-    order.packingRecords === 0 &&
-    rollPrinted(order) === 0 &&
-    (rollCut(order) === null || rollCut(order) === 0);
+    (order.packed ?? 0) === 0 &&
+    (order.packingRecords ?? 0) === 0 &&
+    (rollPrinted(order) ?? 0) === 0 &&
+    (rollCut(order) ?? 0) === 0;
+  const boxRemovalReason = (order: LiveOrder) => {
+    if (!(writer?.production?.available ?? writer?.available)) return writer?.reason || "Нет доступа к изменению поставки";
+    if (boxRemoval.pending) return "Завершите проверку предыдущего удаления";
+    if (busy || boxRemoval.busy) return "Дождитесь завершения текущей операции";
+    if ((rollPrinted(order) ?? 0) > 0 || (rollCut(order) ?? 0) > 0 || (order.packed ?? 0) > 0 || (order.packingRecords ?? 0) > 0)
+      return "По артикулу уже есть работа";
+    return undefined;
+  };
+  const removalAction = (order: LiveOrder, reason: string | undefined, onClick: () => void) => (
+    <span title={reason}>
+      <Button className="supply-item-remove" disabled={!!reason} onClick={onClick}
+        aria-label={`Удалить ${order.article} из поставки`}>
+        <Trash size={15} /> Удалить
+      </Button>
+    </span>
+  );
+  const removeBoxAction = (order: LiveOrder) => removalAction(order, boxRemovalReason(order), () => boxRemoval.open(order));
 
   const checkOperation = async (id: string) => {
     try {
@@ -878,9 +1137,54 @@ export function LiveSuppliesWorkspace({
     }
   }, [onRefresh]);
 
+  const confirmRollRemoval = useCallback((order: LiveOrder) => {
+    setVerifiedSourceChanges(previous => new Set([...previous, supplyPositionKey(order)]));
+    setItemTarget(null);
+    setItemFormError("");
+    setNotice(`Артикул «${order.article}» удалён. Состав Assembly обновляется.`);
+    void Promise.all([reloadWriter(), onRefresh()]).catch(() => {});
+  }, [reloadWriter, onRefresh]);
+
+  useEffect(() => {
+    if (busy || itemTarget?.action !== "removeItem" || operation?.action !== "removeItem" ||
+        !["writing", "checking", "uncertain", "written_unverified"].includes(operation.status)) return;
+    const controller = new AbortController();
+    let timer: number;
+    const poll = async () => {
+      try {
+        const response = await fetch(`/api/roll-supplies/operations?removalId=${operation.id}`, {
+          cache: "no-store",
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(8000)]),
+        });
+        const { operation: receipt } = await readRollSupplyResponse(response);
+        if (controller.signal.aborted) return;
+        if (receipt?.status === "verified" || receipt?.status === "verified_with_calculation_errors") {
+          setOperation({ ...operation, ...receipt });
+          confirmRollRemoval(itemTarget.order);
+          return;
+        }
+        if (receipt?.status === "failed" || !receipt) {
+          const result = { ...operation, ...receipt, status: receipt?.status || "retry_same_request" };
+          setOperation(result);
+          setNotice(receipt ? supplyOperationStatus(result) : "Запрос пока не найден. Можно проверить запись повторно.");
+          return;
+        }
+        const result = { ...operation, ...receipt };
+        setOperation(result);
+        setNotice(supplyOperationStatus(result));
+      } catch { /* The operation keeps its original ID across retries. */ }
+      if (!controller.signal.aborted) timer = window.setTimeout(poll, 4000);
+    };
+    timer = window.setTimeout(poll, 1200);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [busy, itemTarget, operation?.id, operation?.action, operation?.status, confirmRollRemoval]);
+
   useEffect(() => {
     void reloadWriter();
-    const timer = window.setInterval(() => void reloadWriter(), 60_000);
+    const timer = window.setInterval(() => { if(document.visibilityState === "visible") void reloadWriter(); }, 10000);
     return () => window.clearInterval(timer);
   }, [reloadWriter]);
 
@@ -888,6 +1192,50 @@ export function LiveSuppliesWorkspace({
     if (busy || !(writer?.busy || ["writing", "checking"].includes(pendingProduction?.status || ""))) return;
     return startWriterStatusPolling(reloadWriter);
   }, [writer?.busy, pendingProduction?.status, busy, reloadWriter]);
+
+  useEffect(() => {
+    if (!operation || operation.status === "verified") return;
+    const confirmed = writer?.production?.operations?.find(item => item.id === operation.id && item.status === "verified");
+    if (!confirmed) return;
+    setOperation(confirmed);
+    setFormError("");
+    setBusy(false);
+    if (operationId.current === confirmed.id) setDialog(null);
+    setNotice(supplyOperationStatus(confirmed));
+    void onRefresh();
+  },[writer?.production?.operations,operation?.id,operation?.status,onRefresh]);
+
+  useEffect(() => {
+    const item = pendingProduction;
+    const attempts = item ? autoRecovery.current.get(item.id) || 0 : 0;
+    if (busy || autoRecovering.current || !recoverableSupply(item,writer?.busy,attempts)) return;
+    const timer = window.setTimeout(async () => {
+      if (!item || autoRecovering.current || document.visibilityState !== "visible") return;
+      autoRecovering.current = true;
+      autoRecovery.current.set(item.id,attempts+1);
+      setNotice("Автоматически сверяем сохранённую поставку и завершаем загрузку…");
+      try {
+        const response = await fetch("/api/roll-supplies", {method:"POST",credentials:"same-origin",headers:{"content-type":"application/json"},body:JSON.stringify({action:"resume",operationId:item.id,explicitWriteApproval:true}),signal:AbortSignal.timeout(240000)});
+        const data = await readRollSupplyResponse(response), result = data.operation as Operation;
+        setOperation(current => current?.id === result.id ? result : current);
+        setNotice(supplyOperationStatus(result));
+        if (result.status === "verified") {
+          autoRecovery.current.delete(item.id);
+          if (operationId.current === item.id) {
+            setFormError("");
+            setDialog(null);
+          }
+          void onRefresh();
+        }
+      } catch (cause) {
+        setRecoveryError(cause instanceof Error?cause.message:"Автоматическая сверка пока не подтверждена. Сохранённый запрос остаётся в истории.");
+      } finally {
+        autoRecovering.current = false;
+        void reloadWriter();
+      }
+    },Math.min(60000,2500*2**attempts));
+    return () => window.clearTimeout(timer);
+  },[pendingProduction?.id,pendingProduction?.status,pendingProduction?.updatedAt,writer?.busy,busy,onRefresh,reloadWriter]);
 
   const openDialog = (mode: "create" | "append") => {
     setDialog(mode);
@@ -902,7 +1250,11 @@ export function LiveSuppliesWorkspace({
         : null,
     );
     setName(mode === "append" ? selected?.sheet.name || "" : "");
+    setProductionReadyAt("");
+    setPackingAt("");
+    setShippingAt("");
     setLockAfterCreate(false);
+    setSupplyPriority("normal");
     setItemsText("");
     setFileName("");
     setFormError("");
@@ -965,10 +1317,23 @@ export function LiveSuppliesWorkspace({
     }
   };
 
+  const routingAvailable = writer?.production?.available ?? writer?.available;
+  const needsPreview = !routingPreview || routingPreview.input !== routingInputKey;
+  const previewLines = needsPreview ? [] : routingPreview.lines;
+  const roundedLines = previewLines.map(line => {
+    const choice = line.rounding?.choices.find(option => option.direction === line.roundingDirection);
+    return { ...line, plannedQuantity: choice?.quantity ?? line.quantity };
+  });
+  const pendingRounding = previewLines.some(line => line.rounding && !line.roundingDirection);
+  const plannedRows = roundedLines.filter(line => line.department && line.plannedQuantity > 0);
+  const skippedRows = roundedLines.length - plannedRows.length;
+  // Routing reads the catalog. Creating a shipment allocates fresh sheets and
+  // validates them on the server independently of the reporting snapshot.
+  const formAvailable = dialog === "create" || needsPreview ? routingAvailable : canWrite;
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!dialog || (!appendTarget && dialog === "append")) return;
-    if (!canWrite) {
+    if (!formAvailable) {
       setFormError(
         writer?.reason || "Запись недоступна до проверки источника.",
       );
@@ -989,6 +1354,7 @@ export function LiveSuppliesWorkspace({
     let lines: SupplyImportLine[];
     try {
       lines = editableLines(itemsText);
+      if (dialog === "create") validateDeadlines({readyAt:inputInstant(productionReadyAt),packingAt:inputInstant(packingAt),shipAt:inputInstant(shippingAt)});
     } catch (cause) {
       setFormError(
         cause instanceof Error ? cause.message : "Проверьте список товаров.",
@@ -1011,7 +1377,7 @@ export function LiveSuppliesWorkspace({
             operationId: operationId.current,
             name: dialog === "append" ? appendTarget!.name : name.trim(),
             lines,
-            ...(dialog === "create" ? { lockAfterCreate } : {}),
+            ...(dialog === "create" ? { lockAfterCreate, planning:{readyAt:inputInstant(productionReadyAt),packingAt:inputInstant(packingAt),shipAt:inputInstant(shippingAt)}, priority: supplyPriority, ...(supplyPriority === "urgent" ? {reminderMinutes} : {}) } : {}),
             ...(dialog === "append"
               ? {
                   sheetId: appendTarget!.sheetId,
@@ -1033,9 +1399,11 @@ export function LiveSuppliesWorkspace({
       }
       return;
     }
-    if (routingPreview.blocked) {
+    if (routingPreview.blocked || pendingRounding || plannedRows.length === 0) {
       setFormError(
-        "Нет распознанных товаров для добавления. Уточните станки в базе и проверьте список заново.",
+        pendingRounding
+          ? "Выберите округление для каждой позиции Xerox."
+          : "Добавьте хотя бы одну распознанную позицию с количеством больше нуля.",
       );
       setBusy(false);
       return;
@@ -1046,7 +1414,7 @@ export function LiveSuppliesWorkspace({
       action: dialog,
       name: dialog === "append" ? appendTarget!.name : name.trim(),
       sheetId: dialog === "append" ? appendTarget!.sheetId : null,
-      rows: routingPreview.acceptedRows,
+      rows: plannedRows.length,
       message: null,
       spreadsheetUrl: "",
     };
@@ -1054,6 +1422,9 @@ export function LiveSuppliesWorkspace({
     setNotice(supplyOperationStatus(pendingOperation));
     const requestOperationId = operationId.current;
     try {
+      const xeroxRounding = previewLines.flatMap(line => line.roundingDirection
+        ? [{article: line.article, direction: line.roundingDirection}]
+        : []);
       const payload = {
         action: dialog,
         explicitWriteApproval: true,
@@ -1061,7 +1432,8 @@ export function LiveSuppliesWorkspace({
         name: dialog === "append" ? appendTarget!.name : name.trim(),
         lines,
         previewId: routingPreview.id,
-        ...(dialog === "create" ? { lockAfterCreate } : {}),
+        ...(xeroxRounding.length ? { xeroxRounding } : {}),
+        ...(dialog === "create" ? { lockAfterCreate, planning:{readyAt:inputInstant(productionReadyAt),packingAt:inputInstant(packingAt),shipAt:inputInstant(shippingAt)}, priority: supplyPriority, ...(supplyPriority === "urgent" ? {reminderMinutes} : {}) } : {}),
         ...(dialog === "append"
           ? {
               sheetId: appendTarget!.sheetId,
@@ -1069,13 +1441,25 @@ export function LiveSuppliesWorkspace({
             }
           : {}),
       };
-      const response = await fetch("/api/roll-supplies", {
-        method: "POST",
-        credentials: "same-origin",
+      const send = () => fetch("/api/roll-supplies", {
+        method: "POST", credentials: "same-origin",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(240000),
+        body: JSON.stringify(payload), signal: AbortSignal.timeout(240000),
       });
+      let response = await send();
+      for (let retry = 0; response.status === 409; retry++) {
+        const reason = await response.clone().json().catch(() => null);
+        if (reason?.error !== "supply_writer_occupied") break;
+        if (retry >= 3) {
+          setOperation(null);
+          setNotice("");
+          setFormError("Сервер всё ещё занят. Список и распределение сохранены в форме. Повторите подтверждение.");
+          return;
+        }
+        setNotice("Ожидаем свободную запись. Продолжим автоматически…");
+        await new Promise(resolve => window.setTimeout(resolve, 1000 * (retry + 1)));
+        response = await send();
+      }
       const data = await readRollSupplyResponse(response);
       const result = data.operation as Operation;
       setOperation(result);
@@ -1098,6 +1482,13 @@ export function LiveSuppliesWorkspace({
           ? cause.message
           : "Результат операции неизвестен. Проверьте историю и лист перед повтором.",
       );
+      const code = (cause as {code?: string})?.code;
+      if (code === "production_routing_changed" || code === "production_preview_required" || code?.startsWith("production_xerox_")) {
+        setOperation(null);
+        setNotice("");
+        if (code === "production_routing_changed" || code === "production_preview_required") setRoutingPreview(null);
+        return;
+      }
       await checkOperation(requestOperationId);
     } finally {
       setBusy(false);
@@ -1121,9 +1512,10 @@ export function LiveSuppliesWorkspace({
     setFormError("");
     const id = crypto.randomUUID();
     operationId.current = id;
+    const action = deleteTarget.wholeShipmentId ? "deleteSupply" : deleteTarget.linked ? "deletePart" : "delete";
     const pendingOperation: Operation = {
       id,
-      action: deleteTarget.linked ? "deletePart" : "delete",
+      action,
       status: "writing",
       name: deleteTarget.name,
       sheetId: deleteTarget.sheetId,
@@ -1148,14 +1540,14 @@ export function LiveSuppliesWorkspace({
         credentials: "same-origin",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          action: deleteTarget.linked ? "deletePart" : "delete",
+          action,
           explicitWriteApproval: true,
           operationId: id,
           name: deleteTarget.name,
-          sheetId: deleteTarget.sheetId,
-          ...(deleteTarget.linked
-            ? { department: deleteTarget.department }
-            : {}),
+          ...(deleteTarget.wholeShipmentId ? { shipmentId: deleteTarget.wholeShipmentId } : {
+            sheetId: deleteTarget.sheetId,
+            ...(deleteTarget.linked ? { department: deleteTarget.department } : {}),
+          }),
         }),
         signal: AbortSignal.timeout(240000),
       });
@@ -1191,7 +1583,7 @@ export function LiveSuppliesWorkspace({
   const submitItemChange = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!itemTarget || !selected) return;
-    if (!canWrite) {
+    if (!canWriteItem) {
       setItemFormError(
         writer?.reason || "Запись недоступна до проверки источника.",
       );
@@ -1206,7 +1598,8 @@ export function LiveSuppliesWorkspace({
       setItemFormError("Укажите целое количество от 1 до 1 000 000.");
       return;
     }
-    const id = crypto.randomUUID();
+    const id = action === "removeItem" && operation?.status === "retry_same_request"
+      ? operation.id : crypto.randomUUID();
     operationId.current = id;
     setBusy(true);
     setItemFormError("");
@@ -1222,14 +1615,6 @@ export function LiveSuppliesWorkspace({
     };
     setOperation(pendingOperation);
     setNotice(supplyOperationStatus(pendingOperation));
-    let polling = true;
-    const pollTask = (async () => {
-      while (polling) {
-        await new Promise((resolve) => window.setTimeout(resolve, 1200));
-        if (!polling) break;
-        await checkOperation(id);
-      }
-    })();
     try {
       const response = await fetch("/api/roll-supplies", {
         method: "POST",
@@ -1256,16 +1641,14 @@ export function LiveSuppliesWorkspace({
         result.status === "verified" ||
         result.status === "verified_with_calculation_errors"
       ) {
-        await reloadWriter();
-        await onRefresh();
-        if (result.status === "verified") {
+        if (action === "removeItem") confirmRollRemoval(order);
+        else {
+          void Promise.all([reloadWriter(), onRefresh()]).catch(() => {});
+        }
+        if (action === "updateItem" && result.status === "verified") {
           setItemTarget(null);
           setItemQuantity("");
-          setNotice(
-            action === "updateItem"
-              ? `Количество «${order.article}» обновлено.`
-              : `Артикул «${order.article}» удалён из поставки.`,
-          );
+          setNotice(`Количество «${order.article}» обновлено.`);
         }
       }
     } catch (cause) {
@@ -1274,10 +1657,9 @@ export function LiveSuppliesWorkspace({
           ? cause.message
           : "Не удалось подтвердить изменение артикула.",
       );
-      await checkOperation(id);
+      if (action === "removeItem") setOperation({ ...pendingOperation, status: "checking" });
+      else await checkOperation(id);
     } finally {
-      polling = false;
-      await pollTask;
       setBusy(false);
     }
   };
@@ -1293,6 +1675,7 @@ export function LiveSuppliesWorkspace({
           </p>
         </div>
         <div className="live-supplies-actions">
+          <a className="button secondary" href="https://assembly-v2.zinovevkirill234.chatgpt.site" target="_blank" rel="noreferrer">Новый Assembly <ArrowSquareOut size={17}/></a>
           <AssemblyTransfer onDelivered={() => void refreshSupplyData()} />
           <Button onClick={() => void refreshSupplyData()} disabled={loading}>
             <Package size={17} />
@@ -1301,8 +1684,7 @@ export function LiveSuppliesWorkspace({
           <Button
             kind="primary"
             onClick={() => openDialog("create")}
-            disabled={!canWrite}
-            title={!canWrite ? writeBlockedReason : undefined}
+            disabled={busy}
           >
             <Plus size={18} />
             Новая поставка
@@ -1310,6 +1692,15 @@ export function LiveSuppliesWorkspace({
         </div>
       </div>
       {!canWrite && writeBlockedReason && <p className="supply-write-wait" role="status">{writeBlockedReason}</p>}
+      {writer?.assemblyV2Sync ? <p className="supply-write-wait" role="status">Новый Assembly: {writer.assemblyV2Sync.pending ? `ожидают подтверждения ${num(writer.assemblyV2Sync.pending)} передач` : 'доставка поставок подтверждена'}{writer.assemblyV2Sync.failed ? ' · связь повторяется автоматически' : ''}.</p> : null}
+      <PendingMoveRecovery onDone={confirmMoves}/>
+      {boxRemovalNotice && <div className="supply-operation-result success" role="status">{boxRemovalNotice}</div>}
+      {boxRemoval.pending && <div className="supply-operation-result warning" role="status">
+        <strong>{boxRemoval.busy ? `Проверяем удаление ${boxRemoval.pending.article}…` : `Удаление ${boxRemoval.pending.article} требует подтверждения`}</strong>
+        <Button onClick={boxRemoval.resume} disabled={boxRemoval.busy}>Проверить удаление</Button>
+      </div>}
+      {boxRemoval.backgroundMessage && <p className="supply-operation-error" role="alert">{boxRemoval.backgroundMessage}</p>}
+      {boxRemoval.dialog}
 
       {!!(recoveryError || productionNotices.length) && (
         <section className="panel" aria-label="Загрузка поставок по отделам">
@@ -1324,7 +1715,7 @@ export function LiveSuppliesWorkspace({
                 {item.name} ·{" "}
                 {item.status === "verified"
                   ? `Не добавлено позиций: ${num(item.skippedLines?.length || 0)}`
-                  : item.action === "deletePart"
+                  : ["deletePart", "deleteSupply"].includes(item.action)
                     ? "Удаление требует проверки"
                     : "Загрузка требует проверки"}
               </strong>
@@ -1480,8 +1871,8 @@ export function LiveSuppliesWorkspace({
                     }
                   }}
                 >
-                  {item.action === "deletePart"
-                    ? "Проверить и продолжить удаление участка"
+                  {["deletePart", "deleteSupply"].includes(item.action)
+                    ? "Проверить и продолжить удаление"
                     : "Проверить и продолжить загрузку"}
                 </Button>
               )}
@@ -1535,6 +1926,34 @@ export function LiveSuppliesWorkspace({
         </div>
       )}
 
+      <div className="supplies-view-switch" aria-label="Вид поставок">
+        <Button
+          className={supplyView === "directions" ? "is-active" : ""}
+          aria-pressed={supplyView === "directions"}
+          onClick={() => setSupplyView("directions")}
+        >
+          Сборка по направлениям
+        </Button>
+        <Button
+          className={supplyView === "jobs" ? "is-active" : ""}
+          aria-pressed={supplyView === "jobs"}
+          onClick={() => setSupplyView("jobs")}
+        >
+          Производственные задания
+        </Button>
+      </div>
+      {supplyView === "directions" && live && (
+        <SupplyDirections
+          jobs={directionJobs}
+          selectedJobId={selectedId || ""}
+          onShowJobs={() => setSupplyView("jobs")}
+          onOpenJob={(id) => {
+            setSearch("");
+            setSelectedId(id);
+            setSupplyView("jobs");
+          }}
+        />
+      )}
       {!live && loading ? (
         <section className="panel">
           <Empty title="Читаю рулонную печать">
@@ -1554,11 +1973,11 @@ export function LiveSuppliesWorkspace({
             Источник доступен, но зарегистрированных вкладок поставок нет.
           </Empty>
         </section>
-      ) : (
+      ) : supplyView === 'jobs' ? (
         <div className="live-supplies-layout">
           <section className="panel live-supply-list">
             <div className="live-supply-list-heading">
-              <strong>Вкладки поставок</strong>
+              <strong>Поставки</strong>
               <span>{num(visible.length)}</span>
             </div>
             <div className="live-supply-search">
@@ -1570,6 +1989,7 @@ export function LiveSuppliesWorkspace({
                 onChange={(event) => setSearch(event.target.value)}
               />
             </div>
+            {listLocks === null && <small className="supply-lock-load-note">Статусы сборки проверяются или недоступны</small>}
             <div className="live-supply-list-items">
               {visible.map((summary) => {
                 const box = linkedAssemblyBoxSummary(
@@ -1590,9 +2010,10 @@ export function LiveSuppliesWorkspace({
                       missing: summary.areaMissingOrders,
                     };
                 const marketplace = supplyMarketplace(summary.sheet.name);
+                const lock = supplyLockState(controlIdsForSummary(summary, summaries, effectiveBoxLinks, live?.sheets || []), listLocks);
                 return (
                   <button
-                    className={`live-supply-list-item ${selected?.sheet.sheetId === summary.sheet.sheetId && selected?.sheet.sourceId === summary.sheet.sourceId ? "selected" : ""}`}
+                    className={`live-supply-list-item ${selected?.sheet.sheetId === summary.sheet.sheetId && selected?.sheet.sourceId === summary.sheet.sourceId ? "selected" : ""}${lock === "closed" ? " is-closed" : ""}`}
                     data-marketplace={
                       supplyMarketplace(summary.sheet.name)?.toLowerCase() ||
                       "neutral"
@@ -1614,41 +2035,22 @@ export function LiveSuppliesWorkspace({
                     >
                       {marketplace || "?"}
                     </span>
-                    <strong>{summary.sheet.name}</strong>
-                    <small>
-                      {box ? (
-                        <>
-                          Assembly ·{" "}
-                          {num(summary.orders.length + box.positions)} позиций
-                          {box.quantity !== null
-                            ? ` · ${num(summary.planned + box.quantity)} шт.`
-                            : ""}
-                        </>
-                      ) : (
-                        <>
-                          {summary.sheet.sourceId === "box-printing"
-                            ? "Бокс"
-                            : "Рулонная печать"}{" "}
-                          · {num(summary.orders.length)} артикулов ·{" "}
-                          {num(summary.planned)} шт.
-                        </>
-                      )}
-                    </small>
-                    {box ? (
-                      <span className="live-supply-assembly-link">
-                        Рулон: {num(summary.orders.length)} поз. ·{" "}
-                        {num(summary.planned)} шт. + Бокс: {num(box.positions)}{" "}
-                        поз.
-                        {box.quantity !== null
-                          ? ` · ${num(box.quantity)} шт.`
-                          : " · план нет данных"}
+                    <span className="supply-list-content">
+                      <strong>{summary.sheet.name}</strong>
+                      {(lock === "closed" || lock === "partial" || lock === "pending") && <span className={`supply-list-lock is-${lock}`}>
+                        {lock === "pending" ? <Clock3 size={12} /> : <LockKeyhole size={12} />}
+                        {lock === "closed" ? "Закрыта для сборки" : lock === "partial" ? "Частично закрыта" : "Статус меняется"}
+                      </span>}
+                      <span className="supply-list-total">
+                        {num(summary.orders.length + (box?.positions || 0))} поз. · {box && box.quantity === null ? "план не подтверждён" : `${num(summary.planned + (box?.quantity || 0))} шт.`}
                       </span>
-                    ) : null}
-                    <small className="live-supply-area-note">
-                      {area.observed > 0
-                        ? `${num(area.total ?? 0, 2)} м²${area.missing ? ` · без площади: ${num(area.missing)}` : ""}`
-                        : "Площадь не определена"}
-                    </small>
+                      <span className="supply-list-departments">
+                        {summary.sheet.sourceId !== "box-printing" && <span><b className="supply-list-dept-tag roll">Рулон</b>{num(summary.orders.length)} поз. · {num(summary.planned)} шт.</span>}
+                        {box && <span><b className="supply-list-dept-tag box">Бокс</b>{num(box.positions)} поз. · {box.quantity === null ? "нет данных" : `${num(box.quantity)} шт.`}</span>}
+                        {summary.sheet.sourceId === "box-printing" && <span><b className="supply-list-dept-tag box">Бокс</b>{num(summary.orders.length)} поз. · {num(summary.planned)} шт.</span>}
+                      </span>
+                      <span className="supply-list-area"><Layers3 size={14} />{area.observed > 0 ? `${num(area.total ?? 0, 2)} м²${area.missing ? ` · без площади: ${num(area.missing)}` : ""}` : "Площадь не определена"}</span>
+                    </span>
                   </button>
                 );
               })}
@@ -1687,6 +2089,13 @@ export function LiveSuppliesWorkspace({
                 }
                 actions={
                   <>
+                    {visibility?.available && <Button disabled={visibilityBusy || busy} onClick={() => {
+                      setVisibilityError("");
+                      setVisibilityDialog(true);
+                    }}>
+                      {visibility.hidden ? <Eye size={16}/> : <EyeOff size={16}/>}
+                      {visibility.hidden ? "Вернуть вкладку" : "Скрыть вкладку"}
+                    </Button>}
                     {selected.sheet.sheetId === writer?.template?.sheetId ? (
                       <span className="live-supply-template-note">
                         Шаблон · удаление запрещено
@@ -1722,6 +2131,21 @@ export function LiveSuppliesWorkspace({
                           : "Удалить поставку"}
                       </Button>
                     )}
+                    {selectedManagedSupply && <Button kind="danger" disabled={!canDeleteSelected}
+                      onClick={() => {
+                        setDeleteTarget({
+                          name: selectedManagedSupply.name,
+                          sheetId: selected.sheet.sheetId,
+                          department: selectedDepartment,
+                          linked: true,
+                          wholeShipmentId: selectedManagedSupply.id,
+                          departments: selectedManagedSupply.parts.map(part => part.department),
+                        });
+                        setDeleteConfirmation("");
+                        setFormError("");
+                      }}>
+                      <Trash size={16}/> Удалить поставку целиком
+                    </Button>}
                     <Button
                       kind="primary"
                       onClick={() => openDialog("append")}
@@ -1852,12 +2276,30 @@ export function LiveSuppliesWorkspace({
                 </div>
               </ShipmentHero>
 
+              <section className="supply-overview-stages" aria-label="Готовность поставки">
+                {selected.sheet.sourceId !== "box-printing" && <>
+                  <SupplyOverviewStage label="Печать · рулон" value={selected.printed} plan={selected.planned} tone="blue" />
+                  <SupplyOverviewStage label="Порезка · рулон" value={selected.cut} plan={selected.planned} partial={selected.cutMissingOrders > 0} tone="orange" />
+                </>}
+                {selectedBox && selectedBoxPrintedProgress && selectedBoxCutProgress && <>
+                  <SupplyOverviewStage label="Печать · бокс" value={selectedBoxPrintedProgress.total} plan={selectedBox.quantity} partial={selectedBoxPrintedProgress.missing > 0} tone="blue" />
+                  <SupplyOverviewStage label="Порезка · бокс" value={selectedBoxCutProgress.total} plan={selectedBox.quantity} partial={selectedBoxCutProgress.missing > 0} tone="orange" />
+                </>}
+                {selected.sheet.sourceId === "box-printing" && <>
+                  <SupplyOverviewStage label="Печать · бокс" value={selected.printed} plan={selected.planned} tone="blue" />
+                  <SupplyOverviewStage label="Порезка · бокс" value={selected.cut} plan={selected.planned} partial={selected.cutMissingOrders > 0} tone="orange" />
+                </>}
+                <SupplyOverviewStage label="Сборка · упаковка" value={live?.packing?.status === "unavailable" ? null : selectedAssemblyPacking.total} plan={selectedAssemblyPlan} partial={packingPartial} tone="violet" />
+              </section>
+
+              {/🔥\s*$/u.test(selected.sheet.name) && selectedControlShipmentIds[0] && <ArkadyReminder shipmentId={selectedControlShipmentIds[0]} />}
               <AssemblyOnlyItems shipmentId={selectedControlShipmentIds[0] || ""} />
 
               <ProductionControls
                 shipmentIds={selectedControlShipmentIds}
                 shipmentName={selected.sheet.name}
                 articles={Array.from(new Set(selectedAssemblyOrders.map((order) => order.article).filter(Boolean)))}
+                onLocksChanged={updateListLocks}
               />
 
               <section className="panel">
@@ -2085,7 +2527,7 @@ export function LiveSuppliesWorkspace({
                 </div>
               </section>
 
-              <section className="panel">
+              <section className="panel supply-composition">
                 <div className="panel-heading">
                   <div>
                     <h2>
@@ -2094,10 +2536,11 @@ export function LiveSuppliesWorkspace({
                         : "Состав рулонной печати"}
                     </h2>
                     <small>
-                      План и производственный факт по каждому артикулу
+                      {num(selectedOrders.length)} поз. · План и выполнение по артикулам
                     </small>
                   </div>
                   <div className="live-supply-table-actions">
+                    <DepartmentMoveBatch sourceDepartment={selectedDepartment} positions={selectedOrders.map(order => ({shipmentId:selectedMoveShipmentId,uid:order.uid,article:order.article,quantity:order.quantity,printed:rollPrinted(order),cut:rollCut(order)}))} disabled={!canMove || !selectedMoveShipmentId} disabledReason={moveBlockedReason} onDone={confirmMoves}/>
                     {selected.areaMissingOrders > 0 && (
                       <Button
                         kind={onlyMissingArea ? "primary" : "secondary"}
@@ -2143,8 +2586,12 @@ export function LiveSuppliesWorkspace({
                     </Button>
                   </div>
                 </div>
-                <DataTable
-                  rows={selectedOrders}
+                <div className="supply-composition-toolbar">
+                  <Search value={articleSearch} onChange={setArticleSearch} label="Найти артикул в составе" />
+                  {articleSearch.trim() && <span role="status">Найдено {num(visibleOrders.length)} из {num(selectedOrders.length)}</span>}
+                </div>
+                {visibleOrders.length === 0 ? <p className="supply-composition-empty">Артикулы не найдены</p> : <DataTable
+                  rows={visibleOrders}
                   rowKey={(order) => order.uid}
                   label={`Состав поставки ${selected.sheet.name}`}
                   pageSize={20}
@@ -2152,11 +2599,13 @@ export function LiveSuppliesWorkspace({
                     {
                       id: "article",
                       label: "Артикул",
+                      sort: (order) => order.article,
                       render: (order) => <strong>{order.article}</strong>,
                     },
                     {
                       id: "plan",
                       label: "План, шт.",
+                      sort: (order) => order.quantity,
                       render: (order) => num(order.quantity),
                     },
                     {
@@ -2178,10 +2627,7 @@ export function LiveSuppliesWorkspace({
                     },
                     {
                       id: "printed",
-                      label:
-                        selected.sheet.sourceId === "box-printing"
-                          ? "Напечатано · R"
-                          : "Напечатано · T/X",
+                      label: "Напечатано",
                       render: (order) =>
                         rollPrinted(order) === null
                           ? "—"
@@ -2189,16 +2635,13 @@ export function LiveSuppliesWorkspace({
                     },
                     {
                       id: "cut",
-                      label:
-                        selected.sheet.sourceId === "box-printing"
-                          ? "Порезано · S"
-                          : "Порезано · U",
+                      label: "Порезано",
                       render: (order) =>
                         rollCut(order) === null ? "—" : num(rollCut(order)!),
                     },
                     {
                       id: "packed",
-                      label: "Упаковано · WorkLog",
+                      label: "Упаковано",
                       render: (order) =>
                         order.packed === null || order.packed === undefined
                           ? "—"
@@ -2217,16 +2660,17 @@ export function LiveSuppliesWorkspace({
                       label: "Действия",
                       render: (order) => (
                         <div className="live-supply-row-actions">
-                          <button
+                          {<DepartmentMove sourceDepartment={selectedDepartment} shipmentId={selectedMoveShipmentId} uid={order.uid} article={order.article} quantity={order.quantity} printed={rollPrinted(order)} cut={rollCut(order)} disabledReason={moveBlockedReason} disabled={!canMove || !selectedMoveShipmentId} onDone={confirmMoves} />}
+                          {selectedDepartment === "roll" && <button
                             type="button"
                             aria-label={`Изменить количество ${order.article}`}
                             title={
                               selected.sheet.sourceId === "box-printing"
                                 ? "Количество в боксе можно изменить в исходном листе"
-                                : "Изменить количество"
+                                : !canWriteItem ? writeBlockedReason || "Дождитесь обновления состава" : "Изменить количество"
                             }
                             disabled={
-                              !canWrite ||
+                              !canWriteItem ||
                               selected.sheet.sourceId === "box-printing"
                             }
                             onClick={() => {
@@ -2237,39 +2681,52 @@ export function LiveSuppliesWorkspace({
                             }}
                           >
                             <Pencil size={16} />
-                          </button>
-                          <button
-                            type="button"
-                            aria-label={`Удалить ${order.article} из поставки`}
-                            title={
-                              canRemoveOrder(order)
-                                ? "Удалить артикул из поставки"
-                                : "Удаление доступно, когда свежие данные подтверждают отсутствие печати, резки и упаковки"
-                            }
-                            disabled={
-                              !canWrite ||
-                              !canRemoveOrder(order) ||
-                              selected.sheet.sourceId === "box-printing"
-                            }
-                            onClick={() => {
+                          </button>}
+                          {selectedDepartment === "box" ? removeBoxAction(order) : removalAction(
+                            order,
+                            !canWriteItem ? writeBlockedReason || "Дождитесь обновления состава" :
+                              canRemoveOrder(order) ? undefined : (order.packed ?? 0) > 0 ? `Учтена упаковка ${num(order.packed!)} шт. Удаление требует сверки с Assembly.` : "По артикулу уже есть работа",
+                            () => {
                               setItemTarget({ action: "removeItem", order });
                               setItemQuantity("");
                               setItemFormError("");
                               setOperation(null);
-                            }}
-                          >
-                            <Trash size={16} />
-                          </button>
+                            },
+                          )}
                         </div>
                       ),
                     },
                   ]}
-                />
+                />}
               </section>
+              {selectedBox && <section className="panel supply-composition">
+                <details className="supply-box-transfer">
+                  <summary><span><strong>Товары бокса</strong><small>{num(activeBoxOrders.length)} поз.</small></span><span className="supply-box-transfer-toggle"><span className="when-closed">Раскрыть список</span><span className="when-open">Свернуть список</span><ChevronDown size={18}/></span></summary>
+                  <div className="supply-composition-toolbar">
+                    <Search value={boxSearch} onChange={setBoxSearch} label="Найти артикул в боксе" />
+                    {boxSearch.trim() && <span role="status">Найдено {num(boxOrders.length)} из {num(activeBoxOrders.length)}</span>}
+                    <div className="supply-composition-toolbar-end">
+                      <DepartmentMoveBatch sourceDepartment="box" positions={activeBoxOrders.map(order => ({shipmentId:moveShipmentIdForBox(order.sheetId),uid:order.uid,article:order.article,quantity:order.quantity,printed:rollPrinted(order),cut:rollCut(order)}))} disabled={!canMove} disabledReason={moveBlockedReason} onDone={confirmMoves}/>
+                    </div>
+                  </div>
+                  {boxOrders.length === 0 ? <p className="supply-composition-empty">{boxSearch ? "Артикулы не найдены" : "В боксе нет позиций"}</p> :
+                    <DataTable rows={boxOrders} rowKey={boxPositionKey} label="Состав бокса" pageSize={10} columns={[
+                      {id:'article',label:'Артикул',sort:order=>order.article,render:order=><strong>{order.article}</strong>},
+                      {id:'quantity',label:'План, шт.',sort:order=>order.quantity,render:order=>num(order.quantity)},
+                      {id:'printed',label:'Напечатано',render:order=>rollPrinted(order) === null ? "—" : num(rollPrinted(order)!)},
+                      {id:'cut',label:'Порезано',render:order=>rollCut(order) === null ? "—" : num(rollCut(order)!)},
+                      {id:'move',label:'Действия',render:order=><div className="live-supply-row-actions">
+                        <DepartmentMove shipmentId={moveShipmentIdForBox(order.sheetId)} uid={order.uid} article={order.article} quantity={order.quantity} printed={rollPrinted(order)} cut={rollCut(order)} disabledReason={moveBlockedReason} disabled={!canMove || !moveShipmentIdForBox(order.sheetId)} onDone={confirmMoves}/>
+                        {removeBoxAction(order)}
+                      </div>},
+                    ]}/>
+                  }
+                </details>
+              </section>}
             </div>
           ) : null}
         </div>
-      )}
+      ) : null}
 
       <Modal
         open={dialog !== null}
@@ -2286,6 +2743,7 @@ export function LiveSuppliesWorkspace({
         }
       >
         <form noValidate onSubmit={submit}>
+          {!formAvailable && <p className="supply-write-wait" role="status">{routingAvailable === undefined ? "Проверяем доступ к поставкам…" : writeBlockedReason || "Проверьте доступ к управлению поставками"}</p>}
           {dialog === "create" && (
             <>
               <Field
@@ -2302,6 +2760,18 @@ export function LiveSuppliesWorkspace({
                   placeholder="Например, Ozon · Москва · 20 октября"
                 />
               </Field>
+              <ProductionDeadlineFields ready={productionReadyAt} packing={packingAt} ship={shippingAt} onReady={setProductionReadyAt} onPacking={setPackingAt} onShip={setShippingAt} disabled={busy || (!!operation && operation.status !== "failed")}/>
+              <Field label="Приоритет поставки">
+                <select value={supplyPriority} onChange={(event) => setSupplyPriority(event.target.value as "normal" | "urgent")} disabled={busy || (!!operation && operation.status !== "failed")}>
+                  <option value="normal">Обычная</option>
+                  <option value="urgent">🔥 Срочная</option>
+                </select>
+              </Field>
+              {supplyPriority === "urgent" && <Field label="Напомнить, если не взяли в работу">
+                <select value={reminderMinutes} onChange={event => setReminderMinutes(Number(event.target.value))} disabled={busy || (!!operation && operation.status !== "failed")}>
+                  <option value={0}>Не напоминать</option><option value={30}>Через 30 минут</option><option value={60}>Через 1 час</option><option value={120}>Через 2 часа</option><option value={240}>Через 4 часа</option>
+                </select>
+              </Field>}
               <label className="supply-lock-option">
                 <input
                   type="checkbox"
@@ -2341,15 +2811,18 @@ export function LiveSuppliesWorkspace({
             >
               <strong>Распределение по станкам из базы</strong>
               <strong>
-                Будет добавлено позиций: {num(routingPreview.acceptedRows)}.
-                Пропущено: {num(routingPreview.skippedRows)}.
+                {pendingRounding ? "Предварительно к добавлению" : "Будет добавлено позиций"}: {num(plannedRows.length)}.
+                Пропущено: {num(skippedRows)}.
               </strong>
-              {routingPreview.departments.map((dept) => (
-                <span key={dept.id}>
-                  {dept.name}: {num(dept.rows)} позиций · {num(dept.quantity)}{" "}
-                  шт.
-                </span>
-              ))}
+              {routingPreview.departments.map(dept => {
+                const lines = plannedRows.filter(line => line.department === dept.id);
+                return <span key={dept.id}>
+                  {dept.name}: {num(lines.length)} позиций · {num(lines.reduce((sum, line) => sum + line.plannedQuantity, 0))} шт.
+                </span>;
+              })}
+              {pendingRounding && (
+                <span role="status">Выберите количество для выделенных позиций Xerox. Варианты рассчитаны на целое число листов.</span>
+              )}
               <div style={{ maxHeight: 240, overflow: "auto" }}>
                 <table>
                   <thead>
@@ -2362,10 +2835,10 @@ export function LiveSuppliesWorkspace({
                     </tr>
                   </thead>
                   <tbody>
-                    {routingPreview.lines.map((line) => (
+                    {roundedLines.map((line) => (
                       <tr key={line.article}>
                         <td>{line.article}</td>
-                        <td>{line.department === "roll" ? line.extension || "Не найдено" : "—"}</td>
+                        <td>{line.extension || "—"}</td>
                         <td>{line.machine || "Не указан"}</td>
                         <td>
                           {line.department === "roll"
@@ -2374,7 +2847,42 @@ export function LiveSuppliesWorkspace({
                               ? "Бокс"
                               : `Будет пропущен: ${line.issue}`}
                         </td>
-                        <td>{num(line.quantity)}</td>
+                        <td>
+                          {line.rounding ? (
+                            <label className="supply-xerox-rounding">
+                              <span>Запрошено {num(line.quantity)} шт.</span>
+                              <select
+                                aria-label={`Округление Xerox для ${line.article}`}
+                                value={line.roundingDirection ?? ""}
+                                disabled={busy || (!!operation && operation.status !== "failed")}
+                                onChange={event => {
+                                  const direction = event.target.value as XeroxDirection | "";
+                                  setRoutingPreview(current => current && current.id === routingPreview.id ? {
+                                    ...current,
+                                    lines: current.lines.map(item => item.article === line.article
+                                      ? { ...item, roundingDirection: direction || undefined }
+                                      : item),
+                                  } : current);
+                                }}
+                              >
+                                <option value="">Выбрать округление</option>
+                                {line.rounding.choices.map(choice => (
+                                  <option key={choice.direction} value={choice.direction}>
+                                    {choice.quantity === 0
+                                      ? "Вниз до 0 шт. · пропустить"
+                                      : `${choice.direction === "down" ? "Вниз" : "Вверх"} до ${num(choice.quantity)} шт. · ${num(choice.sheets)} лист.`}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          ) : (
+                            <>
+                              {num(line.quantity)} шт.
+                              {line.xeroxSheets !== undefined && <span className="supply-xerox-detail">{num(line.xeroxSheets)} лист.</span>}
+                              {line.xeroxIssue && <span className="supply-xerox-detail">{line.xeroxIssue}</span>}
+                            </>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -2519,12 +3027,12 @@ export function LiveSuppliesWorkspace({
                 downloading ||
                 exporting ||
                 (routingPreview?.input === routingInputKey &&
-                  routingPreview.blocked) ||
-                !canWrite
+                  (routingPreview.blocked || pendingRounding || plannedRows.length === 0)) ||
+                !formAvailable
               }
             >
               {busy
-                ? "Проверяю и записываю…"
+                ? (needsPreview ? "Проверяем распределение…" : "Сохраняем поставку…")
                 : !routingPreview ||
                     routingPreview.input !== routingInputKey
                   ? "Проверить распределение"
@@ -2623,8 +3131,8 @@ export function LiveSuppliesWorkspace({
               type="submit"
               disabled={
                 busy ||
-                !canWrite ||
-                (!!operation && operation.status !== "failed")
+                !canWriteItem ||
+                (!!operation && !["failed", "retry_same_request"].includes(operation.status))
               }
             >
               {busy
@@ -2636,6 +3144,21 @@ export function LiveSuppliesWorkspace({
           </div>
         </form>
       </Modal>
+      <Modal open={visibilityDialog && !!visibility} onClose={() => { if (!visibilityBusy) setVisibilityDialog(false); }}
+        title={visibility?.hidden ? "Вернуть вкладку?" : "Скрыть вкладку?"}
+        description={tabName}
+      >
+        <p>{visibility?.hidden
+          ? "Лист снова появится среди вкладок Google Таблиц."
+          : "Вкладка исчезнет из нижней панели Google Таблиц у всех сотрудников. Поставка останется в RITM и Assembly."}</p>
+        {visibilityError && <p role="alert" className="supply-operation-error">{visibilityError}</p>}
+        <div className="modal-actions">
+          <Button disabled={visibilityBusy} onClick={() => setVisibilityDialog(false)}>Отмена</Button>
+          <Button kind="primary" disabled={visibilityBusy} onClick={() => void changeTabVisibility()}>
+            {visibilityBusy ? "Проверяю…" : visibility?.hidden ? "Вернуть вкладку" : "Скрыть вкладку"}
+          </Button>
+        </div>
+      </Modal>
       <Modal
         open={deleteTarget !== null}
         onClose={() => {
@@ -2646,13 +3169,17 @@ export function LiveSuppliesWorkspace({
           }
         }}
         title={
-          deleteTarget?.linked
+          deleteTarget?.wholeShipmentId
+            ? "Удалить поставку целиком?"
+            : deleteTarget?.linked
             ? `Удалить участок «${deleteTarget.department === "box" ? "Бокс" : "Рулонная печать"}»?`
             : "Удалить поставку и лист?"
         }
         description={
           deleteTarget
-            ? deleteTarget.linked
+            ? deleteTarget.wholeShipmentId
+              ? `В рабочих таблицах будут удалены листы «${deleteTarget.name}» (${deleteTarget.departments?.map(department => department === "box" ? "Бокс" : "Рулонная печать").join(", ")}), включая скрытые. Поставка уйдёт из активной сборки. Удаление листов нельзя отменить.`
+              : deleteTarget.linked
               ? `Будет удалён только лист участка «${deleteTarget.department === "box" ? "Бокс" : "Рулонная печать"}» для поставки «${deleteTarget.name}». Второй участок и его товары останутся в общей поставке сборщиков. Это действие нельзя отменить.`
               : `Будет удалён лист «${deleteTarget.name}» вместе с его данными в Google Sheets. Это действие нельзя отменить.`
             : undefined
@@ -2660,7 +3187,9 @@ export function LiveSuppliesWorkspace({
       >
         <form noValidate onSubmit={submitDelete}>
           <div className="supply-delete-warning" role="alert">
-            {deleteTarget?.linked
+            {deleteTarget?.wholeShipmentId
+              ? "RITM проверит название, ID и связь каждого листа перед удалением."
+              : deleteTarget?.linked
               ? `Будет удалён только участок ${deleteTarget.department === "box" ? "Бокс" : "Рулонная печать"} (лист ID ${deleteTarget.sheetId}); оставшийся участок продолжит отображаться у сборщиков.`
               : `Удаление затронет только этот лист с ID ${deleteTarget?.sheetId}. Другие поставки и шаблон не изменятся.`}
           </div>
@@ -2678,7 +3207,7 @@ export function LiveSuppliesWorkspace({
           </Field>
           {notice &&
             (operation?.action === "delete" ||
-              operation?.action === "deletePart") && (
+              operation?.action === "deletePart" || operation?.action === "deleteSupply") && (
               <div
                 className={`supply-operation-result ${operation.status === "verified" ? "success" : "warning"}`}
                 role="status"
@@ -2723,3 +3252,4 @@ export function LiveSuppliesWorkspace({
     </div>
   );
 }
+

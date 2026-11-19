@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `av2_cartons_label` ON `av2_cartons` (`label`);

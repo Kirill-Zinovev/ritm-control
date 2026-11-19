@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `av2_work_legacy_event` ON `av2_work` (`legacy_event_id`);

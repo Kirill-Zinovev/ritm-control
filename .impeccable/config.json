@@ -16,7 +16,7 @@
         "rule": "design-system-font",
         "value": "ui variable\",\"segoe ui\",-apple-system,blinkmacsystemfont,arial,sans-serif",
         "createdAt": "2026-11-02T13:20:34.042Z",
-        "reason": "False positive: this CSS stack matches the typography declared in DESIGN.md; the detector misparses the Segoe UI Variable name."
+        "reason": "Agent: existing DESIGN.md font stack matches the sidebar; preserving its documented exception."
       }
     ]
   }

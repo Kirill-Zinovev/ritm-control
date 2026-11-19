@@ -115,6 +115,16 @@ const catalogHeaders = [
   "Источник",
 ];
 const trustedShipment = "RITM-ROLL-555";
+test('stock Assembly work enters the same KPI once and a cancellation excludes it without removing journal history',()=>{
+  const shipmentId='RITM-STOCK-WAREHOUSE';
+  const row=workEvent({id:'stock-output',time:'2026-11-12T07:00:00Z',sku:'KS0013.A7986',employeeId:'emp-007',employee:'Артём',operationId:'packing',quantity:32,norm:800,coefficient:0.04,shipmentId,positionId:shipmentId+'|uid:box:book:7:stock-job|KS0013.A7986'});
+  const text=[workLogHeaders,row].map(r=>r.map(csvCell).join(',')).join('\n');
+  const result=parseAssemblyWorkLog(text);assert.equal(result.events.length,1);assert.equal(result.events[0].quantity,32);assert.equal(result.events[0].coefficient,0.04);
+  const duplicate=[workLogHeaders,row,row].map(r=>r.map(csvCell).join(',')).join('\n');
+  assert.equal(parseAssemblyWorkLog(duplicate).events.length,0,'ambiguous duplicate journal rows are never counted twice');
+  const corrections='correctionId,eventId,action,createdAt,actor,reason\nc1,stock-output,CANCEL,2026-11-12T08:00:00Z,owner,test';
+  assert.equal(parseAssemblyWorkLog(text,corrections).events.length,0);
+});
 function workEvent({
   id,
   time,

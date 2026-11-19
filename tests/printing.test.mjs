@@ -11,8 +11,74 @@ import {
   BOX_PRINTING_SHEET_ID,
   PRINTING_SOURCES,
   loadPrinting,
+  loadStockRollPrinting,
+  loadStockBoxOrders,
   assignCatalogStores,
 } from "../worker/printing.js";
+
+test('stock roll journal adds work without adding assembly supplies',async()=>{
+ const csv=rows=>rows.map(row=>row.map(v=>'"'+String(v??'').replaceAll('"','""')+'"').join(',')).join('\n');
+ const order=Array.from({length:5},()=>Array(30).fill(''));order[0][28]='UID';order[3][4]='Артикул';order[3][14]='Кол-во';order[4][4]='A';order[4][14]=10;order[4][28]='stock-uid';
+ const empty=order.map(row=>[...row]);empty[4][4]='';empty[4][14]='';empty[4][28]='';
+ const header=Array(15).fill('');for(const [col,value] of Object.entries(PRINTING_SOURCES.find(s=>s.id==='roll-printing').journal.expectedHeaders))header[col]=value;
+ const event=Array(15).fill('');event[0]='event';event[1]='04.11.2026';event[2]='Дмитрий';event[3]='Печать';event[4]='Запасы склад';event[6]='A';event[7]='stock-uid';event[9]=5;event[11]=1;
+ const base={events:[],cutEvents:[],issues:[],supplies:[]};
+ const result=await loadStockRollPrinting(async url=>{const gid=Number(new URL(url).searchParams.get('gid'));return new Response(csv(gid===1?order:gid===2?empty:[header,event]));},base,{spreadsheetId:'stock-book',sheets:[{gid:1,name:'Запасы склад'},{gid:2,name:'Срочные 2 этаж'}],journalId:3});
+ assert.equal(result.stockRoll.status,'available');assert.equal(result.events.length,1);assert.equal(result.events[0].quantity,5);assert.equal(result.supplies.length,0);
+});
+test('unrelated seasonal sheets may contain duplicate stock-remaining headings',()=>{
+ const rows=Array.from({length:4},()=>Array(30).fill(''));rows[0][29]='UID';rows[2][4]='Артикул';rows[2][14]='Кол-во';
+ rows[2][16]='Кол-во осталось';rows[2][17]='Кол-во осталось';rows[3][4]='SEASON-TEST';rows[3][14]=10;rows[3][29]='season-uid';
+ const result=indexOrders([{gid:1,name:'Сезонная',rows,sourceId:'seasonal-printing'}]);assert.equal(result.orders.length,1);assert.equal(result.orders[0].article,'SEASON-TEST');
+});
+test('new stock roll uses its remaining plan only with verified empty histories',async()=>{
+ const csv=rows=>rows.map(row=>row.map(v=>'"'+String(v??'').replaceAll('"','""')+'"').join(',')).join('\n');
+ const uid='ritm-e4b754ba-465f-41b3-b48a-d6d3d887fe41-14';
+ const order=Array.from({length:5},()=>Array(30).fill(''));order[0][29]='UID';
+ for(const [i,h] of Object.entries({4:'Артикул',15:'Кол-во',17:'Кол-во осталось',18:'Печать',19:'Порезка',20:'Прогресс печати',21:'Прогресс порезки',22:'Дата готовности печати',23:'Дата готовности порезки',24:'остаток по печати:',27:'Рулоны'}))order[3][i]=h;
+ order[4][4]='FD-TEST';order[4][15]=300;order[4][17]=300;order[4][29]=uid;
+ const empty=order.map(row=>[...row]);empty[4]=Array(30).fill('');
+ const journal=Array(15).fill('');for(const [col,value] of Object.entries(PRINTING_SOURCES.find(s=>s.id==='roll-printing').journal.expectedHeaders))journal[col]=value;
+ journal[4]='Лист-источник';journal[6]='Артикул';
+ const rolls=['ROLL_ID','ORDER_UID','SHEET_SOURCE','ORDER_ROW','ARTICLE','ROLL_NAME','ROLL_NUMBER','PRINT_READY','CUT_READY','CREATED_AT','UPDATED_AT','ROLL_QUANTITY','PRINT_DONE_AT','PRINT_EMPLOYEE','CUT_DONE_AT','CUT_EMPLOYEE','LEGACY_SOURCE'];
+ const progress=['EVENT_ID','ROLL_ID','ORDER_UID','SHEET_SOURCE','ORDER_ROW','ARTICLE','OPERATION','EMPLOYEE','DATE','QUANTITY','AREA_PER_ITEM','AREA','ENTERED_AT','COMMENT'];
+ const base={events:[],cutEvents:[],issues:[],supplies:[]};
+ const options={spreadsheetId:'stock-book',sheets:[{gid:1,name:'Запасы склад'},{gid:2,name:'Срочные 2 этаж'}],journalId:3,historyIds:[4,5]};
+ let histories=[[rolls],[progress]],fail=false;
+ const read=()=>loadStockRollPrinting(async url=>{const gid=Number(new URL(url).searchParams.get('gid'));if(fail&&gid===4)return new Response('',{status:503});return new Response(csv(gid===1?order:gid===2?empty:gid===3?[journal]:histories[gid-4]));},base,options);
+ const before=structuredClone(order);let result=await read();
+ assert.equal(result.stockRoll.status,'available');assert.equal(result.stockRoll.orders[0].planningPrinted,0);assert.equal(result.stockRoll.orders[0].planningCut,0);assert.deepEqual(order,before);
+ histories=[[rolls,['roll-id',uid,'Запасы склад',5,'FD-TEST']],[progress]];result=await read();assert.equal(result.stockRoll.orders[0].planningPrinted,undefined);
+ histories=[[rolls],[progress]];fail=true;result=await read();assert.equal(result.stockRoll.status,'available');assert.equal(result.stockRoll.orders[0].planningPrinted,undefined);
+ fail=false;histories=[[['unexpected header']],[progress]];result=await read();assert.equal(result.stockRoll.orders[0].planningPrinted,undefined);
+ histories=[[rolls],[progress]];order[4][24]='#N/A';result=await read();assert.equal(result.stockRoll.orders[0].planningPrinted,undefined);
+});
+test('box stock orders remain separate from supply and Assembly lists',async()=>{
+ const csv=rows=>rows.map(row=>row.map(v=>'"'+String(v??'').replaceAll('"','""')+'"').join(',')).join('\n');
+ const rows=Array.from({length:5},()=>Array(30).fill(''));rows[3][3]='Станок';rows[3][4]='Артикул';rows[3][15]='Кол-во';rows[4][3]='XEROX';rows[4][4]='A';rows[4][15]=10;
+ const result=await loadStockBoxOrders(async()=>new Response(csv(rows)),{supplies:[]},{spreadsheetId:'stock-book',sheets:[{gid:1,name:'Запасы склад'},{gid:2,name:'Срочные 2 этаж'}]});
+ assert.equal(result.stockBox.status,'available');assert.equal(result.stockBox.orders.length,2);assert.equal(result.supplies.length,0);
+});
+test('box stock reads the unlabeled AD identity and rejects a conflicting template',async()=>{
+ const csv=rows=>rows.map(row=>row.map(v=>'"'+String(v??'').replaceAll('"','""')+'"').join(',')).join('\n');
+ const rows=Array.from({length:5},()=>Array(30).fill(''));rows[3][3]='Станок';rows[3][4]='Артикул';rows[3][15]='Кол-во';rows[3][28]='Порезано годных';rows[4][3]='XEROX';rows[4][4]='TEST';rows[4][15]=10;rows[4][28]=0;rows[4][29]='ritm-test-uid';
+ const options={spreadsheetId:'stock-book',sheets:[{gid:1,name:'Запасы склад'},{gid:2,name:'Срочные 2 этаж'}]};
+ const read=()=>loadStockBoxOrders(async()=>new Response(csv(rows)),{supplies:[]},options);
+ const valid=await read();assert.equal(valid.stockBox.status,'available');
+ assert.equal(valid.stockBox.orders[0].rawUid,'ritm-test-uid');
+ assert.equal(valid.stockBox.orders[0].uid,'1::ritm-test-uid');
+ rows[3][29]='Другая колонка';assert.equal((await read()).stockBox.status,'unavailable');
+});
+test('archived stock order keeps roll production visible after its source row is cleared',async()=>{
+ const csv=rows=>rows.map(row=>row.map(v=>'"'+String(v??'').replaceAll('"','""')+'"').join(',')).join('\n');
+ const empty=Array.from({length:5},()=>Array(30).fill(''));empty[0][29]='UID';empty[3][4]='Артикул';empty[3][15]='Кол-во';
+ const header=Array(15).fill('');for(const [col,value] of Object.entries(PRINTING_SOURCES.find(s=>s.id==='roll-printing').journal.expectedHeaders))header[col]=value;
+ const event=Array(15).fill('');event[0]='event';event[1]='04.11.2026';event[2]='Дмитрий';event[3]='Печать';event[4]='Запасы склад';event[6]='A';event[7]='old-id';event[9]=5;event[11]=1;
+ const values=Array(30).fill('');values[4]='A';values[15]=5;values[29]='old-id';
+ const archive=[['Операция','Дата','Лист','Строка','UID','Артикул','План','Данные строки'],['operation','2026-11-06T12:00:00Z','Запасы склад',5,'old-id','A',5,JSON.stringify({values})]];
+ const base={events:[],cutEvents:[],issues:[],supplies:[]};const result=await loadStockRollPrinting(async url=>{const gid=Number(new URL(url).searchParams.get('gid'));return new Response(csv(gid===4?archive:gid===3?[header,event]:empty));},base,{spreadsheetId:'stock-book',sheets:[{gid:1,name:'Запасы склад'},{gid:2,name:'Срочные 2 этаж'}],journalId:3,archiveId:4});
+ assert.equal(result.stockRoll.status,'available');assert.equal(result.events.length,1);assert.equal(result.events[0].quantity,5);
+});
 
 test("store lookup respects marketplace aliases, errors and conflicting duplicates", () => {
   const catalog = {
@@ -49,9 +115,18 @@ test("new registered roll, box and shared supplies load automatically with stabl
     { department: "roll", documentId: ROLL_PRINTING_SHEET_ID, sheetId: 900103, article: "ROLL-ONLY", quantity: 11 },
     { department: "box", documentId: BOX_PRINTING_SHEET_ID, sheetId: 900104, article: "BOX-ONLY", quantity: 17 },
   ];
-  const requested = [];
+  const requested = [], activeBooks = new Map();
+  let activeReads = 0, peakReads = 0;
   const result = await loadPrinting(async url => {
     const parsed = new URL(url), documentId = parsed.pathname.split('/')[3], gid = Number(parsed.searchParams.get('gid'));
+    activeReads++;
+    peakReads = Math.max(peakReads, activeReads);
+    activeBooks.set(documentId,(activeBooks.get(documentId)||0)+1);
+    assert.equal(activeBooks.size,1,'raw grids of different workbooks must not overlap');
+    await new Promise(resolve=>setTimeout(resolve,1));
+    activeReads--;
+    const remaining = activeBooks.get(documentId)-1;
+    if (remaining) activeBooks.set(documentId,remaining); else activeBooks.delete(documentId);
     requested.push(documentId + ':' + gid);
     const source = PRINTING_SOURCES.find(s => s.spreadsheetId === documentId);
     if (source?.journal?.gid === gid) {
@@ -78,6 +153,7 @@ test("new registered roll, box and shared supplies load automatically with stabl
     ],
   });
   assert.equal(result.supplies.length, 4);
+  assert.ok(peakReads > 1 && peakReads <= 4,'source reads are concurrent but bounded');
   assert.equal(result.supplies.reduce((sum, item) => sum + item.quantity, 0), 48);
   for (const part of parts) {
     assert.equal(requested.filter(key => key === part.documentId + ':' + part.sheetId).length, 1);
@@ -190,6 +266,16 @@ const ix = {
   byRaw: { [o.uid]: [o] },
   issues: [],
 };
+
+test('journal rate metadata comes from the exact source order, never another article match',()=>{
+ const order={...o,machine:'2-GO',sourceId:'roll-printing'};
+ const index={...ix,orders:[order],byUid:{[order.uid]:order},byRaw:{[order.uid]:[order]}};
+ const row=['meta','12.11.2026','Дмитрий','Печать',order.sheetName,4,order.article,order.uid,'Д1',10,1,10];
+ assert.equal(collectJournalPrinting(index,[row]).events[0].machine,'2-GO');
+ const removed={...index,orders:[],byUid:{},byRaw:{}};
+ const historical=collectJournalPrinting(removed,[row],{orderFallback:order,journalOrderFallback:{...order,machine:undefined}});
+ assert.equal(historical.events.length,1,'historical output remains in its KPI');assert.equal(historical.events[0].machine,null,'historical facts do not acquire a guessed machine');
+});
 const log = (
   qty = 40,
   area = 7.04,
@@ -215,6 +301,26 @@ const log = (
 ];
 const total = (r) => r.events.reduce((n, e) => n + e.area, 0);
 const calc = (js) => collectJournalPrinting(ix, js);
+
+test('a removed/transferred order keeps journal print and cut facts for every configured shipment',()=>{
+  const empty={orders:[],byUid:{},byRaw:{},issues:[]};
+  const fallback=name=>({sheetId:name==='First'?1:2,sheetName:name,journalAliases:[name],sourceId:'roll-printing',spreadsheetId:'roll-book'});
+  const row=log(50,10.56,'Паша','history-event','29.10.2026');row[4]='Second';row[6]='JD0038.A3705';row[7]='old-source-uid';
+  const options={sourceId:'roll-printing',orderFallbacks:[fallback('First'),fallback('Second')]};
+  const print=collectJournalPrinting(empty,[row],options);
+  assert.equal(print.issues.length,0);assert.equal(print.events.length,1);assert.equal(print.events[0].sheetId,2);assert.equal(print.events[0].area,10.56);assert.equal(print.events[0].quantity,50);
+  const cut=[...row];cut[0]='history-cut';cut[3]='Резка';cut[2]='Лукман';
+  assert.equal(collectJournalCutting(empty,[cut],options).events.length,1);
+  assert.equal(collectJournalPrinting(empty,[row,row],options).events.length,0,'duplicate event IDs remain excluded');
+  const unknown=[...row];unknown[4]='Unknown';assert.equal(collectJournalPrinting(empty,[unknown],options).events.length,0);
+  const incomplete=[...row];incomplete[7]='';assert.equal(collectJournalPrinting(empty,[incomplete],options).events.length,0);
+  assert.equal(collectJournalPrinting(empty,[row],{...options,orderFallbacks:[fallback('Second'),fallback('Second')]}).events.length,0,'ambiguous source descriptors remain excluded');
+  const archivedOptions={...options,journalOrderFallback:{sheetId:126956215,sourceId:'roll-printing',sourceUrl:'https://example.test/journal'}};
+  const archived=collectJournalPrinting(empty,[unknown],archivedOptions);
+  assert.equal(archived.events.length,1);assert.equal(archived.events[0].historical,true);assert.equal(archived.events[0].sheetName,'Unknown');assert.equal(archived.events[0].sourceUrl,'https://example.test/journal');
+  assert.equal(collectJournalPrinting(empty,[unknown,unknown],archivedOptions).events.length,0);
+  assert.equal(collectJournalPrinting(empty,[incomplete],archivedOptions).events.length,0);
+});
 test("CSV preserves multiline cells, quotes, decimal commas and Russian", () =>
   assert.deepEqual(
     parseCsv('a,b\r\n"первый\nлист","10,56"\r\n"с ""кавычками""",0'),
@@ -718,3 +824,25 @@ test("live loader combines both printing sources without double-counting summari
   assert.match(r.issues[0].message, /Нет количества или площади/);
 });
 test('legacy roll UID is taken only from the unlabeled former column next to current UID',()=>{const rows=Array.from({length:5},()=>Array(30).fill(''));rows[0][29]='UID';rows[3][4]='Артикул';rows[3][14]='Кол-во';rows[4][4]='JA0037.A0225';rows[4][14]='20';rows[4][28]='f6eeb59f-78aa-47c3-8392-f5f2885e95c0';rows[4][29]='new';const sheets=[{gid:119710351,name:'OZON test',rows,sourceId:'roll-printing',dataStartRow:5,headerRow:4,uidHeaderRow:1}];assert.equal(indexOrders(sheets).orders[0].legacyUid,rows[4][28]);rows[0][28]='Другие данные';assert.equal(indexOrders(sheets).orders[0].legacyUid,null);});
+
+
+test('forecast reads physical sheets and multiplicity by header and retains partial source totals without changing normal progress',()=>{
+ const headers=Array(30).fill('');headers[4]='Артикул';headers[6]='Кол-во листов';headers[13]='Кратность';headers[15]='Кол-во';headers[3]='Станок';headers[17]='Готовность печати';headers[18]='Готовность порезки';headers[27]='Напечатано годных (Xerox — листы, остальные — шт.)';headers[28]='Порезано годных (Xerox — листы, остальные — шт.)';
+ const row=Array(30).fill('');row[4]='XEROX-SKU';row[6]='4';row[13]='2';row[15]='100';row[3]='XEROX';row[17]='FALSE';row[18]='FALSE';row[27]='60';row[28]='20';row[29]='uid';
+ const top=Array(30).fill('');top[29]='UID';
+ const result=indexOrders([{gid:42,name:'OZON Test',sourceId:'box-printing',rows:[top,[],[],headers,row],headerRow:4,dataStartRow:5}]).orders[0];
+ assert.equal(result.quantity,100);assert.equal(result.sheetsInProduct,4);assert.equal(result.multiplicity,2);assert.equal(result.planningPrinted,60);assert.equal(result.planningCut,20);assert.equal(result.printProgress,0);
+});
+
+test('only an untouched RITM-created roll position receives forecast zero facts; legacy, work evidence and errors stay unknown',()=>{
+ const headers=Array(33).fill('');headers[4]='Артикул';headers[15]='Кол-во';headers[18]='Печать';headers[19]='Порезка';headers[20]='Прогресс печати';headers[21]='Прогресс порезки';headers[22]='Дата готовности печати';headers[23]='Дата готовности порезки';headers[24]='остаток по печати:';headers[27]='Рулоны';
+ const top=Array(33).fill('');top[29]='UID';
+ const row=Array(33).fill('');row[4]='NEW-SKU';row[15]='20';row[24]='20';row[29]='ritm-8bccc1a2-a162-4ba5-b63d-bb54eac2f5e1-1';
+ const read=(r,h=headers)=>indexOrders([{gid:42,name:'OZON Test',sourceId:'roll-printing',rows:[top,[],[],h,r],headerRow:4,dataStartRow:5}]).orders[0];
+ const before=structuredClone(row),result=read(row);
+ assert.equal(result.planningPrinted,0);assert.equal(result.planningCut,0);assert.equal(result.planningPhysicalUnits,false);assert.equal(result.cutProgress,null);assert.deepEqual(row,before);
+ for(const [column,value] of [[29,'legacy-uid'],[24,'10'],[18,'В работе'],[19,'Готов'],[20,'#N/A'],[21,'#REF!'],[22,'13.11.2026'],[23,'13.11.2026'],[27,'д25']]){
+   const changed=[...row];changed[column]=value;assert.equal(read(changed).planningCut,undefined,`must not infer zero from column ${column}`);
+ }
+ const missing=[...headers];missing[27]='';assert.equal(read(row,missing).planningCut,undefined);
+});

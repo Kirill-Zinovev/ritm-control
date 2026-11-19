@@ -75,11 +75,15 @@ export function unavailableAssemblyPacking(printing, checkedAt, reason) {
       ...order,
       packed: null,
       packingRecords: null,
+      packingEventIds: null,
+      assemblyMachineCut: null,
+      assemblyManualCut: null,
     })),
   };
 }
 
-export function readAssemblyPackingGrid(grid) {
+export function readAssemblyPackingGrid(grid, stage = "packing") {
+  if (!["packing", "cut", "assembly"].includes(stage)) throw new Error("worklog_stage_invalid");
   if (
     !grid ||
     grid.spreadsheetId !== RITM_ASSEMBLY_WORKLOG.documentId ||
@@ -137,7 +141,7 @@ export function readAssemblyPackingGrid(grid) {
     const shipmentId = String(value(row, "shipmentId") || "").trim();
     if (
       source !== RITM_ASSEMBLY_WORKLOG.source ||
-      operationId !== "packing" ||
+      operationId !== stage ||
       !isRitmAssemblyShipmentId(shipmentId)
     )
       continue;
@@ -214,7 +218,7 @@ export function attachAssemblyPacking(printing, workLog, checkedAt) {
     if (!["roll-printing", "box-printing"].includes(order.sourceId)) continue;
     const key = workPositionId(order);
     orderPositions.set(key, order);
-    byPosition.set(key, { quantity: 0, records: 0 });
+    byPosition.set(key, { quantity: 0, records: 0, eventIds: [] });
   }
 
   // Older Assembly events used source row identity before a UID was assigned.
@@ -263,6 +267,7 @@ export function attachAssemblyPacking(printing, workLog, checkedAt) {
     const summary = byPosition.get(workPositionId(order));
     summary.quantity += event.quantity;
     summary.records++;
+    summary.eventIds.push(event.eventId);
     eventCount++;
     if (!sourceUpdatedAt || Date.parse(event.createdAt) > Date.parse(sourceUpdatedAt))
       sourceUpdatedAt = event.createdAt;
@@ -276,12 +281,13 @@ export function attachAssemblyPacking(printing, workLog, checkedAt) {
       affectedShipments.has(shipmentId) ||
       affectedPositions.has(positionId)
     )
-      return { ...order, packed: null, packingRecords: null };
+      return { ...order, packed: null, packingRecords: null, packingEventIds: null };
     const summary = byPosition.get(positionId);
     return {
       ...order,
       packed: summary?.quantity ?? 0,
       packingRecords: summary?.records ?? 0,
+      packingEventIds: (summary?.eventIds || []).slice().sort(),
     };
   });
 
@@ -345,11 +351,7 @@ export async function loadAssemblyPacking(
       signal,
       5,
     );
-    return attachAssemblyPacking(
-      printing,
-      readAssemblyPackingGrid(grid),
-      checkedAt,
-    );
+    return attachAssemblyWorkStages(printing, grid, checkedAt);
   } catch (error) {
     const reason =
       String(error?.message || "").startsWith("assembly_corrections_")
@@ -359,4 +361,19 @@ export async function loadAssemblyPacking(
         : "Журнал упаковки временно недоступен. Нажмите «Обновить» и повторите проверку.";
     return unavailableAssemblyPacking(printing, checkedAt, reason);
   }
+}
+
+// All three stages use the same immutable position/department identity and
+// cancellation checks. They share one Sheets read; cutting never becomes
+// packing and a bad cutting record cannot invalidate confirmed packing.
+export function attachAssemblyWorkStages(printing, grid, checkedAt) {
+  const stages={packing:readAssemblyPackingGrid(grid),cut:readAssemblyPackingGrid(grid,'cut'),assembly:readAssemblyPackingGrid(grid,'assembly'),checkedAt};
+  const packed = attachAssemblyPacking(printing, stages.packing, checkedAt);
+  const machine = attachAssemblyPacking(printing, stages.cut, checkedAt);
+  const manual = attachAssemblyPacking(printing, stages.assembly, checkedAt);
+  return { ...packed, _assemblyStages:stages, supplies: packed.supplies.map((order, index) => ({
+    ...order,
+    assemblyMachineCut: machine.supplies[index].packed ?? null,
+    assemblyManualCut: manual.supplies[index].packed ?? null,
+  })) };
 }

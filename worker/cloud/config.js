@@ -8,7 +8,7 @@ export function sourceId(bindings, key) {
 }
 
 export function sourceIds(bindings) {
-  return [...new Set([...keys, "photosId", "assemblyPhotosId", "boxJournalId", "machineLayoutsId"].map((key) => sourceId(bindings, key)).filter(Boolean))];
+  return [...new Set([...keys, "photosId", "assemblyPhotosId", "boxJournalId", "stockBoxJournalId", "stockBoxPrintingId", "stockRollPrintingId", "machineLayoutsId"].map((key) => sourceId(bindings, key)).filter(Boolean))];
 }
 
 export function cloudConfig(bindings) {
@@ -17,7 +17,7 @@ export function cloudConfig(bindings) {
   return {
     owners,
     sources: sourceIds(bindings),
-    writableSources: [sourceId(bindings, "rollPrintingId"), sourceId(bindings, "boxPrintingId")].filter(Boolean),
+    writableSources: [sourceId(bindings, "rollPrintingId"), sourceId(bindings, "boxPrintingId"), sourceId(bindings, "stockRollPrintingId"), sourceId(bindings, "stockBoxPrintingId")].filter(Boolean),
     missing,
     configured: missing.length === 0 && owners.length > 0 && !!bindings.RITM_GOOGLE_READER_JSON && !!bindings.DB,
     writesEnabled: bindings.RITM_CLOUD_WRITES_ENABLED === "true" && !!bindings.RITM_CLOUD_CUTOVER_ID,

@@ -75,6 +75,54 @@
   background: rgba(255, 255, 255, 0.97);
 }
 
+/* Olive branches frame the workspace without participating in interaction. */
+.app--atmosphere::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 1;
+  width: 300px;
+  height: 108px;
+  background: url("/images/shipment-leaves.png") right top / 300px auto no-repeat;
+  filter: saturate(2.5) hue-rotate(12deg) brightness(1.06);
+  pointer-events: none;
+}
+
+.app--atmosphere .page-header {
+  padding-right: 230px;
+}
+
+.app--atmosphere .sidebar-footer {
+  position: relative;
+  isolation: isolate;
+}
+
+.app--atmosphere .sidebar-footer::before {
+  content: "";
+  position: absolute;
+  left: -17px;
+  bottom: calc(100% + 8px);
+  z-index: -1;
+  width: 205px;
+  height: 135px;
+  background: url("/images/shipment-leaves.png") right top / contain no-repeat;
+  transform: rotate(180deg);
+  pointer-events: none;
+  filter: saturate(2.5) hue-rotate(12deg) brightness(1.06);
+}
+
+.app--atmosphere .sidebar .nav-link:not(.active) {
+  background-color: rgba(255, 255, 255, 0.93);
+}
+.app--atmosphere .sidebar nav {
+  position: relative;
+  z-index: 1;
+}
+.app--atmosphere .sidebar .nav-link:not(.active):hover {
+  background-color: #f1f6fc;
+}
+
 .app--atmosphere .panel {
   border-color: rgba(130, 158, 190, 0.17);
   box-shadow: var(--shadow-soft);
@@ -96,6 +144,22 @@
   .ritm-backdrop svg {
     display: none;
   }
+  .app--atmosphere::after {
+    width: 150px;
+    height: 85px;
+    background-size: 150px auto;
+    opacity: 0.8;
+  }
+  .app--atmosphere .page-header { padding-right: 115px; }
+}
+
+@media (max-width: 600px) {
+  .app--atmosphere::after { width: 105px; height: 58px; background-size: 105px auto; }
+  .app--atmosphere .page-header { padding-right: 75px; }
+}
+
+@media (max-height: 800px) {
+  .app--atmosphere .sidebar-footer::before { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -110,4 +174,5 @@
   .ritm-backdrop {
     display: none;
   }
+  .app--atmosphere::after, .app--atmosphere .sidebar-footer::before { display: none; }
 }

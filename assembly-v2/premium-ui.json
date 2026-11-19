@@ -1,0 +1,25 @@
+{
+  "profile": "product-admin",
+  "sourceRoots": ["src"],
+  "locale": "ru-RU",
+  "canonicalMap": "UX-CONTRACT.md",
+  "requiredCapabilities": [
+    "Table Selection",
+    "Select/Listbox",
+    "Form",
+    "Scrollbar",
+    "Toast",
+    "CRUD"
+  ],
+  "ownership": { "Select/Listbox": "native" },
+  "requiredCommands": ["unit", "typecheck", "build"],
+  "commands": {
+    "unit": "npm test",
+    "typecheck": "npm run typecheck",
+    "build": "npm run build"
+  },
+  "evidence": {
+    "crudFullFlow": "tests/database.test.ts",
+    "failurePaths": "tests/database.test.ts"
+  }
+}

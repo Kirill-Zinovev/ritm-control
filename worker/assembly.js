@@ -482,7 +482,7 @@ async function loadFboNorms_(fetcher) {
   }
 }
 
-function workLogRecords(events) {
+export function workLogRecords(events) {
   return events.map((event) => ({
     id: event.eventId,
     identityKey: "assembly:" + event.employeeId,

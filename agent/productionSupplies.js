@@ -1,6 +1,9 @@
+import {validateDeadlines} from '../shared/productionPlanning.js';
+import {xeroxExtensionIssue} from '../shared/productionRouting.js';
 import { createHash, randomUUID } from "node:crypto";
 import {
   RollSupplySheetsWriter,
+  MAX_SUPPLY_QUANTITY,
   validateRollSupplyPayload,
   supplyManifestRequests,
 } from "./rollSupply.js";
@@ -9,6 +12,7 @@ import {
   ROLL_PRINTING_SHEET,
 } from "../worker/printing.js";
 import { privateGoogleSource } from "../worker/privateGoogleConfig.js";
+import { xeroxPlanRounding, xeroxSheetCount } from "./xeroxQuantity.js";
 
 export const CATALOG_ID = privateGoogleSource("catalogId");
 export const DEPARTMENTS = Object.freeze({
@@ -69,7 +73,7 @@ export function machineDepartment(machine) {
     .trim()
     .toUpperCase()
     .replace(/\s+/gu, " ");
-  if (["2-GO", "УФ", "УФ БЕЛ.", "УФ. БЕЛ", "УФ ДВУСТОРОННИЙ"].includes(key))
+  if (["2-GO", "УФ", "УФ БЕЛ.", "УФ. БЕЛ", "УФ БЕЛЫЙ", "УФ ДВУСТОРОННИЙ"].includes(key))
     return "roll";
   if (["УФ ПЛАНШЕТ", "DTF", "XEROX"].includes(key)) return "box";
   return null;
@@ -174,6 +178,11 @@ export function routeSupplyLines(lines, marketplace, catalog) {
           ? "Для артикула в базе указаны разные расширения печати"
           : "Расширение печати не найдено во вкладке «расширения»",
       };
+    const routingIssue = extension && !extension.conflict
+      ? xeroxExtensionIssue(department, machine, extension.value)
+      : null;
+    if (routingIssue)
+      return {...line, machine, extension: extension.value, department: null, issue: routingIssue};
     return {
       ...line,
       machine,
@@ -198,6 +207,42 @@ export class ProductionSupplyWriter extends RollSupplySheetsWriter {
       template: target.template,
       box: department === "box",
     });
+  }
+  async xeroxFormats(marketplace, articles) {
+    // Box templates use these lookups for columns G (sheets) and N (Xerox layout).
+    const ranges = [
+      "'_RITM_МАКЕТЫ'!A:A", "'_RITM_МАКЕТЫ'!P:P",
+      "'_RITM_WB_SOURCE'!A:A", "'_RITM_WB_SOURCE'!B:B",
+      ...(marketplace === "OZON" ? ["'Cache FBO'!B:B", "'Cache FBO'!F:F"] : []),
+    ];
+    const params = new URLSearchParams({ valueRenderOption: "UNFORMATTED_VALUE", majorDimension: "COLUMNS" });
+    for (const range of ranges) params.append("ranges", range);
+    const data = await this.request(
+      `https://sheets.googleapis.com/v4/spreadsheets/${this.documentId}/values:batchGet?${params}`,
+    );
+    if (data.spreadsheetId !== this.documentId || data.valueRanges?.length !== ranges.length)
+      fail("production_xerox_source_unavailable", "Не удалось проверить параметры Xerox в таблице бокса.", 503);
+    const columns = data.valueRanges.map(range => range.values?.[0] || []);
+    if (columns[0][0] !== "Артикул" || columns[1][0] !== "Xerox")
+      fail("production_xerox_source_unavailable", "В таблице макетов изменились колонки Xerox. Проверьте справочник.", 503);
+    const needed = new Set(articles);
+    const read = (keys, values) => {
+      const byArticle = new Map();
+      keys?.forEach((key, row) => {
+        const article = String(key).toUpperCase();
+        if (needed.has(article) && !byArticle.has(article))
+          byArticle.set(article, values[row]);
+      });
+      return byArticle;
+    };
+    const multiplicities = read(columns[0], columns[1]);
+    const wb = read(columns[2], columns[3]);
+    const ozon = read(columns[4], columns[5]);
+    return new Map(articles.map(article => {
+      const ozonFactor = ozon.get(article);
+      const useWb = ozonFactor == null || ozonFactor === "" || ozonFactor === 0 || ozonFactor === "#N/A";
+      return [article, { factor: useWb ? wb.get(article) : ozonFactor, multiplicity: multiplicities.get(article) }];
+    }));
   }
   async verifyEditAccess() {
     // The Sites writer token is scoped to Google Sheets, and its cloud fetch
@@ -270,35 +315,43 @@ export class ProductionSupplyWriter extends RollSupplySheetsWriter {
 export class ProductionSupplyService {
   constructor(
     store,
-    { writers, legacy, now = () => Date.now(), refresh = null, refreshAfterWrite = true, recoverInterrupted = true, beforeCreateWrite = null } = {},
+    { writers, legacy, now = () => Date.now(), refresh = null, refreshAfterWrite = true, recoverInterrupted = true, beforeCreateWrite = null, onVerified = null } = {},
   ) {
-    Object.assign(this, { store, writers, legacy, now, refresh, refreshAfterWrite, beforeCreateWrite });
+    Object.assign(this, { store, writers, legacy, now, refresh, refreshAfterWrite, beforeCreateWrite, onVerified });
     this.previews = new Map();
     this.busy = false;
     // An interrupted write is never replayed. Its exact persisted plan must be
     // verified before the owner can continue the remaining, unsent steps.
-    for (const op of recoverInterrupted ? this.operations() : []) {
+    for (const candidate of recoverInterrupted ? this.operations() : []) {
+      if (!candidate.steps?.some(step => step.status === "writing") && !(candidate.status === "writing" && candidate.steps?.length && candidate.steps.every(step => step.status === "verified"))) continue;
+      const op = structuredClone(candidate);
       let changed = false;
       for (const step of op.steps)
         if (step.status === "writing") {
           step.status = "uncertain";
           changed = true;
         }
-      if (changed) {
+      const unfinishedCommit = op.status === "writing" && op.steps.length > 0 && op.steps.every(step => step.status === "verified");
+      if (changed || unfinishedCommit) {
         op.status = "partial";
+        if (unfinishedCommit) op.message = "Состав отделов сохранён и проверен. Требуется завершить подтверждение общей поставки.";
         this.save(op);
       }
     }
   }
   operations() {
+    if (typeof this.store.productionSupplyOperations === "function") return this.store.productionSupplyOperations();
     return this.store.meta(operationsKey) || [];
   }
   save(op) {
     op.updatedAt = new Date(this.now()).toISOString();
-    this.store.meta(operationsKey, [
+    if (typeof this.store.saveProductionSupplyOperation === "function")
+      this.store.saveProductionSupplyOperation(op);
+    else this.store.meta(operationsKey, [
       ...this.operations().filter((p) => p.id !== op.id),
       op,
     ]);
+    if (op.status === 'verified') this.onVerified?.(op);
   }
   remainingSkipped(op, history) {
     if (!op.skippedLines?.length) return [];
@@ -360,7 +413,7 @@ export class ProductionSupplyService {
       operations: history
         .filter(
           (op, index) =>
-            (op.action !== "deletePart" || op.status !== "verified") &&
+            (!["deletePart", "deleteSupply"].includes(op.action) || op.status !== "verified") &&
             (index >= history.length - 100 ||
               op.status !== "verified" ||
               this.remainingSkipped(op, history).length),
@@ -371,23 +424,22 @@ export class ProductionSupplyService {
     };
   }
   async prepareDeletePart(input) {
+    const whole = input?.action === "deleteSupply";
     const required = [
       "action",
-      "department",
       "explicitWriteApproval",
       "name",
       "operationId",
-      "sheetId",
+      ...(whole ? ["shipmentId"] : ["department", "sheetId"]),
     ].sort();
     if (
       !input ||
       Object.keys(input).sort().join(",") !== required.join(",") ||
-      input.action !== "deletePart" ||
+      (!whole && input.action !== "deletePart") ||
       input.explicitWriteApproval !== true ||
-      !["roll", "box"].includes(input.department) ||
+      (whole ? !/^RITM-(SUPPLY-[a-f0-9-]{36}|ROLL-\d+|BOX-\d+)$/i.test(input.shipmentId || "") :
+        !["roll", "box"].includes(input.department) || !Number.isSafeInteger(input.sheetId) || input.sheetId <= 0) ||
       !/^[a-f0-9-]{36}$/i.test(input.operationId || "") ||
-      !Number.isSafeInteger(input.sheetId) ||
-      input.sheetId <= 0 ||
       typeof input.name !== "string" ||
       !input.name.trim() ||
       input.name.trim() !== input.name ||
@@ -399,14 +451,8 @@ export class ProductionSupplyService {
         "Подтвердите точный лист и отдел, который нужно удалить.",
         400,
       );
-    if (input.sheetId === DEPARTMENTS[input.department].template.gid)
-      fail(
-        "production_delete_template_forbidden",
-        "Лист-шаблон отдела производства удалять нельзя.",
-        403,
-      );
     const supply = (this.store.meta(registryKey) || []).find((candidate) =>
-      candidate.parts?.some(
+      whole ? candidate.id === input.shipmentId : candidate.parts?.some(
         (part) =>
           part.department === input.department &&
           part.sheetId === input.sheetId,
@@ -417,10 +463,13 @@ export class ProductionSupplyService {
         "production_delete_part_unregistered",
         "Этот лист не найден в подтверждённом составе общей поставки. Обновите список.",
       );
-    const target = supply.parts.find(
-      (part) => part.department === input.department && part.sheetId === input.sheetId,
-    );
-    const before = await this.writers[input.department].manifest(input.sheetId);
+    const targets = whole ? supply.parts : supply.parts.filter(
+      (part) => part.department === input.department && part.sheetId === input.sheetId);
+    if (!targets?.length || targets.some(part =>
+      !DEPARTMENTS[part.department] || part.sheetId === DEPARTMENTS[part.department].template.gid))
+      fail("production_delete_template_forbidden", "Лист-шаблон отдела производства удалять нельзя.", 403);
+    const [target] = targets;
+    const before = await this.writers[target.department].manifest(target.sheetId);
     if (
       !before ||
       before.ready !== true ||
@@ -428,9 +477,9 @@ export class ProductionSupplyService {
       before.name !== supply.name ||
       !before.parts.some(
         (part) =>
-          part.department === input.department &&
-          part.documentId === DEPARTMENTS[input.department].documentId &&
-          part.sheetId === input.sheetId,
+          part.department === target.department &&
+          part.documentId === DEPARTMENTS[target.department].documentId &&
+          part.sheetId === target.sheetId,
       )
     )
       fail(
@@ -456,14 +505,14 @@ export class ProductionSupplyService {
         "production_delete_manifest_conflict",
         "Состав листов в реестре не совпадает со связью в таблице.",
       );
-    const survivors = before.parts.filter(
+    const survivors = whole ? [] : before.parts.filter(
       (part) =>
         !(
           part.department === input.department &&
           part.sheetId === input.sheetId
         ),
     );
-    if (survivors.length !== before.parts.length - 1)
+    if (!whole && survivors.length !== before.parts.length - 1)
       fail(
         "production_delete_manifest_conflict",
         "Состав листов в реестре не совпадает со связью в таблице.",
@@ -483,23 +532,23 @@ export class ProductionSupplyService {
           "Оба отдела должны иметь одну и ту же подтверждённую связь перед удалением.",
         );
     }
-    const plan = await this.writers[input.department].prepareDelete({
-      name: input.name,
-      sheetId: input.sheetId,
-    });
+    const plans = await Promise.all(targets.map(async part => ({
+      department: part.department,
+      plan: await this.writers[part.department].prepareDelete({ name: part.name || input.name, sheetId: part.sheetId }),
+    })));
     return {
       id: input.operationId,
-      action: "deletePart",
+      action: input.action,
       requestHash: digest(input),
       shipmentId: supply.id,
       name: supply.name,
-      department: input.department,
-      sheetId: input.sheetId,
+      department: input.department || null,
+      sheetId: input.sheetId || null,
       status: "writing",
       message: null,
       steps: [],
       lines: [],
-      deletePlan: plan,
+      ...(whole ? { deletePlans: plans } : { deletePlan: plans[0].plan }),
       manifestBefore: before,
       manifestAfter: survivors.length
         ? {
@@ -529,26 +578,23 @@ export class ProductionSupplyService {
     this.busy = true;
     if (this.legacy) this.legacy.busy = true;
     try {
-      const writer = this.writers[op.department];
-      const liveTarget = (await writer.metadata()).find(
-        (sheet) => sheet.sheetId === op.sheetId,
-      );
-      if (liveTarget) {
-        if (liveTarget.title !== op.name)
-          fail(
-            "production_delete_sheet_changed",
-            "Название листа изменилось после подтверждения. Удаление остановлено.",
-          );
-        const liveManifest = await writer.manifest(op.sheetId);
-        if (digest(liveManifest) !== digest(op.manifestBefore))
-          fail(
-            "production_delete_manifest_changed",
-            "Связь листа изменилась после подтверждения. Удаление остановлено.",
-          );
-        await writer.execute(op.deletePlan);
+      const plans = op.deletePlans || [{ department: op.department, plan: op.deletePlan }];
+      const remaining = await Promise.all(plans.map(async ({ department, plan }) => {
+        const writer = this.writers[department];
+        const sheet = (await writer.metadata()).find(row => row.sheetId === plan.sheetId);
+        if (!sheet) return null;
+        if (sheet.title !== plan.name)
+          fail("production_delete_sheet_changed", "Название листа изменилось после подтверждения. Удаление остановлено.");
+        if (digest(await writer.manifest(plan.sheetId)) !== digest(op.manifestBefore))
+          fail("production_delete_manifest_changed", "Связь листа изменилась после подтверждения. Удаление остановлено.");
+        return { writer, plan };
+      }));
+      for (const item of remaining) {
+        if (!item) continue;
+        await item.writer.execute(item.plan);
         op.status = "checking";
         this.save(op);
-        await writer.verify(op.deletePlan);
+        await item.writer.verify(item.plan);
       }
       for (const part of op.survivors) {
         const survivorWriter = this.writers[part.department];
@@ -599,21 +645,27 @@ export class ProductionSupplyService {
             )
           : registry.filter((item) => item.id !== op.shipmentId),
       );
-      if (op.department === "roll")
+      const deletedRollIds = new Set(plans.filter(item => item.department === "roll").map(item => item.plan.sheetId));
+      if (deletedRollIds.size)
         this.store.meta(
           "rollPrintingAdditionalSheets",
           (this.store.meta("rollPrintingAdditionalSheets") || []).filter(
-            (sheet) => sheet.gid !== op.sheetId,
+            (sheet) => !deletedRollIds.has(sheet.gid),
           ),
         );
+      const retired = new Set(this.store.meta("retiredProductionTabs") || []);
+      for (const { department, plan } of plans) retired.add(`${department}:${plan.sheetId}`);
+      this.store.meta("retiredProductionTabs", [...retired]);
       op.status = "verified";
-      op.message = op.survivors.length
+      op.message = op.action === "deleteSupply"
+        ? "Поставка удалена из рабочих таблиц. Состав нового Assembly обновляется."
+        : op.survivors.length
         ? `Удалена часть «${DEPARTMENTS[op.department].name}». Вторая часть поставки сохранена.`
         : `Удалена последняя часть «${DEPARTMENTS[op.department].name}»; общая поставка снята со сборки.`;
       this.save(op);
       this.store.log("production_supply_department_deleted", op.message, null);
       try {
-        await this.refresh?.();
+        if (this.refreshAfterWrite) await this.refresh?.();
       } catch {
         /* Verified sheet and manifest state remain authoritative. */
       }
@@ -679,8 +731,25 @@ export class ProductionSupplyService {
     };
   }
   normalize(input) {
-    const { previewId, department, ...raw } = input || {};
+    const { previewId, department, priority, reminderMinutes, planning, xeroxRounding, ...raw } = input || {};
+    if (reminderMinutes !== undefined && (raw.action !== "create" || priority !== "urgent" || ![0, 30, 60, 120, 240].includes(reminderMinutes)))
+      fail("production_reminder_invalid", "Выберите время напоминания для срочной поставки.", 400);
+    if (priority !== undefined && (raw.action !== 'create' || !['normal', 'urgent'].includes(priority)))
+      fail('production_priority_invalid', 'Выберите обычную или срочную поставку.', 400);
+    if (raw.action === 'create' && priority === 'urgent') {
+      if (typeof raw.name !== 'string' || raw.name.trim().length > 97)
+        fail('production_priority_name_invalid', 'Для срочной поставки сократите название до 97 символов.', 400);
+      raw.name = `${raw.name.trim().replace(/\s*🔥$/u, '')} 🔥`;
+    }
+    let dates;
+    if (planning !== undefined) {
+      if (raw.action !== 'create') fail('production_planning_invalid','Даты задаются при создании поставки.',400);
+      try { dates = validateDeadlines(planning); } catch(error) { fail('production_planning_invalid',error.message,400); }
+    }
     const payload = validateRollSupplyPayload(raw);
+    if (dates) payload.planning = dates;
+    if (payload.action === 'create' && priority !== undefined) payload.priority = priority;
+    if (reminderMinutes !== undefined) payload.reminderMinutes = reminderMinutes;
     if (!["create", "append"].includes(payload.action))
       fail(
         "production_action_invalid",
@@ -689,7 +758,39 @@ export class ProductionSupplyService {
     if (department !== undefined && !["roll", "box"].includes(department))
       fail("production_department_invalid", "Неизвестный отдел производства.");
     if (payload.action === "append") payload.department = department || "roll";
-    return { payload, previewId };
+    const decisions = new Map();
+    if (xeroxRounding !== undefined) {
+      if (payload.action !== "create" || !Array.isArray(xeroxRounding) || xeroxRounding.length > payload.lines.length)
+        fail("production_xerox_rounding_required", "Проверьте выбранное округление Xerox.", 400);
+      for (const choice of xeroxRounding) {
+        const article = typeof choice?.article === "string" ? articleKey(choice.article) : "";
+        if (!article || article.length > 120 || decisions.has(article) ||
+            Object.keys(choice).sort().join(",") !== "article,direction" ||
+            !["down", "up"].includes(choice.direction))
+          fail("production_xerox_rounding_required", "Проверьте выбранное округление Xerox.", 400);
+        decisions.set(article, choice.direction);
+      }
+    }
+    return { payload, previewId, decisions };
+  }
+  async routedLines(payload) {
+    const marketplace = shipmentMarketplace(payload.name);
+    const routed = routeSupplyLines(payload.lines, marketplace, await this.catalog());
+    if (payload.action !== "create") return routed;
+    const isXerox = line => line.department === "box" && line.machine.toUpperCase() === "XEROX";
+    const articles = routed.filter(isXerox).map(line => articleKey(line.article));
+    if (!articles.length) return routed;
+    const formats = await this.writers.box.xeroxFormats(marketplace, articles);
+    return routed.map(line => {
+      if (!isXerox(line)) return line;
+      const { factor, multiplicity } = formats.get(articleKey(line.article)) || {};
+      const rounding = xeroxPlanRounding(line.quantity, factor, multiplicity, { minimum: 0, maximum: MAX_SUPPLY_QUANTITY });
+      if (rounding) return { ...line, rounding };
+      const xeroxSheets = xeroxSheetCount(line.quantity, factor, multiplicity);
+      return xeroxSheets === null
+        ? { ...line, xeroxIssue: "Нет подтверждённых параметров Xerox для расчёта листов." }
+        : { ...line, xeroxSheets };
+    });
   }
   async preview(input) {
     if (!this.state().available)
@@ -698,12 +799,10 @@ export class ProductionSupplyService {
         "Запись в оба отдела пока не настроена.",
         503,
       );
-    const { payload } = this.normalize(input);
-    const routed = routeSupplyLines(
-      payload.lines,
-      shipmentMarketplace(payload.name),
-      await this.catalog(),
-    );
+    const { payload, decisions } = this.normalize(input);
+    if (decisions.size)
+      fail("production_xerox_rounding_required", "Выберите округление после проверки распределения.", 400);
+    const routed = await this.routedLines(payload);
     const id = randomUUID();
     const value = {
       id,
@@ -878,9 +977,13 @@ export class ProductionSupplyService {
       shipmentId: id,
       action: payload.action,
       name: payload.name,
+      ...(payload.action === 'create' && payload.priority ? { priority: payload.priority } : {}),
+      ...(payload.action === 'create' && payload.reminderMinutes !== undefined ? { reminderMinutes: payload.reminderMinutes } : {}),
+      createdAt: new Date(this.now()).toISOString(),
       ...(payload.action === "create" && payload.lockAfterCreate === true ? { lockAfterCreate: true } : {}),
       lines: payload.lines,
-      skippedLines: routed.filter((l) => !l.department),
+      skippedLines: routed.filter((l) => !l.department && l.quantity > 0),
+      ...(payload.planning ? {planning:payload.planning} : {}),
       requestHash: digest(payload),
       status: "writing",
       steps,
@@ -918,7 +1021,7 @@ export class ProductionSupplyService {
         "Запись в оба отдела пока не настроена.",
         503,
       );
-    if (input?.action === "deletePart") {
+    if (["deletePart", "deleteSupply"].includes(input?.action)) {
       const same = this.operations().find((item) => item.id === input.operationId);
       if (same) {
         if (same.requestHash !== digest(input))
@@ -946,7 +1049,7 @@ export class ProductionSupplyService {
       return this.runDeletePart(op);
     }
     const resume = input?.action === "resume";
-    let payload, op;
+    let payload, op, decisions, requestHash;
     if (resume) {
       if (
         Object.keys(input).sort().join() !==
@@ -957,16 +1060,18 @@ export class ProductionSupplyService {
           "production_confirmation_required",
           "Подтвердите продолжение этой операции.",
         );
-      op = this.operations().find((o) => o.id === input.operationId);
+      op = structuredClone(this.operations().find((o) => o.id === input.operationId));
       if (!op)
         fail("production_operation_missing", "Операция не найдена.", 404);
-      if (op.action === "deletePart") return this.runDeletePart(op);
+      if (["deletePart", "deleteSupply"].includes(op.action)) return this.runDeletePart(op);
     } else {
       const normalized = this.normalize(input);
       payload = normalized.payload;
+      decisions = normalized.decisions;
+      requestHash = digest(decisions.size ? { ...payload, xeroxRounding: [...decisions].sort() } : payload);
       op = this.operations().find((o) => o.id === payload.operationId);
       if (op) {
-        if (op.requestHash !== digest(payload))
+        if (op.requestHash !== requestHash)
           fail(
             "production_operation_conflict",
             "Этот ID уже использован для другого состава поставки.",
@@ -1012,18 +1117,28 @@ export class ProductionSupplyService {
     if (this.legacy) this.legacy.busy = true;
     try {
       if (!op) {
-        const fresh = routeSupplyLines(
-          payload.lines,
-          shipmentMarketplace(payload.name),
-          await this.catalog(),
-        );
+        const fresh = await this.routedLines(payload);
         if (digest(fresh) !== digest(this.previewById(input.previewId)?.routed))
           fail(
             "production_routing_changed",
-            "Станки в базе изменились. Проверьте распределение заново.",
+            "Станки или параметры Xerox изменились. Проверьте распределение заново.",
           );
+        const confirmed = fresh.map(line => {
+          if (!line.rounding) return line;
+          const article = articleKey(line.article);
+          const choice = line.rounding.choices.find(option => option.direction === decisions.get(article));
+          if (!choice)
+            fail("production_xerox_rounding_required", `Выберите количество Xerox для «${line.article}».`);
+          decisions.delete(article);
+          return { ...line, quantity: choice.quantity, department: choice.quantity ? line.department : null };
+        });
+        if (decisions.size)
+          fail("production_xerox_rounding_required", "Список округлений изменился. Проверьте распределение заново.");
+        if (!confirmed.some(line => line.department))
+          fail("production_xerox_rounding_required", "Добавьте хотя бы одну позицию с количеством больше нуля.");
         // Preflight every destination before the first production write.
-        op = await this.prepare(payload, fresh);
+        op = await this.prepare(payload, confirmed);
+        op.requestHash = requestHash;
         this.save(op);
         this.store.log(
           "production_supply_owner_approved",
@@ -1166,6 +1281,7 @@ export class ProductionSupplyService {
           id: op.shipmentId,
           name: op.name,
           parts: op.manifest.parts.map((p) => ({ ...p, name: op.name })),
+          ...((registry.find(s => s.id === op.shipmentId)?.planning || op.planning) ? {planning:registry.find(s => s.id === op.shipmentId)?.planning || op.planning} : {}),
         },
       ]);
       const rolls = this.store.meta("rollPrintingAdditionalSheets") || [];
