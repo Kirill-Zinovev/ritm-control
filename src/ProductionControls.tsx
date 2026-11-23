@@ -40,7 +40,7 @@ const kindLabels: Record<ControlKind, string> = {
   instruction: "Инструкция",
 };
 const triggerLabels: Record<Trigger, string> = {
-  shipment_received: "При поступлении в Assembly",
+  shipment_received: "При поступлении в «RITM Сборка»",
   before_packing: "Перед упаковкой",
   before_box_close: "Перед закрытием короба",
 };
@@ -334,7 +334,7 @@ export function ProductionControls({
             <span className="production-controls-icon"><ClipboardCheck size={19} /></span>
             <div>
               <h3>Контроль поставки</h3>
-              <p>Срочные задачи и проверки в окне упаковки Assembly</p>
+              <p>Срочные задачи и проверки в окне упаковки «RITM Сборка»</p>
             </div>
             {activeCount > 0 && <span className="production-controls-count">{activeCount} активн.</span>}
           </div>
@@ -344,12 +344,12 @@ export function ProductionControls({
               {lockSaving ? "Подтверждаю…" : pendingLock ? "Повторить подтверждение" : shipmentLocked ? "Открыть для сборки" : partiallyLocked ? "Закрыть всю поставку" : "Закрыть для сборки"}
             </Button>
             <Button onClick={() => void refresh()} disabled={loading} aria-label="Обновить задачи"><RefreshCw size={15} />{loading ? "Обновляю…" : "Обновить"}</Button>
-            <Button kind="primary" onClick={() => setModalOpen(true)} disabled={!activeShipmentIds.length} title={!activeShipmentIds.length ? "Поставка ещё не связана с Assembly" : undefined}><Plus size={16} />Добавить задачу</Button>
+            <Button kind="primary" onClick={() => setModalOpen(true)} disabled={!activeShipmentIds.length} title={!activeShipmentIds.length ? "Поставка ещё не связана с «RITM Сборка»" : undefined}><Plus size={16} />Добавить задачу</Button>
           </div>
         </div>
         <div className={`shipment-lock-state ${!lockKnown || pendingLock || partiallyLocked ? "pending" : shipmentLocked ? "locked" : "open"}`} role="status">
           <span className="shipment-lock-state-icon">{!lockKnown ? <TriangleAlert size={17} /> : pendingLock ? <RefreshCw size={17} /> : shipmentLocked || partiallyLocked ? <LockKeyhole size={17} /> : <UnlockKeyhole size={17} />}</span>
-          <span><strong>{!lockKnown ? (loading ? "Проверяем состояние сборки" : "Состояние замка не подтверждено") : pendingLock ? (pendingLock.status === "unlocking" ? "Подтверждаем открытие в Assembly" : "Подтверждаем закрытие в Assembly") : partiallyLocked ? "Закрыта только часть поставки" : shipmentLocked ? "Поставка закрыта для сборки" : "Поставка открыта для сборки"}</strong><small>{!lockKnown ? "Проверьте связь и обновите состояние перед изменением замка." : pendingLock ? "Проверяем подтверждение Assembly автоматически; при необходимости можно повторить проверку кнопкой." : partiallyLocked ? "Для полного закрытия нажмите «Закрыть всю поставку»." : shipmentLocked ? "Сборщики не смогут записывать работу и менять короба." : "Сборщики могут записывать работу и управлять коробами."}{lockKnown && !pendingLock && shipmentLocks.some((lock) => lock.changedAt) ? ` · Изменено ${dateLabel(shipmentLocks.map((lock) => lock.changedAt).filter(Boolean).sort().at(-1) || null)}` : ""}</small></span>
+          <span><strong>{!lockKnown ? (loading ? "Проверяем состояние сборки" : "Состояние замка не подтверждено") : pendingLock ? (pendingLock.status === "unlocking" ? "Подтверждаем открытие в «RITM Сборка»" : "Подтверждаем закрытие в «RITM Сборка»") : partiallyLocked ? "Закрыта только часть поставки" : shipmentLocked ? "Поставка закрыта для сборки" : "Поставка открыта для сборки"}</strong><small>{!lockKnown ? "Проверьте связь и обновите состояние перед изменением замка." : pendingLock ? "Проверяем подтверждение «RITM Сборка» автоматически; при необходимости можно повторить проверку кнопкой." : partiallyLocked ? "Для полного закрытия нажмите «Закрыть всю поставку»." : shipmentLocked ? "Сборщики не смогут записывать работу и менять короба." : "Сборщики могут записывать работу и управлять коробами."}{lockKnown && !pendingLock && shipmentLocks.some((lock) => lock.changedAt) ? ` · Изменено ${dateLabel(shipmentLocks.map((lock) => lock.changedAt).filter(Boolean).sort().at(-1) || null)}` : ""}</small></span>
         </div>
         {!activeShipmentIds.length && <p className="production-controls-message">Поставка пока не связана со сборкой. Задачу можно будет добавить после синхронизации.</p>}
         {error && <div className="production-controls-error" role="alert">{error}</div>}
@@ -404,7 +404,7 @@ export function ProductionControls({
         )}
       </section>
 
-      <Modal open={modalOpen} onClose={() => !saving && setModalOpen(false)} title="Добавить задачу для сборщиков" description="Задача появится в окне упаковки Assembly для выбранной поставки или артикула.">
+      <Modal open={modalOpen} onClose={() => !saving && setModalOpen(false)} title="Добавить задачу для сборщиков" description="Задача появится в окне упаковки «RITM Сборка» для выбранной поставки или артикула.">
         <form className="production-control-form" onSubmit={(event) => void create(event)}>
           <div className="production-control-form-grid">
             <label><span>Задача</span><select value={kind} onChange={(event) => setKind(event.target.value as ControlKind)}><option value="quality_check">Проверка качества</option><option value="notification">Уведомление</option><option value="instruction">Инструкция</option></select></label>
@@ -444,7 +444,7 @@ export function ProductionControls({
                 </div>
               </label>
             )}
-            <label className="wide"><span>Когда обратить внимание</span><select value={trigger} onChange={(event) => setTrigger(event.target.value as Trigger)}><option value="shipment_received">При поступлении поставки в Assembly</option><option value="before_packing">Перед упаковкой</option><option value="before_box_close">Перед закрытием короба</option></select></label>
+            <label className="wide"><span>Когда обратить внимание</span><select value={trigger} onChange={(event) => setTrigger(event.target.value as Trigger)}><option value="shipment_received">При поступлении поставки в «RITM Сборка»</option><option value="before_packing">Перед упаковкой</option><option value="before_box_close">Перед закрытием короба</option></select></label>
             <label className="wide"><span>Короткое название</span><input required minLength={3} maxLength={90} value={title} onChange={(event) => setTitle(event.target.value)} placeholder={kind === "quality_check" ? "Например, проверить комплектность" : kind === "notification" ? "Например, заказ срочный" : "Например, вложить вкладыш"} /></label>
             <label className="wide"><span>Комментарий для сборщиков <small>необязательно</small></span><textarea maxLength={320} rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Уточните, на что обратить внимание" /></label>
           </div>

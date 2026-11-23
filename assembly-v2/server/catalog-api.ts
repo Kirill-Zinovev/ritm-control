@@ -1,6 +1,7 @@
 import { labelMime } from "../shared/labels";
 import { json, type Database } from "./api";
 import type { SqlStore, Statement } from "./database";
+import { catalogFamilyKey, type CatalogFamilyCard, type CatalogFamilyMatches } from "../shared/catalog-editor";
 import {
   catalogDetail,
   catalogList,
@@ -157,7 +158,7 @@ export async function catalogApi(
   files?: FileStore,
   remoteFetch: typeof fetch = fetch,
 ): Promise<Response> {
-  if (!actor) return json({ error: "Войдите в Assembly." }, 401);
+  if (!actor) return json({ error: "Войдите в RITM Сборка." }, 401);
   const url = new URL(request.url);
   if (
     request.method !== "GET" &&
@@ -187,10 +188,52 @@ export async function catalogApi(
       return new Response(file.body,{headers});
     }
     if (request.method === "GET" && url.pathname === "/api/catalog/options") {
-      const [norms,machines]=await Promise.all([
+      const [norms,machines,packing]=await Promise.all([
         store.all<{data:string}>("select data from av2_shift_norms order by type_key"),
-        store.all<{machine:string}>("select distinct machine from av2_resolved_catalog_entries where import_id=(select active_catalog_id from av2_meta where id=1) and machine<>'' order by machine")]);
-      return json({norms:norms.map(n=>JSON.parse(n.data)),machines:machines.map(n=>n.machine)});
+        store.all<{machine:string}>("select distinct machine from av2_resolved_catalog_entries where import_id=(select active_catalog_id from av2_meta where id=1) and machine<>'' order by machine"),
+        store.all<{field:string;value:string}>(`with card_values as (
+          select field.key field,trim(json_extract(e.data,'$.'||field.key)) value
+          from av2_resolved_catalog_entries e cross join json_each('{"packaging":0,"boxType":0}') field
+          where e.import_id=(select active_catalog_id from av2_meta where id=1)
+        ) select field,value from card_values where value<>'' and value not like '#%' and length(value)<=150
+          group by field,value order by count(*) desc,value limit 200`)]);
+      return json({norms:norms.map(n=>JSON.parse(n.data)),machines:machines.map(n=>n.machine).filter(v=>!v.startsWith('#')),
+        packaging:packing.filter(row=>row.field==="packaging").map(row=>row.value),
+        boxTypes:packing.filter(row=>row.field==="boxType").map(row=>row.value)});
+    }
+    if (request.method === "GET" && url.pathname === "/api/catalog/fill") {
+      const sku = catalogKey(url.searchParams.get("sku") ?? "");
+      const market = url.searchParams.get("market");
+      const kind = (url.searchParams.get("kind") ?? "").trim();
+      const box = (url.searchParams.get("box") ?? "").trim();
+      check(sku.length <= 300 && kind.length <= 150 && box.length <= 150 &&
+        (market==="WB" || market==="OZON"), "Проверьте поля для поиска.");
+      if (url.searchParams.get("family") === "1") {
+        const family = catalogFamilyKey(sku);
+        if (!family) return json({cards:[],hasMore:false} satisfies CatalogFamilyMatches);
+        const search = catalogKey(url.searchParams.get("q") ?? "").slice(0,150);
+        const shop = (url.searchParams.get("store") ?? "").slice(0,30);
+        const cards = await store.all<CatalogFamilyCard>(`select entry_id id,sku,market,store,
+          coalesce(json_extract(data,'$.name'),'') name from av2_resolved_catalog_entries
+          where import_id=(select active_catalog_id from av2_meta where id=1)
+            and sku>=? and sku<? and sku<>? and instr(search,?)>0
+          order by (market=?) desc,(store=?) desc,sku,market,store limit 31`,
+          [family+".",family+"/",sku,search,market,shop]);
+        return json({cards:cards.slice(0,30),hasMore:cards.length>30} satisfies CatalogFamilyMatches);
+      }
+      const [cards, capacities] = await Promise.all([
+        sku ? store.all<{id:string;market:string;store:string;name:string}>(`select entry_id id,market,store,
+          coalesce(json_extract(data,'$.name'),'') name from av2_resolved_catalog_entries
+          where import_id=(select active_catalog_id from av2_meta where id=1) and sku=?
+          order by market,store limit 30`,[sku]) : [],
+        kind && box ? store.all<{quantity:number}>(`select distinct json_extract(e.data,'$.unitsPerBox') quantity
+          from av2_resolved_catalog_entries e
+          where import_id=(select active_catalog_id from av2_meta where id=1) and market=?
+            and trim(json_extract(e.data,'$.kind'))=? and trim(json_extract(e.data,'$.boxType'))=?
+            and json_type(e.data,'$.unitsPerBox')='integer' and json_extract(e.data,'$.unitsPerBox')>0
+          order by quantity limit 13`,[market,kind,box]) : [],
+      ]);
+      return json({cards,capacities:capacities.map(row=>row.quantity)});
     }
     if (request.method === "GET" && url.pathname === "/api/catalog/history") {
       const id=url.searchParams.get("id") || "";

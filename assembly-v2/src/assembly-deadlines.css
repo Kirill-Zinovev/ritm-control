@@ -1,0 +1,327 @@
+.legacy-assembly .assembly-upcoming {
+  margin-bottom: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #d9e3f0;
+}
+.legacy-assembly .assembly-upcoming-head,
+.legacy-assembly .assembly-upcoming-card,
+.legacy-assembly .assembly-schedule-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.legacy-assembly .assembly-upcoming-head {
+  margin-bottom: 10px;
+}
+.legacy-assembly .assembly-upcoming h2,
+.legacy-assembly .assembly-schedule h2 {
+  margin: 0;
+  color: #132b48;
+  font-size: 18px;
+  line-height: 1.25;
+}
+.legacy-assembly .assembly-upcoming-head > span {
+  color: #56708b;
+  font-size: 13px;
+}
+.legacy-assembly .assembly-upcoming-head > span::first-letter,
+.legacy-assembly .assembly-schedule-shipping-copy > span::first-letter {
+  text-transform: uppercase;
+}
+.legacy-assembly .assembly-upcoming-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.legacy-assembly .assembly-upcoming-card {
+  --deadline-accent: #376ca9;
+  --deadline-ink: #234d7d;
+  position: relative;
+  min-width: 0;
+  min-height: 86px;
+  padding: 12px 13px 12px 24px;
+  border: 1px solid #cedbeb;
+  border-radius: 12px;
+  color: #536c8a;
+  background: #fff;
+  box-shadow: 0 2px 5px #193c6b08;
+  text-align: left;
+}
+.legacy-assembly .assembly-upcoming-card[data-tone="overdue"] {
+  --deadline-accent: #cf252d;
+  --deadline-ink: #ad2027;
+}
+.legacy-assembly .assembly-upcoming-card[data-tone="today"] {
+  --deadline-accent: #d58513;
+  --deadline-ink: #975600;
+}
+.legacy-assembly .assembly-upcoming-card::before,
+.legacy-assembly .assembly-deadline-direction[data-tone="overdue"]::before,
+.legacy-assembly .assembly-deadline-direction[data-tone="today"]::before {
+  content: "";
+  position: absolute;
+  inset: 12px auto 12px 8px;
+  width: 4px;
+  border-radius: 4px;
+  background: var(--deadline-accent);
+}
+.legacy-assembly .assembly-upcoming-card:hover:enabled,
+.legacy-assembly .assembly-upcoming-card[aria-current="true"] {
+  color: #1b4b83;
+  background: #f8fbff;
+  border-color: #2671ef;
+  box-shadow: 0 0 0 1px #2671ef;
+}
+.legacy-assembly .assembly-upcoming-card > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  font-size: 12px;
+}
+.legacy-assembly .assembly-upcoming-card strong {
+  color: #132b48;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+.legacy-assembly .assembly-upcoming-card svg {
+  flex: none;
+}
+.legacy-assembly .assembly-upcoming-shipping {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 6px;
+  width: fit-content;
+  padding: 2px 8px;
+  border-radius: 6px;
+  color: #17457c;
+  background: #eaf3ff;
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+.legacy-assembly .assembly-upcoming-shipping time {
+  font-size: 1.0625rem;
+  font-weight: 800;
+}
+.legacy-assembly .assembly-deadline-caption {
+  color: var(--deadline-ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+.legacy-assembly .assembly-upcoming-completed {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+.legacy-assembly .assembly-upcoming-completed > .assembly-deadline-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+.legacy-assembly .assembly-deadline-order {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 8px 7px;
+  color: #536b89;
+  font-size: 12px;
+}
+.legacy-assembly .shipment-button.assembly-deadline-direction {
+  position: relative;
+}
+.legacy-assembly .assembly-deadline-direction[data-tone="overdue"] {
+  --deadline-accent: #cf252d;
+}
+.legacy-assembly .assembly-deadline-direction[data-tone="today"] {
+  --deadline-accent: #d58513;
+}
+.legacy-assembly .assembly-deadline-direction[data-tone="overdue"],
+.legacy-assembly .assembly-deadline-direction[data-tone="today"] {
+  padding-inline-start: 18px;
+}
+.legacy-assembly .assembly-deadline-direction .shipment-copy {
+  gap: 5px;
+}
+.legacy-assembly .assembly-deadline-badge {
+  display: inline-block;
+  width: fit-content;
+  max-width: 100%;
+  padding: 3px 8px;
+  border-radius: 7px;
+  background: #eaf0fa;
+  color: #456183;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+.legacy-assembly .assembly-deadline-badge[data-tone="overdue"] {
+  color: #a8202a;
+  background: #ffe6e8;
+}
+.legacy-assembly .assembly-deadline-badge[data-tone="today"] {
+  color: #8c4d00;
+  background: #fff0d5;
+}
+.legacy-assembly .assembly-deadline-badge[data-tone="done"] {
+  color: #076746;
+  background: #dff6ea;
+}
+.legacy-assembly .assembly-deadline-badge[data-tone="missing"] {
+  color: #536982;
+  background: #eef2f7;
+}
+.legacy-assembly .assembly-schedule {
+  display: grid;
+  grid-template-columns: minmax(230px, 0.85fr) minmax(0, 1.3fr);
+  margin-bottom: 12px;
+  padding: 5px;
+  border: 1px solid #d4e0ee;
+  border-radius: 15px;
+  background: #fff;
+  box-shadow: 0 3px 12px #193b6808;
+}
+.legacy-assembly .assembly-schedule-shipping {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 120px;
+  overflow: hidden;
+  padding: 14px 20px;
+  border-radius: 10px;
+  background: linear-gradient(115deg, #f0f6ff, #e4efff 80%, #d8e9ff);
+}
+.legacy-assembly .assembly-schedule-shipping-copy {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 5px;
+  max-width: calc(100% - 85px);
+}
+.legacy-assembly .assembly-schedule-shipping-copy > time {
+  color: #112a4d;
+  font-size: clamp(25px, 2.8vw, 40px);
+  font-weight: 800;
+  line-height: 1.13;
+  letter-spacing: -0.035em;
+}
+.legacy-assembly .assembly-schedule-shipping-copy > span {
+  color: #506b8a;
+  font-size: 13px;
+}
+.legacy-assembly .assembly-schedule-illustration {
+  position: absolute;
+  right: 18px;
+  bottom: 12px;
+  width: 92px;
+  height: 86px;
+  color: #2367c5;
+  filter: drop-shadow(0 5px 7px #2358962a);
+}
+.legacy-assembly .assembly-schedule-illustration svg:first-child {
+  transform: perspective(250px) rotateY(-13deg) rotateZ(-10deg);
+  fill: #f9fcff;
+}
+.legacy-assembly .assembly-schedule-illustration svg:last-child {
+  position: absolute;
+  right: -5px;
+  bottom: -1px;
+  transform: rotate(8deg);
+  color: #a76f32;
+  fill: #f9d798;
+}
+.legacy-assembly .assembly-schedule-plan {
+  min-width: 0;
+  align-self: center;
+  padding: 12px 14px 12px 20px;
+  margin-left: 12px;
+  border-left: 1px solid #e0e8f3;
+}
+.legacy-assembly .assembly-schedule-head {
+  flex-wrap: wrap;
+  gap: 5px 12px;
+  margin-bottom: 9px;
+}
+.legacy-assembly .assembly-schedule-head > span {
+  color: #586f8b;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.legacy-assembly .assembly-schedule-stages {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+.legacy-assembly .assembly-schedule-stages > div + div {
+  border-left: 1px solid #e0e8f3;
+  padding-left: 12px;
+}
+.legacy-assembly .assembly-schedule-stages dt {
+  margin-bottom: 4px;
+  color: #536b89;
+  font-size: 12px;
+  font-weight: 650;
+}
+.legacy-assembly .assembly-schedule-stages dd {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  color: #132b48;
+  font-size: 14px;
+  font-weight: 750;
+}
+.legacy-assembly .assembly-schedule-source-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #1e59a0;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+@media (min-width: 761px) and (max-width: 1440px) {
+  .legacy-assembly .legacy-main > .page-head .head-tools {
+    margin-right: 0;
+  }
+  .legacy-assembly .legacy-main > .page-head::after {
+    display: none;
+  }
+}
+@media (max-width: 1050px) {
+  .legacy-assembly .assembly-schedule-plan {
+    padding-inline: 10px;
+    margin-left: 5px;
+  }
+  .legacy-assembly .assembly-schedule-shipping-copy {
+    max-width: 100%;
+  }
+  .legacy-assembly .assembly-schedule-illustration {
+    opacity: 0.25;
+  }
+}
+@media (max-width: 760px) {
+  .legacy-assembly .assembly-upcoming-grid {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+  .legacy-assembly .assembly-upcoming-card {
+    min-height: 62px;
+    padding-block: 8px;
+  }
+  .legacy-assembly .assembly-schedule {
+    grid-template-columns: 1fr;
+  }
+  .legacy-assembly .assembly-schedule-plan {
+    border-left: 0;
+    margin-left: 0;
+  }
+  .legacy-assembly .assembly-schedule-illustration {
+    opacity: 1;
+  }
+  .legacy-assembly .assembly-schedule-shipping-copy {
+    max-width: calc(100% - 85px);
+  }
+}

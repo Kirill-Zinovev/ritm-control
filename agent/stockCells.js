@@ -18,9 +18,16 @@ export function stockCellRequests(sheetId, changes) {
       if(typeof change.layoutPresent!=='boolean'||!['box','roll'].includes(change.department))throw new Error('Не подтверждён макет или участок новой позиции.');
       const sku=String(article).trim().toUpperCase().replaceAll('"','""');
       set(row,5,article);set(row,6,change.extension||'');set(row,30,change.uid);
+      if(change.assemblyCatalog){
+        const assigned = value => `=IF(E${row}="";"";${typeof value==='number'?value:JSON.stringify(value??'')})`;
+        formula(row,4,assigned(change.machine));
+        formula(row,7,assigned(change.sheetsPerUnit));
+        formula(row,14,assigned(change.stockMultiplicity));
+        formula(row,27,assigned(change.store));
+      }
       formula(row,3,`=IF(E${row}="";"";IF(UPPER(TRIM(E${row}))="${sku}";"${change.layoutPresent?'Есть':'Не в таблице макетов'}";"Проверить макет"))`);
       if(change.department==='box'){
-        formula(row,14,`=IF(E${row}="";"";IFERROR(VLOOKUP(E${row};Cache!B:Q;16;0);VLOOKUP(E${row};'Cache FBO'!B:R;17;0)))`);
+        if(!change.assemblyCatalog)formula(row,14,`=IF(E${row}="";"";IFERROR(VLOOKUP(E${row};Cache!B:Q;16;0);VLOOKUP(E${row};'Cache FBO'!B:R;17;0)))`);
         set(row,19,false);set(row,20,false);for(const column of [25,26,28,29])set(row,column,0);
         const plan=`IF(REGEXMATCH(LOWER(TRIM(D${row}));"^(xerox|ксерокс|x|х)$");IFERROR(P${row}/N${row}*G${row};0);P${row})`;
         const line=(name,column)=>`"${name} "&REPT("■";ROUND(MIN(1;${column}${row}/(${plan}))*8;0))&REPT("□";8-ROUND(MIN(1;${column}${row}/(${plan}))*8;0))&" "&TEXT(${column}${row}/(${plan});"0%")`;

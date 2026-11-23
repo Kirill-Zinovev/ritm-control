@@ -29,7 +29,7 @@ export async function readStockSnapshot(reader, spreadsheetId, destination, sign
     if(cells[4]?.userEnteredValue?.formulaValue||cells[15]?.userEnteredValue?.formulaValue||typeof article!=='string'||!article.trim()||!Number.isSafeInteger(quantity)||quantity<=0)fail(`Не подтверждён артикул или план в строке ${index+1}.`);
     rows.push({row:index+1,article:article.trim(),quantity});
   }
-  return {rows,sheetId:properties.sheetId,rowCount:count,data:data.rowData};
+  return {rows,sheetId:properties.sheetId,rowCount:count,data:data.rowData,metadata:meta};
 }
 export async function readStockRows(reader, spreadsheetId, destination, signal, department) {
   const {rows, data} = await readStockSnapshot(reader,spreadsheetId,destination,signal);
@@ -113,7 +113,8 @@ export class StockSheetsAdapter {
       const expected = update?.rows?.[0]?.values?.[0];
       // The stock gateway can enrich an initially empty extension from the
       // catalog. This does not change the identity or quantity of the insert.
-      if (start?.sheetId === plan.sheetId && start.columnIndex === 5 && expected?.userEnteredValue?.stringValue === '' &&
+      if (!plan.entries.find(entry=>entry.row-1===start?.rowIndex)?.assemblyCatalog &&
+          start?.sheetId === plan.sheetId && start.columnIndex === 5 && expected?.userEnteredValue?.stringValue === '' &&
           fresh.data[start.rowIndex]?.values?.[5]?.userEnteredValue?.stringValue?.trim()) continue;
       if (!start || start.sheetId !== plan.sheetId || !expected ||
           JSON.stringify(enteredValue(fresh.data[start.rowIndex]?.values?.[start.columnIndex])) !== JSON.stringify(enteredValue(expected))) return false;

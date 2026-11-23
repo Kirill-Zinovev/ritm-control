@@ -229,7 +229,7 @@ export class CloudStore {
     // notification, repair or historical Sheets write plans. Project plain
     // production journals in SQL; unpack old compressed rows one at a time.
     const data = await this.db.batch([
-      this.db.prepare("SELECT key,value FROM cloud_state WHERE key IN ('migrationReady','printingMoveRevision','productionSupplyRevision','productionSupplies')"),
+      this.db.prepare("SELECT key,value FROM cloud_state WHERE key IN ('migrationReady','printingMoveRevision','productionSupplyRevision','productionSupplies','productionPlanning')"),
       this.db.prepare(`SELECT kind,id,ordinal,created_at,
         CASE WHEN kind IN ('production','production-department-move') AND json_extract(payload,'$.encoding') IS NOT 'ritm:gzip-json:v1'
         THEN json_object('id',id,'status',json_extract(payload,'$.status'),'updatedAt',json_extract(payload,'$.updatedAt'),'createdAt',json_extract(payload,'$.createdAt'),
@@ -303,7 +303,9 @@ export class CloudStore {
       const { kind, value, ordinal, createdAt } = scope.operations.get(key);
       statements.push(guarded("INSERT INTO cloud_operations(kind,id,payload,created_at,ordinal) SELECT ?,?,?,?,? WHERE {lease} ON CONFLICT(kind,id) DO UPDATE SET payload=excluded.payload,ordinal=excluded.ordinal", [kind, value.id, await serialize(value), createdAt || value.createdAt || value.updatedAt || new Date(this.now()).toISOString(), ordinal]));
       if(['production','roll','production-department-move','production-shipment-lock','box-position-removal'].includes(kind)){
-        const job=kind==='production-shipment-lock'&&['locked','unlocked'].includes(value.status)?{id:'lock:'+value.eventId,shipmentId:value.shipmentId,createdAt:this.now()}:supplyDeliveryJob(kind,value,this.now());
+        const job=kind==='production-shipment-lock'
+          ? (!value.deferDelivery && ['locked','unlocked'].includes(value.status) ? {id:'lock:'+value.eventId+':'+value.shipmentId,shipmentId:value.shipmentId,createdAt:Date.parse(value.changedAt)} : null)
+          : supplyDeliveryJob(kind,value,this.now());
         if(job)statements.push(guarded('INSERT INTO assembly_v2_supply_deliveries(id,shipment_id,created_at) SELECT ?,?,? WHERE {lease} ON CONFLICT(id) DO NOTHING',[job.id,job.shipmentId,job.createdAt]));
       }
     }

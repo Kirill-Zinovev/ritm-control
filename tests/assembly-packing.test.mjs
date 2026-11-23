@@ -366,6 +366,17 @@ test('ambiguous old UID does not invent an article match',()=>{
  const result=attachAssemblyPacking({supplies:[{...common,row:5,rawUid:'new-a'},{...common,row:6,rawUid:'new-b'}]},{invalid:[],events:[{shipmentId:shipment,positionId:`${shipment}|uid:old|SKU`,article:'SKU',quantity:10,createdAt:'2026-11-02T10:00:00Z'}]},'2026-11-03T00:00:00Z');assert.equal(result.packing.status,'partial');assert.equal(result.supplies[0].packed,null);
 });
 
+test('retired packing identity leaves a confirmed bound from independently matched positions', () => {
+  const shipmentId = 'RITM-ROLL-119710351';
+  const order = { sourceId: 'roll-printing', sheetId: 119710351, rawUid: 'active', article: 'CURRENT' };
+  const confirmed = { shipmentId, positionId: `${shipmentId}|uid:active|CURRENT`, article: 'CURRENT', quantity: 7 };
+  const retired = { shipmentId, positionId: `${shipmentId}|uid:retired|OLD`, article: 'OLD', quantity: 12 };
+  const result = attachAssemblyPacking({ supplies: [order] }, { events: [confirmed, retired], invalid: [] }, '2026-11-19T14:00:00Z');
+  assert.equal(result.packing.status, 'partial');
+  assert.equal(result.supplies[0].packed, null);
+  assert.equal(result.supplies[0].packedConfirmed, 7);
+});
+
 test('direction stages reuse exact identities, exclude cancellations and never count cutting as packing', () => {
   const rows = [
     workRow({id:'pack',quantity:12,idempotencyKey:'p'}),

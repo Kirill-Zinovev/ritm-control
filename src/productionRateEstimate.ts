@@ -156,13 +156,13 @@ export function productionRateHistory(
                 ? "Не подтверждён журнал запасов бокса."
                 : "",
       packing: !assembly?.ok
-        ? "Данные Assembly ещё не загружены."
+        ? "Данные «RITM Сборка» ещё не загружены."
         : assembly.stale || assembly.staleSnapshot || assembly.refreshInProgress
-          ? "Снимок Assembly устарел или обновляется."
+          ? "Снимок «RITM Сборка» устарел или обновляется."
           : assembly.sources?.assembly.status !== "available"
-            ? "Не подтверждён журнал Assembly."
+            ? "Не подтверждён журнал «RITM Сборка»."
             : assembly.sources.assembly.invalidRecords
-              ? `В журнале Assembly есть непроверенные записи: ${assembly.sources.assembly.invalidRecords}.`
+              ? `В журнале «RITM Сборка» есть непроверенные записи: ${assembly.sources.assembly.invalidRecords}.`
               : "",
     },
   };

@@ -165,6 +165,34 @@ async function context() {
   return { db, call, files, upload };
 }
 
+test("suggests exact article families and finds templates beyond the first page", async (t) => {
+  const c = await context();
+  t.after(() => c.db.sqlite.close());
+  const card = (sku: string, market: "WB"|"OZON" = "OZON", store = "1"): CatalogEntry => ({
+    ...entry(market,store), id:JSON.stringify([market,store,sku]), sku, aliases:[sku],
+  });
+  const target = card("CT0001.A7431");
+  const source = card("CT0001.A5589");
+  const distant = card("CT0001.Z9999","WB","2");
+  const wrongFamily = card("CT00010.A5589");
+  const entries = [source,target,distant,wrongFamily,
+    ...Array.from({length:31},(_,i)=>card(`CT0001.P${String(i).padStart(2,"0")}`))];
+  await c.upload(await bundle(entries));
+  const query = "/fill?market=OZON&store=1&family=1&sku=ct0001.a7431";
+  const first = await c.call(query);
+  assert.equal(first.status,200);
+  assert.equal(first.value.hasMore,true);
+  const rows = first.value.cards as {sku:string;id:string;barcode?:string}[];
+  assert.equal(rows[0].id,source.id);
+  assert.equal(rows.length,30);
+  assert.ok(rows.every(row=>row.sku.startsWith("CT0001.") && row.sku!==target.sku && row.barcode===undefined));
+  const filtered = await c.call(query + "&q=z9999");
+  assert.equal(filtered.value.hasMore,false);
+  assert.deepEqual((filtered.value.cards as {id:string}[]).map(row=>row.id),[distant.id]);
+  const exact = await c.call(query.replace("&family=1",""));
+  assert.deepEqual((exact.value.cards as {id:string}[]).map(row=>row.id),[target.id]);
+});
+
 test("вместимость: конфликт остаётся null; подтверждение 700 относится только к конкретному OZON", () => {
   const raw = {
     article: "SS0031.A7484(OZ)",

@@ -152,6 +152,62 @@ async function context(
   };
 }
 
+test("signed manual removal persists across stale imports and preserves work history", async t => {
+  const c = await context(); t.after(()=>c.db.sqlite.close());
+  const s = source();
+  const items = ["SKU-A","SKU-B"].map(sku => {
+    const itemId = crypto.randomUUID(), positionId = id+"|manual:"+itemId+"|"+sku;
+    return {itemId,positionId,shipmentId:id,sku};
+  });
+  s.positions = items.map(p=>({...position(p.sku,"assembly-only"),positionId:p.positionId}));
+  c.setFeed(feed([s])); await c.sync();
+  const remove = (n:number,key:string) => c.db.command("ritm.removeManualItem",items[n],key,"ritm-service");
+  const key = crypto.randomUUID();
+  assert.equal((await remove(0,key)).status,"synced");
+  assert.equal((await remove(0,key)).status,"synced");
+  s.positions[0].quantity++;
+  c.setFeed(feed([s],Date.now()+50)); await c.sync();
+  const rows = c.db.sqlite.prepare("select id,source_active from av2_positions where external_id=?");
+  assert.equal((rows.get(items[0].positionId) as {source_active:number}).source_active,0);
+  await c.cmd("employee.create",{name:"Тест"});
+  const state = await c.state();
+  await c.cmd("work.save",{positionId:(rows.get(items[1].positionId) as {id:string}).id,employeeId:state.employees[0].id,operation:"packing",qty:1});
+  assert.equal((await remove(1,crypto.randomUUID())).status,"rejected");
+  assert.equal((rows.get(items[1].positionId) as {source_active:number}).source_active,1);
+});
+
+test("RITM confirmed deletion archives every store of one shipment and prevents stale reactivation", async t => {
+  const c = await context(); t.after(() => c.db.sqlite.close());
+  const original = source();
+  const otherId = "RITM-SUPPLY-00000000-0000-4000-8000-000000000003";
+  const other = {...original,shipmentId:otherId,positions:original.positions.map(p=>({...p,positionId:p.positionId.replace(id,otherId)}))};
+  const current = feed([original, other]);
+  c.setFeed(current);
+  assert.equal((await c.sync()).status, "synced");
+  await c.cmd("employee.create", {name:"Тест"});
+  const sourceRow = c.db.sqlite.prepare("select id from av2_supplies where origin_shipment_id=? and store='1'").get(id) as {id:string};
+  const active = await c.state(sourceRow.id);
+  await c.cmd("work.save", { positionId:active.positions[0].id, employeeId:active.employees[0].id, operation:"packing",qty:1 });
+  const deletion = {eventId:"production-delete:00000000-0000-4000-8000-000000000004", shipmentId:id};
+  const call = (actor:string) => ritmApi(new Request("https://assembly.test/api/ritm/retire-shipments", {
+    method:"POST", headers:{"content-type":"application/json"},
+    body:JSON.stringify({deletions:[deletion]}),
+  }),c.db.store,c.db,actor,env);
+  assert.equal((await call("owner")).status,403);
+  assert.deepEqual(await (await call("ritm-service")).json(), {ok:true,retired:[deletion]});
+  const revision = await c.db.revision();
+  assert.equal((await call("ritm-service")).status,200);
+  assert.equal(await c.db.revision(),revision);
+  c.setFeed(feed([original,other],current.sourceRevision+1));
+  assert.equal((await c.sync()).status,"synced");
+  const rows = c.db.sqlite.prepare("select source_active from av2_supplies where origin_shipment_id=?");
+  assert.deepEqual(rows.all(id).map(r=>r.source_active),[0,0]);
+  assert.deepEqual(rows.all(otherId).map(r=>r.source_active),[1,1]);
+  const archived = await c.state(sourceRow.id);
+  assert.equal(archived.works.length,1);
+  assert.equal(archived.positions[0].sourceActive,false);
+});
+
 test("unchanged complete feed skips writes; conflicting content still reaches revision validation", async t => {
   const c = await context(); t.after(() => c.db.sqlite.close());
   const current = feed([source()]); c.setFeed(current);
@@ -172,6 +228,33 @@ test("unchanged complete feed skips writes; conflicting content still reaches re
   assert.equal((await c.sync(false)).status,"synced");
   assert.ok((await c.state()).positions.every(p=>p.plan===120));
 });
+test("deadline-only revisions reach the collector with the exact source and preserve work", async (t) => {
+  const c = await context();
+  t.after(() => c.db.sqlite.close());
+  const at = Date.now() - 100;
+  const shipment = { ...source(), positions: [position("SKU-A", "roll-printing", "1")] };
+  c.setFeed(feed([shipment], at));
+  assert.equal((await c.sync()).status, "synced");
+  const first = await c.state();
+  const positionId = first.positions[0].id;
+  const readyAt = new Date(at + 1000).toISOString();
+  const packingAt = new Date(at + 2000).toISOString();
+  const shipAt = new Date(at + 3000).toISOString();
+  const schedule = { readyAt, packingAt, shipAt, urgent: true, printed: true, cut: false };
+  c.db.sqlite.prepare("insert into av2_position_totals(position_id,packing) values(?,100)").run(positionId);
+  c.setFeed(feed([{ ...shipment, schedule }], at + 1));
+  assert.equal((await c.sync()).status, "synced");
+  const state = await c.db.snapshot(first.selectedSupplyId, true, true) as Snapshot;
+  assert.deepEqual(state.sourceSupplies?.[0].schedule, schedule);
+  assert.equal(state.sourceSupplies?.[0].packingComplete, true);
+  assert.equal(state.positions[0].id, positionId);
+  assert.equal(state.positions[0].packing, 100);
+  c.setFeed(feed([shipment], at + 2));
+  assert.equal((await c.sync()).status, "synced");
+  const cleared = await c.db.snapshot(first.selectedSupplyId, true, true) as Snapshot;
+  assert.equal(cleared.sourceSupplies?.[0].schedule, undefined);
+});
+
 test("twelve collectors recover a stale RITM source via one signed refresh without duplicating positions or work", async (t) => {
   const c = await context();
   t.after(() => c.db.sqlite.close());
@@ -486,6 +569,58 @@ test("the RITM service receipt lists only active position IDs after a removal", 
   assert.deepEqual(receipt.positionReceipts[0].positionIds.sort(), retained.map(p => p.positionId).sort());
   const owner = await (await ritmApi(request(), c.db.store, c.db, "owner", {})).json();
   assert.equal(owner.positionReceipts, undefined);
+});
+
+test("the signed work report reads current D1 facts, keeps saved coefficients and respects Moscow days", async t => {
+  const c = await context();
+  t.after(() => c.db.sqlite.close());
+  await c.sync();
+  await c.cmd("employee.create", { name: "Сборщик" });
+  const state = await c.state();
+  const group = state.supplies.find(row => row.store === "1")!;
+  const supply = await c.state(group.id);
+  const { id: positionId, externalId } = supply.positions[0];
+  const employeeId = supply.employees[0].id;
+  for (const [qty, created] of [[12, "2026-11-20T21:00:00.000Z"], [7, "2026-11-21T01:30:00.000Z"], [3, "2026-11-21T21:00:00.000Z"]] as const) {
+    await c.cmd("work.save", { positionId, employeeId, operation: "packing", qty });
+    c.db.sqlite.prepare("update av2_work set created_at=?, norm='200', coefficient=? where position_id=? and qty=?")
+      .run(created, String(qty / 200), positionId, qty);
+  }
+  const canceled = c.db.sqlite.prepare("select id from av2_work where position_id=? and qty=7").get(positionId)!;
+  c.db.sqlite.prepare("insert into av2_corrections(id,work_id,reason,actor,created_at) values(?,?,?,?,?)")
+    .run("report-cancellation", String(canceled.id), "Исправление", "fixture", "2026-11-21T15:00:00Z");
+  const request = new Request("https://assembly.test/api/ritm/work-report?from=2026-11-21&to=2026-11-21");
+  assert.equal((await ritmApi(request, c.db.store, c.db, "owner", {})).status, 403);
+  const result = await (await ritmApi(request, c.db.store, c.db, "ritm-service", {})).json();
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.events.map((event: Record<string, unknown>) => [event.qty,event.coefficient,event.positionId,event.supplyId]), [[12,"0.06",externalId,id]]);
+  assert.equal(result.next, null);
+});
+
+test("the production catalog returns updated product details via the existing service identity", async t => {
+  const original = catalog("SKU-A", "1");
+  const c = await context([original]);
+  t.after(() => c.db.sqlite.close());
+  const call = (actor: string, includeProductDetails: boolean) => ritmApi(
+    new Request("https://assembly.test/api/ritm/production-catalog", {
+      method: "POST",
+      body: JSON.stringify({ market: "OZON", articles: ["SKU-A"], includeProductDetails }),
+    }), c.db.store, c.db, actor, {},
+  );
+  assert.equal((await call("owner", true)).status, 403);
+  const before = await (await call("ritm-service", true)).json();
+  assert.equal(before.productDetailsVersion, 1);
+  assert.equal(before.entries[0].unitsPerBox, 100);
+  const edited = { ...original, name: "Исправленная карточка", machine: "XEROX", unitsPerBox: 50 };
+  c.db.sqlite.prepare("insert into av2_catalog_products values(?,?,?,?,?,?,?,?,?,?,?)")
+    .run(edited.id, edited.market, edited.store, edited.sku, edited.sku, edited.machine, 0,
+      JSON.stringify(edited), 1, "test", new Date().toISOString());
+  const updated = await (await call("ritm-service", true)).json();
+  assert.equal(updated.entries.length, 1);
+  assert.equal(updated.entries[0].name, edited.name);
+  assert.equal(updated.entries[0].machine, "XEROX");
+  assert.equal(updated.entries[0].unitsPerBox, 50);
+  assert.equal((await (await call("ritm-service", false)).json()).entries[0].name, undefined);
 });
 
 test("connection API keeps owner/origin checks and never accepts a client-provided source URL", async (t) => {

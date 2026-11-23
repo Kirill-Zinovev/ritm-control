@@ -219,7 +219,7 @@ function PackingSummary({ group }: { group: SupplyGroup }) {
         <Cube size={21} strokeWidth={1.9} />
       </span>
       <div className="production-packing-title">
-        <strong>Упаковка · Assembly</strong>
+        <strong>Упаковка · «RITM Сборка»</strong>
         <small>
           {num(group.rows.length)} артикулов · {num(group.plan)} шт.
         </small>
@@ -625,7 +625,7 @@ export function ProductionDashboard({
                     <strong>{num(group.plan)} шт.</strong>
                   </div>
                   <div className="production-supply-head-packed">
-                    <small>Упаковано · Assembly</small>
+                    <small>Упаковано · «RITM Сборка»</small>
                     <strong>
                       {group.packed.value === null
                         ? "Нет данных"

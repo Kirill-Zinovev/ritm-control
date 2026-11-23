@@ -7,11 +7,12 @@ import { Setup } from "./Setup";
 import { Button, Status } from "./ui";
 import { useWorkspace } from "./useWorkspace";
 import { DraftGuard, useDraftNavigation } from "./DraftGuard";
-import { Access, useAccess } from "./Access";
+import { Access, useAccess, type AccessRole } from "./Access";
 import "./manager.css";
 const Catalog = lazy(() =>
   import("./Catalog").then((m) => ({ default: m.Catalog })),
 );
+const Training = lazy(() => import("./Training"));
 const screens = [
   ["assembly", "Сборка"],
   ["cartons", "Короба"],
@@ -19,7 +20,16 @@ const screens = [
   ["warehouse", "Склад и отгрузки"],
   ["catalog", "Справочник"],
   ["setup", "Подключение"],
+  ["learning", "Обучение"],
 ] as const;
+function canOpenScreen(view: string, role: AccessRole) {
+  if (!screens.some(([id]) => id === view)) return false;
+  if (role === "owner") return true;
+  return role === "manager"
+    ? !["assembly", "setup"].includes(view)
+    : ["assembly", "work"].includes(view);
+}
+
 export default function App() {
   return (
     <Access><DraftGuard>
@@ -28,30 +38,32 @@ export default function App() {
   );
 }
 function Application() {
-  const role=useAccess();
-  const [view, setView] = useState(
-    () => {const requested=new URLSearchParams(location.search).get("view")??(role==='manager'?'catalog':'assembly');return screens.some(([id])=>id===requested) && (role==='owner'||role==='manager'&&!['assembly','setup'].includes(requested)||role==='collector'&&['assembly','work'].includes(requested))?requested:role==='manager'?'catalog':'assembly';},
-  );
+  const role = useAccess();
+  const home = role === "manager" ? "catalog" : "assembly";
+  const [requestedView, setRequestedView] = useState(() => new URLSearchParams(location.search).get("view"));
+  const view = requestedView && canOpenScreen(requestedView, role) ? requestedView : home;
   const w = useWorkspace(view);
   const safely = useDraftNavigation();
   useEffect(() => {
-    document.title = `Assembly — ${screens.find(([id]) => id === view)?.[1] ?? "сборка"}`;
+    const screen = screens.find(([id]) => id === view)?.[1];
+    document.title = screen && view !== "assembly" ? `RITM Сборка — ${screen}` : "RITM Сборка";
   }, [view]);
   function navigate(value: string) {
-    if (w.busy || value === view) return;
+    if (w.busy || value === view || !canOpenScreen(value, role)) return;
     safely(() => {
       w.clearNotice();
-      setView(value);
+      setRequestedView(value);
       const url = new URL(location.href);
       url.searchParams.set("view", value);
       history.replaceState(null, "", url);
     });
   }
+  const onLearning = canOpenScreen("learning", role) ? () => navigate("learning") : undefined;
   if (view === "assembly") {
     return w.state && w.state.cartonScope !== "directory" ? (
-      <Collector workspace={w} navigate={navigate} />
+      <Collector workspace={w} navigate={navigate} onLearning={onLearning} />
     ) : (
-      <CollectorLoading workspace={w} />
+      <CollectorLoading workspace={w} onLearning={onLearning} />
     );
   }
   return (
@@ -68,10 +80,10 @@ function Application() {
             navigate(role==='manager'?'catalog':'assembly');
           }}
         >
-          RITM <span>ASSEMBLY</span>
+          RITM <span>Сборка</span>
         </a>
-        <nav className="navigation" aria-label="Разделы Assembly">
-          {screens.filter(([id])=>role==='owner'||role==='manager'&&!['assembly','setup'].includes(id)||role==='collector'&&['assembly','work'].includes(id)).map(([id, label]) => (
+        <nav className="navigation" aria-label="Разделы RITM Сборка">
+          {screens.filter(([id]) => canOpenScreen(id, role)).map(([id, label]) => (
             <button
               key={id}
               type="button"
@@ -89,18 +101,24 @@ function Application() {
         </nav>
         {role==='manager' && <Button onClick={()=>safely(()=>{void fetch('/api/access/manager/logout',{method:'POST'}).then(response=>{if(response.ok)location.assign('?view=manager-login')})})}>Выйти</Button>}
       </header>
-      <Status
-        error={w.error}
-        notice={w.notice}
-        retry={() => void w.refresh()}
-      />
-      {w.loading && (!w.state || (["cartons","warehouse"].includes(view) && w.state.cartonScope !== "all")) ? (
+      {view !== "learning" && (
+        <Status error={w.error} notice={w.notice} retry={() => void w.refresh()} />
+      )}
+      {view === "learning" ? (
+        <Suspense fallback={<main className="content loading" role="status">Открываем обучение…</main>}>
+          <Training
+            role={role}
+            navigate={navigate}
+            canOpen={(screen) => canOpenScreen(screen, role)}
+          />
+        </Suspense>
+      ) : w.loading && (!w.state || (["cartons","warehouse"].includes(view) && w.state.cartonScope !== "all")) ? (
         <main className="content loading" role="status">
           Загружаем поставки…
         </main>
       ) : !w.state ? (
         <main className="content">
-          <h1>Не удалось загрузить Assembly</h1>
+          <h1>Не удалось загрузить RITM Сборка</h1>
           <p className="muted">
             Повторите загрузку. Сохранённые записи остаются в базе.
           </p>
@@ -126,7 +144,7 @@ function Application() {
         </Suspense>
       ) : (
         <>
-          <Collector workspace={w} navigate={navigate} />
+          <Collector workspace={w} navigate={navigate} onLearning={onLearning} />
           {!w.state.supplies.length ? (
             <div className="empty-action">
               <Button primary onClick={() => navigate("setup")}>
@@ -136,7 +154,7 @@ function Application() {
           ) : null}
         </>
       )}
-      <footer>RITM Assembly · управление производством</footer>
+      <footer>RITM Сборка · управление производством</footer>
     </div>
   );
 }

@@ -42,7 +42,7 @@ function FactBar({ tasks, phase, excluded }: { tasks: ForecastTask[]; phase: "pr
   const fact = processFact(tasks, phase);
   const label = phase === "print" ? "Печать" : phase === "cut" ? "Порезка" : "Упаковка";
   const Icon = phase === "print" ? Printer : phase === "cut" ? Scissors : PackageCheck;
-  if (excluded) return <div className={`daily-supply-fact ${phase}`}><div className="daily-supply-fact-label"><Icon size={17} /><strong>{label}</strong></div><span>Нет задания Assembly</span></div>;
+  if (excluded) return <div className={`daily-supply-fact ${phase}`}><div className="daily-supply-fact-label"><Icon size={17} /><strong>{label}</strong></div><span>Нет задания «RITM Сборка»</span></div>;
   if (!fact.positions || fact.unknownCount === fact.positions) return <div className={`daily-supply-fact ${phase}`}><div className="daily-supply-fact-label"><Icon size={17} /><strong>{label}</strong></div><span>Факт не подтверждён</span></div>;
   const percent = processPercent(fact);
   const value = `${fact.unknownCount ? "≥ " : ""}${num(fact.ready)} / ${num(fact.plan)} шт.`;
@@ -73,7 +73,7 @@ function SupplyCard({ row, events, tasks, planning, fresh, onSelect }: { row: Fo
     </div>
     <div className="daily-supply-deadlines">
       <div className="production"><Clock3 size={17} /><span>Печать и порезка<strong>{deadline(row.readyAt)}</strong></span></div>
-      <div className="packing"><PackageCheck size={17} /><span>Упаковка<strong>{row.packingExcluded ? "Нет задания Assembly" : deadline(row.packingAt)}</strong></span></div>
+      <div className="packing"><PackageCheck size={17} /><span>Упаковка<strong>{row.packingExcluded ? "Нет задания «RITM Сборка»" : deadline(row.packingAt)}</strong></span></div>
       <div className="shipping"><Truck size={17} /><span>Отгрузка<strong>{row.stock ? "Не применяется" : deadline(row.shipAt)}</strong></span></div>
     </div>
     {window?.status === "ready" && <p className="daily-supply-window">Окно упаковки по графику: {num(window.hours, 1)} ч · не прогноз</p>}

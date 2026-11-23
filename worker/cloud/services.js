@@ -7,7 +7,9 @@ import { cloudConfig, sourceId } from "./config.js";
 import { readMachineLayoutArticles } from "./machineLayouts.js";
 import { CloudError } from "./access.js";
 import { cloudFetch } from "./fetch.js";
-import { deliverShipmentLockEvent, setShipmentLocks } from "./shipmentLocks.js";
+import { setShipmentLocks } from "./shipmentLocks.js";
+import { assemblyV2Configured } from "./assemblyV2Transport.js";
+import { readAssemblyProductionCatalog } from "./assemblyProductionCatalog.js";
 import { StockOperations } from '../../agent/stockOperations.js';
 import { StockSheetsAdapter } from '../../agent/stockSheets.js';
 import { boxStockReadiness, rollStockReadiness, readRollStockHistory } from '../../agent/stockReadiness.js';
@@ -24,7 +26,7 @@ export function requireCutover(bindings, scope) {
     throw new CloudError("local_repair_pending", "Эту таблицу изменяет локальный AI Center или результат его исправления требует сверки.", 409);
 }
 
-export async function createServices(bindings, scope, { fetcher = fetch, refresh = null, printing = null, readItemSnapshot = null, manager = 'RITM', deliveryOnly = false } = {}) {
+export async function createServices(bindings, scope, { fetcher = fetch, refresh = null, printing = null, readItemSnapshot = null, manager = 'RITM' } = {}) {
   const config = cloudConfig(bindings);
   let nextJoke = null;
   try { nextJoke = JSON.parse(bindings.RITM_BITRIX_NEXT_ASSIGNMENT_JOKE || 'null'); } catch { /* no one-time owner request */ }
@@ -50,11 +52,8 @@ export async function createServices(bindings, scope, { fetcher = fetch, refresh
   // guardedFetch performs the durable guard immediately before every Sheets write.
   // A second beforeWrite hook would checkpoint the same lease twice per request.
   const writers = reader.configured ? Object.fromEntries(Object.entries(DEPARTMENTS).map(([department, target]) => [department, new ProductionSupplyWriter({ department, credentialWriter: writerCredentials, fetcher: guardedFetch, documentId: target.documentId, template: target.template, ...(department === 'roll' ? { layoutLookup: () => readMachineLayoutArticles(reader, sourceId(bindings, 'machineLayoutsId')) } : {}) })])) : null;
-  const queue = new AssemblySyncQueue(scope, { secret: bindings.RITM_ASSEMBLY_SYNC_SECRET || "", fetchImpl: (...args) => cloudFetch(fetcher,...args), beforeDeliver: () => guard() });
-  // No process-owned timers in Sites. Requests and the protected maintenance
-  // endpoint drain the same durable outbox; the scheduler survives closed tabs.
-  queue.schedule = () => {};
-  if (deliveryOnly) return { queue, guard };
+  // Historical transfer receipts are still readable in cloud mode.
+  const queue = new AssemblySyncQueue(scope);
   let latestPrinting = printing;
   const refreshPrinting = refresh ? async () => {
     await scope.checkpoint();
@@ -64,6 +63,7 @@ export async function createServices(bindings, scope, { fetcher = fetch, refresh
   const legacy = new RollSupplyManagementService(scope, { writer: writers?.roll || null, recoverInterrupted: !!scope.lease, refresh: refreshPrinting, getPrintingSnapshot: () => latestPrinting, readItemSnapshot: readItemSnapshot && (payload => readItemSnapshot(reader, payload)), refreshAfterWrite: !readItemSnapshot });
   const production = new ProductionSupplyService(scope, {
     writers, legacy, recoverInterrupted: !!scope.lease, refresh: refreshPrinting,
+    createCatalog: (market, articles) => readAssemblyProductionCatalog(bindings, market, articles, fetcher),
     // The two department writes are already read back and committed before
     // the response. A full source scan must not hold the production write
     // lease or keep the manager's create button disabled.
@@ -84,25 +84,16 @@ export async function createServices(bindings, scope, { fetcher = fetch, refresh
       queueBitrixNotifications(scope, op, { kind: 'production', manager, nextJoke, documentIds:{roll:DEPARTMENTS.roll.documentId,box:DEPARTMENTS.box.documentId}, enabled: !!scope.meta('bitrixNotificationConfig') && scope.meta('bitrixNotificationsEnabled') !== false });
     },
     beforeCreateWrite: async (operation) => {
-      const shipmentIds = (operation.steps || []).map((step) => {
-        const sheetId = Number(step?.plan?.sheetId);
-        const department = step?.department;
-        if (!['roll', 'box'].includes(department) || !Number.isSafeInteger(sheetId) || sheetId <= 0)
-          throw new CloudError("shipment_lock_identity_unavailable", "Не удалось подтвердить листы новой поставки для замка. Запись остановлена.", 503);
-        return `RITM-${department.toUpperCase()}-${sheetId}`;
-      });
-      if (!shipmentIds.length || shipmentIds.length > 20)
-        throw new CloudError("shipment_lock_identity_unavailable", "Не удалось определить направления новой поставки для замка. Запись остановлена.", 503);
-      const result = await setShipmentLocks(scope, {
-        shipmentIds,
+      if (!assemblyV2Configured(bindings) || !bindings.RITM_ASSEMBLY_V2_TARGET_TOKEN)
+        throw new CloudError("assembly_v2_unconfigured", "Связь с «RITM Сборка» не настроена. Поставка не записана.", 503);
+      // The production job delivers the roster together with this canonical lock.
+      await setShipmentLocks(scope, {
+        shipmentIds: [operation.shipmentId],
         locked: true,
         name: operation.name,
         changedBy: "RITM",
         sourceOperationId: operation.id,
-        deliver: (event) => deliverShipmentLockEvent(bindings, event, fetcher),
       });
-      if (!result.confirmed)
-        throw new CloudError("shipment_lock_unconfirmed", "Замок поставки ожидает подтверждения Assembly. Состав не продолжен; проверьте состояние операции и повторите.", 503);
     },
   });
   // Old releases stored all active production previews as one cloud_state
@@ -133,7 +124,11 @@ export async function createServices(bindings, scope, { fetcher = fetch, refresh
       roll:new StockSheetsAdapter({reader,writer:gateway('roll',rollId),spreadsheetId:rollId,department:'roll',layouts,readiness:rollReadiness}),
     };
     const operations={get:id=>structuredClone(scope.operations.get('stock:'+id)?.value||null),put:op=>{scope.putOperation('stock',op);queueBitrixNotifications(scope,op,{kind:'stock',manager,nextJoke,documentIds:{roll:rollId,box:boxId},enabled:!!scope.meta('bitrixNotificationConfig') && scope.meta('bitrixNotificationsEnabled') !== false});},pending:()=>[...scope.operations.values()].filter(row=>row.kind==='stock'&&!['verified','not_saved'].includes(row.value?.status)).map(row=>row.value)};
-    return new StockOperations({store:operations,adapters,catalog:()=>production.catalog(),checkpoint:()=>guard(),manager});
+    return new StockOperations({store:operations,adapters,catalog:lines=>{
+      if(!Array.isArray(lines)||!lines.length||lines.length>500||lines.some(line=>typeof line?.article!=="string"||!line.article.trim()||line.article.trim().length>120))
+        throw new CloudError("stock_preview_invalid","Добавьте от 1 до 500 корректных артикулов.",400);
+      return readAssemblyProductionCatalog(bindings,"OZON",lines.map(line=>line.article),fetcher,{includePhotos:true});
+    },checkpoint:()=>guard(),manager});
   };
   return { reader, writers, legacy, production, transfer, queue, guard, stock,
     savePreviews() {},

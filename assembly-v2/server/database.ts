@@ -26,6 +26,9 @@ import { prepareRitmImport } from "./ritm-import";
 import { ritmShipmentId, type RitmSupply } from "../shared/ritm";
 import { nextCartonLabel } from "../shared/carton-number";
 import { cancelWarehouseWorkPlan, readWarehouse, warehousePlan } from "./warehouse";
+import { ozonShipments } from "./ozon-shipments";
+import { readDispatchHistoryDetail, readDispatchHistoryPage } from "./dispatch-history";
+import { planDeparture, readPreparedDispatches } from "./dispatch-departure";
 import { readWorkHistory } from "./work-history";
 import { legacyRestorePlan } from "./legacy-restore";
 import { legacyAdoptCartonPlan } from "./legacy-adopt";
@@ -110,20 +113,32 @@ export function createDatabase(store: SqlStore): Database {
       )[0]?.revision ?? 0
     );
   }
-  async function loadCartons(ids: string[]): Promise<Carton[]> {
+  async function loadCartons(ids: string[], ozonCatalog = false): Promise<Carton[]> {
+    if (!ids.length) return [];
     const parameter = JSON.stringify(ids);
+    const sameOzonStore = "json_extract(pc.value,'$.market')='OZON' and json_extract(pc.value,'$.store')=s.store";
+    const productFields = ozonCatalog
+      ? `coalesce(case when ${sameOzonStore} then nullif(trim(json_extract(pc.value,'$.sku')),'') end,p.sku) sku,
+        p.name,coalesce(case when ${sameOzonStore} then nullif(trim(json_extract(pc.value,'$.barcode')),'') end,p.barcode) barcode`
+      : "p.sku,p.name,p.barcode";
     const [boxes, items] = await Promise.all([
       all<CartonRow>(
         "select c.*,d.state dispatch_state from av2_production_cartons c left join av2_dispatches d on d.id=c.dispatch_id where c.id in (select value from json_each(?)) order by c.label",
         [parameter],
       ),
       all<CartonItem & { cartonId: string }>(
-        `select a.id,a.carton_id,a.position_id,p.supply_id,s.title supply,coalesce(s.origin_shipment_id,s.external_id) external_supply_id,p.external_id external_position_id,p.sku,p.name,p.barcode,p.catalog_import_id,json_extract(pc.value,'$.photoId') photo_id,a.qty,a.units_per_box from av2_all_allocations a join av2_positions p on p.id=a.position_id join av2_supplies s on s.id=p.supply_id ${positionCatalogJoin()} where a.carton_id in (select value from json_each(?)) and a.removed_at is null order by a.created_at,a.id`,
+        `select a.id,a.carton_id,a.position_id,p.supply_id,s.title supply,coalesce(s.origin_shipment_id,s.external_id) external_supply_id,p.external_id external_position_id,${productFields},p.catalog_import_id,json_extract(pc.value,'$.photoId') photo_id,a.qty,a.units_per_box from av2_all_allocations a join av2_positions p on p.id=a.position_id join av2_supplies s on s.id=p.supply_id ${positionCatalogJoin()} where a.carton_id in (select value from json_each(?)) and a.removed_at is null order by a.created_at,a.id`,
         [parameter],
       ),
     ]);
+    const contents = new Map<string, CartonItem[]>();
+    for (const item of items) {
+      const content = contents.get(item.cartonId) ?? [];
+      content.push(item);
+      contents.set(item.cartonId, content);
+    }
     return boxes.map((b) => {
-      const content = items.filter((i) => i.cartonId === b.id);
+      const content = contents.get(b.id) ?? [];
       return {
         ...b,
         items: content,
@@ -165,6 +180,7 @@ export function createDatabase(store: SqlStore): Database {
   }
   const snapshot = (supplyId: string | null, scopeOnly = false, directions = false, directory = false) =>
     directory ? readDirectorySnapshot(store) : readWorkspaceSnapshot(store, supplyId, scopeOnly, directions);
+  const ozon = ozonShipments(store, (ids) => loadCartons(ids, true));
   async function plan(
     action: string,
     payload: Record<string, unknown>,
@@ -173,6 +189,10 @@ export function createDatabase(store: SqlStore): Database {
   ): Promise<{ statements: Statement[]; result: Record<string, unknown> }> {
     const sql: Statement[] = [];
     const now = new Date().toISOString();
+    if (action === "ozon.prepare" || action === "ozon.assign")
+      return ozon.plan(action, payload, actor, rev, now);
+    if (action === "dispatch.send")
+      return planDeparture(store, payload, actor, rev, now, loadCartons, ozon.splitDeparture);
     let result: Record<string, unknown> = {};
     const add = (query: string, ...args: (string | number | null)[]) =>
       sql.push(statement(query, ...args));
@@ -245,6 +265,22 @@ export function createDatabase(store: SqlStore): Database {
       return legacyAdoptCartonPlan(store, payload, actor, now);
     if (action === "ritm.carton.dispatch")
       return ritmCartonDispatchPlan(store,payload,actor,now,loadCartons);
+    if (action === "ritm.removeManualItem") {
+      const { shipmentId, itemId, positionId } = payload;
+      assert(actor === "ritm-service" && typeof shipmentId === "string" && ritmShipmentId(shipmentId) &&
+        typeof itemId === "string" && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(itemId) &&
+        typeof positionId === "string" && positionId.startsWith(shipmentId+"|manual:"+itemId+"|") &&
+        positionId.length > shipmentId.length + itemId.length + 9 && positionId.length <= 1500, "Некорректная дополнительная позиция.");
+      const positions = "select p.id from av2_positions p join av2_supplies s on s.id=p.supply_id where s.origin_shipment_id=? and p.external_id=?";
+      const history = await all(`with target(id) as (${positions}) select 1 from av2_work where position_id in target
+        union all select 1 from av2_all_allocations where position_id in target
+        union all select 1 from av2_warehouse_receipts where position_id in target limit 1`, [shipmentId,positionId]);
+      if (history.length) return {statements:[],result:{status:"rejected",reason:"item_has_work"}};
+      add('insert or ignore into av2_quality_repairs(id,kind,entity_id,"before","after",evidence,actor,created_at) values(?,?,?,?,?,?,?,?)',
+        "ritm-manual:"+itemId,"ritm.manualRetired",positionId,"{}",'{"sourceActive":false}',JSON.stringify({shipmentId,itemId}),actor,now);
+      add(`update av2_positions set source_active=0,ready=0 where id in (${positions})`,shipmentId,positionId);
+      return {statements:sql,result:{status:"synced"}};
+    }
     if (action === "photo.assign") {
       const sku = catalogKey(text(payload.sku, "Артикул"));
       const url = text(payload.url, "Фото", 2048);
@@ -339,7 +375,7 @@ export function createDatabase(store: SqlStore): Database {
       assert(
         payload.sourceWorkbookId ===
           "1dn7a7s-Ev9vLuNE2W8lECVwXCdpq8DXvC5Gt_O1sBbI",
-        "Не подтверждён источник справочника Assembly.",
+        "Не подтверждён источник справочника RITM Сборка.",
       );
       const staff = payload.employees as { id: string; name: string }[];
       const labels = payload.cartonNumbers as string[];
@@ -556,6 +592,9 @@ export function createDatabase(store: SqlStore): Database {
         on conflict(id) do update set name=excluded.name,plan=excluded.plan,units_per_box=excluded.units_per_box,ready=excluded.ready,source_active=excluded.source_active`,
         JSON.stringify(imported),
       );
+      if (data.positions.some(p => p.externalId.includes("|manual:"))) {
+        add("update av2_positions set source_active=0,ready=0 where supply_id=? and external_id in (select entity_id from av2_quality_repairs where kind='ritm.manualRetired')", supplyId);
+      }
       result = { supplyId };
     } else if (action === "ritm.import") {
       const source = payload.source as unknown as RitmSupply,
@@ -575,11 +614,14 @@ export function createDatabase(store: SqlStore): Database {
         "Состав РИТМ не прошёл проверку целостности.",
       );
       const previous = (
-        await all<{ sourceRevision: number; fingerprint: string }>(
-          "select source_revision,fingerprint from av2_ritm_links where shipment_id=?",
+        await all<{ sourceRevision: number; fingerprint: string; confirmedDeleted: number }>(
+          "select source_revision,fingerprint,json_extract(payload,'$.confirmedDeleted') confirmed_deleted from av2_ritm_links where shipment_id=?",
           [source.shipmentId],
         )
       )[0];
+      if (previous?.confirmedDeleted) {
+        return { statements: sql, result: { groups: 0, positions: 0, issues: [] } };
+      }
       if (previous) {
         assert(
           sourceRevision >= previous.sourceRevision,
@@ -618,16 +660,30 @@ export function createDatabase(store: SqlStore): Database {
         positions: source.positions.length,
         issues: prepared.issues,
       };
-    } else if (action === "ritm.retire") {
+    } else if (action === "ritm.retire" || action === "ritm.retireConfirmed") {
       const ids = payload.ids;
+      const confirmed = action === "ritm.retireConfirmed";
       assert(
         Array.isArray(ids) &&
           ids.length <= 1000 &&
           ids.every((v) => typeof v === "string" && ritmShipmentId(v)),
         "Не подтверждены исчезнувшие поставки РИТМ.",
       );
+      if (confirmed) {
+        assert(actor === "ritm-service", "Требуется служебное подтверждение РИТМ.");
+      }
       if (ids.length) {
         const parameter = JSON.stringify(ids);
+        if (confirmed) {
+          // A late snapshot can still contain the old rows. Keep the deletion
+          // by source ID even when the source has never been imported here.
+          add(
+            `insert into av2_ritm_links(shipment_id,source_revision,fingerprint,payload,seen_at,issues)
+             select value,0,'',json_object('confirmedDeleted',1),?,'[]' from json_each(?) where 1
+             on conflict(shipment_id) do update set payload=json_set(av2_ritm_links.payload,'$.confirmedDeleted',1)`,
+            Date.now(), parameter,
+          );
+        }
         add(
           "update av2_positions set source_active=0,ready=0 where supply_id in(select id from av2_supplies where origin_shipment_id in(select value from json_each(?)))",
           parameter,
@@ -882,6 +938,20 @@ export function createDatabase(store: SqlStore): Database {
         now,
         box.id,
       );
+    } else if (action === "carton.reopen") {
+      const box = await carton(text(payload.cartonId, "Короб"));
+      assert(
+        !box.dispatchId,
+        box.dispatchState === "sent"
+          ? "Короб уже отправлен."
+          : "Короб включён в отгрузку. Сначала отмените подготовку отгрузки.",
+      );
+      assert(
+        box.state === "closed" && box.closedAt === payload.closedAt,
+        "Статус короба изменился. Обновите его перед открытием.",
+      );
+      add("update av2_cartons set state='open',closed_at=null where id=?", box.id);
+      result = { cartonId: box.id, reopened: true };
     } else if (action === "dispatch.create") {
       assert(
         Array.isArray(payload.cartonIds) &&
@@ -922,7 +992,7 @@ export function createDatabase(store: SqlStore): Database {
       );
       result = { dispatchId };
     } else if (
-      ["dispatch.send", "dispatch.cancel", "export.create"].includes(action)
+      ["dispatch.cancel", "export.create"].includes(action)
     ) {
       const d = await dispatch(text(payload.dispatchId, "Отгрузка"));
       if (action === "export.create") {
@@ -958,31 +1028,19 @@ export function createDatabase(store: SqlStore): Database {
           d.state === "draft",
           "Можно изменить только подготовленную отгрузку.",
         );
-        if (action === "dispatch.send") {
-          assert(payload.confirmed === true, "Подтвердите фактический выезд.");
-          const frozen = JSON.stringify({
-            dispatch: { ...d, state: "sent", sentAt: now },
-            cartons: await loadCartons(d.cartonIds),
-          });
-          add(
-            "update av2_dispatches set state=?,sent_at=?,sent_payload=? where id=?",
-            "sent",
-            now,
-            frozen,
-            d.id,
-          );
-        } else {
-          add("update av2_dispatches set state=? where id=?", "canceled", d.id);
-          add(
-            "update av2_cartons set dispatch_id=null where dispatch_id=?",
-            d.id,
-          );
-        }
+        add("update av2_dispatches set state=? where id=?", "canceled", d.id);
+        add("update av2_cartons set dispatch_id=null where dispatch_id=?", d.id);
       }
     } else throw new Error("Неизвестная операция.");
     return { statements: sql, result };
   }
   return {
+    ozon,
+    preparedDispatches: () => readPreparedDispatches(store),
+    dispatchHistory: {
+      page: (page, query) => readDispatchHistoryPage(store, page, query),
+      detail: (shipmentId) => readDispatchHistoryDetail(store, shipmentId),
+    },
     warehouse: (url: URL) => readWarehouse(store, url),
     workHistory: (url: URL) => readWorkHistory(store, url),
     searchPositions: (url: URL) => searchPositions(store, url),
@@ -991,7 +1049,7 @@ export function createDatabase(store: SqlStore): Database {
     async export(exportId) {
       const row = (
         await all<Omit<ExportSnapshot, "payload"> & { payload: string }>(
-          "select * from av2_exports where id=?",
+          "select * from av2_exports where id=? and kind in ('account','template')",
           [exportId],
         )
       )[0];

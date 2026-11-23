@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Dataset, Roll } from "./model";
+import type { Dataset, Period, Roll } from "./model";
 import { printingRefreshDelay } from "./printingSnapshotRefresh";
 export const PRINTING_URL = import.meta.env.VITE_PRINTING_SOURCE_URL || "";
 export const ROLL_PRINTING_URL =
@@ -13,6 +13,7 @@ export const PRINTERS = [
 export type LiveEvent = {
   machine?: string | null;
   id: string;
+  nativeReceiptId?: string;
   uid: string;
   roll: string;
   employee: string;
@@ -62,6 +63,7 @@ export type LiveOrder = {
   assemblyMachineCut?: number | null;
   assemblyManualCut?: number | null;
   packingRecords?: number | null;
+  packedConfirmed?: number | null;
   packingEventIds?: string[] | null;
   shop?: string | null;
   shopCatalogStatus?: "matched" | "missing" | "ambiguous" | "unavailable" | "unknown_marketplace";
@@ -132,6 +134,7 @@ export type BoxPrintingEvent = {
   spreadsheetId?: string;
   positionId?: string;
   id: string;
+  nativeReceiptId?: string;
   employee: string;
   date: string;
   shipment: string;
@@ -142,14 +145,144 @@ export type BoxPrintingEvent = {
   sheets: number | null;
   area: number | null;
 };
+
+type D1PrintingWork = {
+  state: "disabled" | "ready" | "syncing" | "stale";
+  checkedAt: string | null;
+  rollPrint: LiveEvent[];
+  rollCut: LiveEvent[];
+  boxPrint: BoxPrintingEvent[];
+  boxCut: BoxPrintingEvent[];
+  corrections: number;
+};
+
+export function useD1PrintingWork(enabled: boolean, date: string, period: Period) {
+  const month = date.slice(0, 7);
+  const weekStart = new Date(date + "T12:00:00Z");
+  weekStart.setUTCDate(weekStart.getUTCDate() - (weekStart.getUTCDay() + 6) % 7);
+  const previousMonth = period === "week" && Number.isFinite(weekStart.getTime())
+    ? weekStart.toISOString().slice(0, 7) : month;
+  const [work, setWork] = useState<{ key: string; value: D1PrintingWork } | null>(null);
+  const key = previousMonth + "/" + month;
+  useEffect(() => {
+    if (!enabled) return;
+    const months = [...new Set([previousMonth, month])];
+    const abort = new AbortController();
+    let timer: number | undefined;
+    let checking = false;
+    const empty = { checkedAt: null, rollPrint: [], rollCut: [], boxPrint: [], boxCut: [], corrections: 0 };
+    const pages = new Map<string, D1PrintingWork>();
+    const read = async (month: string) => {
+      try {
+        const params = new URLSearchParams({ view: "work", month });
+        const response = await fetch("/api/printing?" + params, {
+          cache: "no-store",
+          signal: AbortSignal.any([abort.signal, AbortSignal.timeout(16000)]),
+        });
+        if (!response.ok) throw new Error("Printing work unavailable");
+        const value: D1PrintingWork = await response.json();
+        if (!["disabled", "ready", "syncing", "stale"].includes(value?.state) ||
+          ![value.rollPrint, value.rollCut, value.boxPrint, value.boxCut].every(Array.isArray))
+          throw new Error("Invalid printing work");
+        pages.set(month, value);
+      } catch {
+        pages.set(month, { ...(pages.get(month) ?? empty), state: "stale" });
+      }
+    };
+    const check = async () => {
+      if (checking || abort.signal.aborted || document.visibilityState !== "visible") return;
+      window.clearTimeout(timer);
+      checking = true;
+      let poll = true;
+      try {
+        await Promise.all(months.map(read));
+        if (abort.signal.aborted) return;
+        const values = [...pages.values()];
+        const state = values.every(value => value.state === "disabled") ? "disabled"
+          : values.some(value => value.state === "stale") ? "stale"
+          : values.some(value => value.state === "syncing") ? "syncing" : "ready";
+        poll = state !== "disabled";
+        setWork({
+          key, value: {
+            state, checkedAt: values.map(value => value.checkedAt).filter(Boolean).sort().at(0) ?? null,
+            rollPrint: values.flatMap(value => value.rollPrint), rollCut: values.flatMap(value => value.rollCut),
+            boxPrint: values.flatMap(value => value.boxPrint), boxCut: values.flatMap(value => value.boxCut),
+            corrections: values.reduce((sum, value) => sum + value.corrections, 0),
+          },
+        });
+      } finally {
+        checking = false;
+        if (poll && !abort.signal.aborted) timer = window.setTimeout(check, 10000);
+      }
+    };
+    void check();
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      abort.abort();
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", check);
+    };
+  }, [enabled, key, month, previousMonth]);
+  return enabled && work?.key === key ? work.value : null;
+}
+
+function mergeWork<T extends LiveEvent | BoxPrintingEvent>(legacy: T[], additions: T[]) {
+  const identity = (event: T, receipt: string) => JSON.stringify([
+    event.spreadsheetId, event.sheetId, receipt, event.date, event.article,
+    event.employee, event.quantity, event.area,
+    "roll" in event ? event.roll : null,
+  ]);
+  const ids = new Set(legacy.map(event => event.id));
+  const mirrored = new Set(legacy.flatMap(event => {
+    const receipt = event.id.replace(/^journal:(?:(?:roll-printing|stock-roll):)?(?:cut:)?/, "");
+    return event.spreadsheetId ? [identity(event, receipt)] : [];
+  }));
+  const work = [...legacy];
+  for (const event of additions) {
+    if (ids.has(event.id)) continue;
+    ids.add(event.id);
+    if (!event.nativeReceiptId || !mirrored.delete(identity(event, event.nativeReceiptId))) work.push(event);
+  }
+  return work;
+}
+
+export function printingWorkView(live: LivePrinting | null, work: D1PrintingWork | null): LivePrinting | null {
+  if (!work || work.state === "disabled" || (!live && !work.checkedAt)) return live;
+  const box = live?.boxPrinting;
+  return {
+    ...(live ?? { ok: true, schemaVersion: 2, updatedAt: work.checkedAt ?? "", supplies: [], sheets: [], issues: [] }),
+    events: mergeWork(live?.events || [], work.rollPrint),
+    cutEvents: mergeWork(live?.cutEvents || [], work.rollCut),
+    boxPrinting: box || work.boxPrint.length || work.boxCut.length ? {
+      ...box,
+      status: box?.status === "available" || work.boxPrint.length || work.boxCut.length ? "available" : "unavailable",
+      reason: box?.reason ?? null,
+      events: mergeWork(box?.events || [], work.boxPrint),
+      cutEvents: mergeWork(box?.cutEvents || [], work.boxCut),
+    } : undefined,
+  };
+}
+
+export function printingPeople(live: LivePrinting | null) {
+  const people = new Map(PRINTERS.map(person => [person.name, person]));
+  for (const event of live?.events || [])
+    if (!people.has(event.employee)) people.set(event.employee, {
+      id: `printer-d1-${encodeURIComponent(event.employee)}`,
+      name: event.employee,
+    });
+  return [...people.values()];
+}
+
 export function printingDataset(
   base: Dataset,
   live: LivePrinting | null,
 ): Dataset {
+  const people = new Map(printingPeople(live).map(person => [person.name, person]));
+  const printerIds = new Set([...people.values()].map(person => person.id));
   const rolls: Roll[] = (live?.events || []).map((e) => ({
     id: e.id,
     roll: e.roll,
-    employee: PRINTERS.find((p) => p.name === e.employee)!.id,
+    employee: people.get(e.employee)!.id,
     date: e.date,
     time: "",
     article: e.article,
@@ -163,8 +296,8 @@ export function printingDataset(
   return {
     ...base,
     employees: [
-      ...base.employees.filter((e) => !PRINTERS.some((p) => p.id === e.id)),
-      ...PRINTERS,
+      ...base.employees.filter((e) => !printerIds.has(e.id)),
+      ...people.values(),
     ],
     rolls,
   };
@@ -177,6 +310,7 @@ export function useLivePrinting(enabled = true) {
   const retryTimer = useRef<number | null>(null);
   const pending = useRef(false);
   const pendingForce = useRef(false);
+  const displayed = useRef(false);
   const queuedResolvers = useRef<(() => void)[]>([]);
   const reloadRef = useRef<(force?: boolean) => Promise<void>>(async () => {});
   const scheduleRetry = useCallback((delayMs: number) => {
@@ -204,7 +338,7 @@ export function useLivePrinting(enabled = true) {
     setError("");
     try {
       const r = await fetch(
-        force ? "/api/printing?refresh=1" : "/api/printing",
+        force ? "/api/printing?refresh=1" : displayed.current ? "/api/printing" : "/api/printing?view=last-confirmed",
         {
           cache: "no-store",
           signal: AbortSignal.any([
@@ -276,7 +410,9 @@ export function useLivePrinting(enabled = true) {
       )
         throw new Error("source");
       if (!controller.signal.aborted) {
+        displayed.current = true;
         setValue({ ...j, cutEvents });
+        if (j.refreshOnOpen === true) pending.current = true;
         if (j.stale === true) {
           // A valid stale response has its own notice. Only failed requests
           // use the error channel; duplicating staleReason shows two banners.
@@ -352,9 +488,11 @@ export function useLivePrinting(enabled = true) {
   useEffect(() => {
     if (!enabled) return;
     const abort = new AbortController();
-    let checking = false, observed: string | null = null;
+    let checking = false, observed: string | null = null, delay = 5000;
+    let timer: number | undefined;
     const check = async () => {
       if (checking || abort.signal.aborted || document.visibilityState !== "visible") return;
+      window.clearTimeout(timer);
       checking = true;
       try {
         const response = await fetch("/api/printing/revision", {cache:"no-store",signal:AbortSignal.any([abort.signal,AbortSignal.timeout(10000)])});
@@ -362,18 +500,21 @@ export function useLivePrinting(enabled = true) {
         const data = await response.json();
         if (typeof data.revision !== "string") return;
         const changed = observed !== null && observed !== data.revision;
+        delay = changed || data.refreshNeeded || observed === null ? 5000 : Math.min(delay + 5000, 20000);
         if (changed || data.refreshNeeded === true) {
           if (!active.current) { observed = data.revision; void reload(false); }
         } else observed = data.revision;
       } catch { /* Preserve the loaded snapshot; the next visible poll retries. */ }
-      finally { checking = false; }
+      finally {
+        checking = false;
+        if (!abort.signal.aborted) timer = window.setTimeout(() => void check(), delay);
+      }
     };
     void check();
-    const timer = window.setInterval(() => void check(), 5000);
     const visible = () => {if(document.visibilityState === "visible") void check();};
     document.addEventListener("visibilitychange",visible);
     window.addEventListener("online",visible);
-    return () => {abort.abort();window.clearInterval(timer);document.removeEventListener("visibilitychange",visible);window.removeEventListener("online",visible);};
+    return () => {abort.abort();window.clearTimeout(timer);document.removeEventListener("visibilitychange",visible);window.removeEventListener("online",visible);};
   },[enabled,reload]);
   return { value, loading, error, reload };
 }

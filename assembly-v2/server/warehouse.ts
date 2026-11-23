@@ -36,6 +36,7 @@ export async function readWarehouse(
   const search = catalogKey(url.searchParams.get("q") || "").slice(0, 150);
   const carton = url.searchParams.get("carton") || "";
   const exporting=url.searchParams.has("export");
+  const includeSummary = !exporting && url.searchParams.get("summary") === "1";
   const exportAll=url.searchParams.get("export")==="all";
   const ids:unknown=exporting&&!exportAll?JSON.parse(url.searchParams.get("export")||"[]"):[];
   check(Array.isArray(ids)&&ids.length<=100&&ids.every(id=>typeof id==='string'&&id.length<=300),"Выберите не больше 100 складских коробов.");
@@ -48,7 +49,11 @@ export async function readWarehouse(
   const selection = `select c.id from av2_warehouse_cartons c where ${filter} order by c.created_at desc,c.id desc limit ${exportAll?500:exporting?100:5} offset ?`;
   const batch = await store.readBatch([
     q(
-      `select count(*) total from av2_warehouse_cartons c where ${filter}`,
+      `select count(*) total ${includeSummary ? `,
+        count(case when c.state='open' then 1 end) open_count,
+        coalesce(sum((select sum(r.qty) from av2_warehouse_receipts r
+          where r.carton_id=c.id and r.voided_at is null)),0) qty` : ""}
+        from av2_warehouse_cartons c where ${filter}`,
       ...args,
     ),
     q(
@@ -71,6 +76,10 @@ export async function readWarehouse(
   }
   return {
     total: Number(batch[0][0]?.total || 0),
+    ...(includeSummary ? { summary: {
+      qty: Number(batch[0][0]?.qty ?? 0),
+      openCount: Number(batch[0][0]?.openCount ?? 0),
+    } } : {}),
     page,
     itemPage,
     cartons: (batch[1] as unknown as WarehouseCarton[]).map((c) => ({

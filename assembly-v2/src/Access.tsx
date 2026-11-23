@@ -67,7 +67,7 @@ export function Access({ children }: { children: ReactNode }) {
             setError(
               reason instanceof Error
                 ? reason.message
-                : "Не удалось открыть Assembly.",
+                : "Не удалось открыть RITM Сборка.",
             );
             initialAccess = undefined;
           }
@@ -93,10 +93,10 @@ export function Access({ children }: { children: ReactNode }) {
     <main className="content">
       <div className="page-title">
         <div>
-          <p className="muted">RITM ASSEMBLY</p>
+          <p className="muted">RITM Сборка</p>
           <h1>
             {role === undefined
-              ? "Открываем Assembly…"
+              ? "Загружаем рабочее место…"
               : "Откройте рабочую ссылку"}
           </h1>
         </div>

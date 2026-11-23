@@ -17,10 +17,12 @@ import {
 export default function ExportDialog({
   dispatch: d,
   workspace: w,
+  title,
   onClose,
 }: {
   dispatch: Dispatch;
   workspace: Workspace;
+  title?: string;
   onClose(): void;
 }) {
   const [snapshot, setSnapshot] = useState<ExportSnapshot | null>(null);
@@ -135,7 +137,7 @@ export default function ExportDialog({
   }
   const rows = snapshot ? flatten(snapshot) : [];
   return (
-    <Dialog title={`Excel · ${d.label}`} onClose={onClose}>
+    <Dialog title={title ?? `Excel · ${d.label}`} onClose={onClose}>
       <div className="stack">
         <p>
           {d.market} · {d.store} · {d.destination}
@@ -230,7 +232,7 @@ export default function ExportDialog({
               <div className="stack">
                 <p className="callout">
                   Загрузите ваш актуальный пустой шаблон WB или Ozon и
-                  сопоставьте поля. Номер короба Assembly является внутренним:
+                  сопоставьте поля. Номер короба RITM Сборка является внутренним:
                   если кабинет требует собственный штрихкод короба, его нужно
                   получить отдельно. Совместимость с кабинетом подтверждается
                   проверкой вашего шаблона.

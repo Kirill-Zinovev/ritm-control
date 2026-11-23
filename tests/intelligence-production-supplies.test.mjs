@@ -8,6 +8,7 @@ import {
   ProductionSupplyService,
   ProductionSupplyWriter,
   routeSupplyLines,
+  routeAssemblyCatalogLines,
   machineDepartment,
   shipmentMarketplace,
   DEPARTMENTS,
@@ -158,6 +159,43 @@ test("Xerox catalog changes require a new preview and a zero choice creates no e
   assert.deepEqual(result.skippedLines, []);
   assert.equal(f.writers.box.writes, 0);
   assert.equal(f.writers.roll.writes, 1);
+});
+
+test("roll rounding uses the catalog multiplicity and leaves DTF and UV flatbed quantities as entered", async () => {
+  for (const [direction, expected] of [["down", 20], ["up", 30]]) {
+    const f = fixture();
+    let rollMultiplicity = "10";
+    f.service.createCatalog = async () => [
+      {article: "ROLL", primary: true, store: "1", machine: "2-GO", printExtension: "CBI", rollMultiplicity},
+      {article: "DTF", primary: true, store: "1", machine: "DTF", printExtension: "D", rollMultiplicity: "10"},
+      {article: "UV", primary: true, store: "1", machine: "УФ планшет", printExtension: "U3", rollMultiplicity: "10"},
+      {article: "UNKNOWN", primary: true, store: "1", machine: "УФ", printExtension: "CP", rollMultiplicity: ""},
+    ];
+    const input = {...payload(), lines: ["ROLL", "DTF", "UV", "UNKNOWN"].map(article => ({article, quantity: 23}))};
+    const preview = await f.service.preview(input);
+    const [roll, dtf, uv, unknown] = preview.lines;
+    assert.deepEqual(roll.rounding.choices, [
+      {direction: "down", quantity: 20}, {direction: "up", quantity: 30},
+    ]);
+    assert.deepEqual([dtf.department, uv.department, unknown.department], ["box", "box", "roll"]);
+    assert.ok([dtf, uv, unknown].every(line => !line.rounding));
+    assert.match(unknown.rollIssue, /кратность/);
+    const request = {...input, previewId: preview.id};
+    await assert.rejects(f.service.execute(request), {code: "production_roll_rounding_required"});
+    await assert.rejects(f.service.execute({...request, rollRounding: [{article: "ROLL", direction}, {article: "DTF", direction}]}),
+      {code: "production_roll_rounding_required"});
+    const confirmed = {...request, rollRounding: [{article: "ROLL", direction}]};
+    rollMultiplicity = "4";
+    await assert.rejects(f.service.execute(confirmed), {code: "production_routing_changed"});
+    assert.equal(f.writers.roll.writes + f.writers.box.writes, 0);
+    rollMultiplicity = "10";
+    assert.equal((await f.service.execute(confirmed)).status, "verified");
+    assert.equal((await f.service.execute(confirmed)).status, "verified");
+    const saved = f.service.operations().find(operation => operation.id === input.operationId);
+    assert.deepEqual(saved.steps.map(step => [step.department, step.plan.lines.map(line => line.quantity)]),
+      [["roll", [expected, 23]], ["box", [23, 23]]]);
+    assert.equal(f.writers.roll.writes + f.writers.box.writes, 2);
+  }
 });
 
 test("production preview and execution require a local owner cookie and reject foreign origins, bearer-only and proxy requests", async () => {
@@ -860,3 +898,18 @@ test('production deadlines are included in preview identity and saved with verif
   const before=f.writers.roll.writes+f.writers.box.writes;
   await f.service.execute({...input,previewId:preview.id});assert.equal(f.writers.roll.writes+f.writers.box.writes,before);
 });
+test("Assembly routing applies the named shop, extension and Xerox rounding", () => {
+  const lines = [{article:"A(OZ)",quantity:7},{article:"B",quantity:7},{article:"C",quantity:1}];
+  const candidates = [
+    {article:"A(OZ)",primary:true,store:"1",machine:"2-GO",printExtension:"CBI"},
+    {article:"A(OZ)",primary:true,store:"2",machine:"XEROX",printExtension:"X"},
+    {article:"B",primary:true,store:"1",machine:"XEROX",printExtension:"X",sheetsPerUnit:"1",xeroxMultiplicity:"4"},
+    {article:"C",primary:true,store:"1",machine:"УФ",printExtension:""},
+  ];
+  const [roll, box, missing] = routeAssemblyCatalogLines(lines, candidates, "OZON Проверка (1 магазин)");
+  assert.deepEqual([roll.department, roll.store, roll.extension], ["roll", "1", "CBI"]);
+  assert.deepEqual(box.rounding.choices.map(choice => choice.quantity), [4,8]);
+  assert.equal(missing.department,null);
+  assert.match(missing.issue,/расширение/);
+});
+

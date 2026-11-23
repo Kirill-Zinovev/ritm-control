@@ -1,0 +1,161 @@
+.lesson-visual {
+  min-width: 0;
+  margin: 0;
+  border: 1px solid #d8e5f5;
+  border-radius: 13px;
+  background: #f6f9fd;
+  overflow: hidden;
+}
+
+.lesson-visual-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding: 5px 12px;
+  color: #304b6a;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.lesson-visual-heading .lesson-visual-zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding-inline: 7px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #174ab3;
+  font: inherit;
+  cursor: pointer;
+}
+
+.lesson-visual-zoom:hover {
+  background: #e8f1ff;
+}
+.lesson-visual-zoom:focus-visible,
+.lesson-visual-viewport:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: -2px;
+}
+.lesson-visual-viewport {
+  overflow: auto;
+  border-block: 1px solid #d8e5f5;
+  background: #e5edf7;
+}
+.lesson-visual-image {
+  position: relative;
+  width: min(100%, calc(clamp(225px, 44dvh, 480px) * var(--shot-ratio)));
+  max-width: var(--shot-width);
+  margin-inline: auto;
+}
+.lesson-visual-viewport[data-zoom="true"] .lesson-visual-image {
+  width: var(--shot-width);
+  max-width: none;
+  margin: 0 auto 0 0;
+}
+.lesson-visual-image img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.lesson-visual-marker {
+  position: absolute;
+  pointer-events: none;
+  box-sizing: border-box;
+  border: 2px solid #1d5fed;
+  border-radius: 5px;
+  box-shadow:
+    0 0 0 1px #fff,
+    0 1px 7px #173b7b50;
+  background: #477bfc13;
+}
+
+.lesson-visual-marker > span,
+.lesson-visual-legend li > span {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border: 1px solid #fff;
+  border-radius: 50%;
+  background: #184dbb;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1;
+}
+
+.lesson-visual-marker > span {
+  position: absolute;
+  top: -10px;
+  left: -8px;
+}
+.lesson-visual-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 13px;
+  margin: 0;
+  padding: 8px 12px;
+  color: #29486c;
+  list-style: none;
+}
+.lesson-visual-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+}
+
+.lesson-video {
+  display: block;
+  width: min(100%, calc(51dvh * 16 / 9));
+  aspect-ratio: 16 / 9;
+  margin-inline: auto;
+  border: 1px solid #d8e5f5;
+  border-radius: 12px;
+  background: #102d47;
+}
+
+.lesson-video:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 3px;
+}
+
+.lesson-detail {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0 0 0 23px;
+  color: #304b6a;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.lesson-detail li {
+  padding-left: 3px;
+}
+.lesson-detail li::marker {
+  color: #184dbb;
+  font-weight: 700;
+}
+
+@media (max-width: 600px) {
+  .lesson-visual-marker > span {
+    top: -7px;
+    left: -6px;
+    width: 16px;
+    height: 16px;
+    font-size: 10px;
+  }
+}
+@media (forced-colors: active) {
+  .lesson-visual-marker {
+    border-color: Highlight;
+  }
+}

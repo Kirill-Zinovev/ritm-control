@@ -1,3 +1,5 @@
+import { quantityRounding } from "./quantityRounding.js";
+
 function xeroxUnits(factor, multiplicity) {
   if (![factor, multiplicity].every(value => Number.isSafeInteger(value) && value > 0)) return null;
   let divisor = factor, remainder = multiplicity;
@@ -15,14 +17,9 @@ export function xeroxSheetCount(pieces, factor, multiplicity) {
 export function xeroxPlanRounding(requestedTotal, factor, multiplicity, { minimum = 1, maximum = Infinity } = {}) {
   const units = xeroxUnits(factor, multiplicity);
   if (!units) return null;
-  const remainder = requestedTotal % units.pieceStep;
-  if (!remainder) return null;
-  const lower = requestedTotal - remainder;
-  const choices = [
-    { direction: "down", quantity: lower },
-    { direction: "up", quantity: lower + units.pieceStep },
-  ].flatMap(({ direction, quantity }) => {
-    if (quantity < minimum || quantity > maximum) return [];
+  const quantities = quantityRounding(requestedTotal, units.pieceStep, { minimum, maximum });
+  if (!quantities) return null;
+  const choices = quantities.flatMap(({ direction, quantity }) => {
     const sheets = quantity === 0 ? 0 : xeroxSheetCount(quantity, factor, multiplicity);
     return sheets === null ? [] : [{ direction, quantity, sheets }];
   });

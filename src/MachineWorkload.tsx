@@ -1,6 +1,5 @@
-import {lazy,Suspense} from 'react';
-const ProductionForecast=lazy(()=>import('./ProductionForecast').then(m=>({default:m.ProductionForecast})));
-import { useEffect, useId, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useId, useMemo, useState } from "react";
+import { CalendarDays } from "lucide-react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -10,15 +9,15 @@ import {
   CaretRight,
   CheckCircle,
   Cylinder,
-  FileText,
   Package,
   Printer,
   Sliders,
 } from "./icons";
 import type { LivePrinting } from "./livePrinting";
+import type { ForecastRow } from "./productionForecastModel";
 import { num } from "./model";
 import { productionFact, type Fact } from "./productionData";
-import { rollPrinted } from "./liveSupplyProgress";
+import { rollCut, rollPrinted } from "./liveSupplyProgress";
 import {
   MACHINES,
   buildMachineWorkload,
@@ -30,9 +29,16 @@ import {
   type Department,
   type WorkloadArticle,
   type WorkloadMachine,
+  type WorkloadSupply,
 } from "./machineWorkloadData";
 import { Badge, Button, Empty, Notice, Search } from "./ui";
 import "./machineWorkload.css";
+
+const ProductionForecast = lazy(() =>
+  import("./ProductionForecast").then((module) => ({
+    default: module.ProductionForecast,
+  })),
+);
 
 const departmentName = (department: Department) =>
   department === "roll" ? "Рулонная печать" : "Бокс";
@@ -114,7 +120,11 @@ function Photo({ src }: { src: string }) {
   ) : (
     <span
       className="mw-photo mw-photo-empty"
-      title={src ? "Не удалось загрузить фото из источника" : "Фото не найдено по артикулу в базе"}
+      title={
+        src
+          ? "Не удалось загрузить фото из источника"
+          : "Фото не найдено по артикулу в базе"
+      }
     >
       <Package size={21} aria-hidden="true" />
     </span>
@@ -123,14 +133,18 @@ function Photo({ src }: { src: string }) {
 function ArticleTable({
   rows,
   showSupply,
+  onlyUnconfirmed = false,
 }: {
   rows: WorkloadArticle[];
   showSupply: boolean;
+  onlyUnconfirmed?: boolean;
 }) {
   const [page, setPage] = useState(0),
     [size, setSize] = useState(10),
     [missingOnly, setMissingOnly] = useState(false);
-  const missing = rows.filter((row) => !row.printed.complete),
+  const missing = rows.filter(
+      (row) => !row.printed.complete || !row.cut.complete,
+    ),
     visible = missingOnly ? missing : rows;
   const current = Math.min(
     page,
@@ -138,7 +152,7 @@ function ArticleTable({
   );
   return (
     <div className="mw-articles">
-      {(missing.length > 0 || missingOnly) && (
+      {!onlyUnconfirmed && (missing.length > 0 || missingOnly) && (
         <div className="mw-article-filter">
           <Button
             onClick={() => {
@@ -149,12 +163,10 @@ function ArticleTable({
           >
             {missingOnly
               ? "Показать все артикулы"
-              : `Без данных печати · ${num(missing.length)}`}
+              : `С неполными отметками · ${num(missing.length)}`}
           </Button>
           {!missingOnly && (
-            <small>
-              По этим артикулам источник не подтвердил количество печати.
-            </small>
+            <small>Проверьте отметки печати и порезки по этим артикулам.</small>
           )}
         </div>
       )}
@@ -164,7 +176,7 @@ function ArticleTable({
           <thead>
             <tr>
               <th>Товар / артикул</th>
-              {showSupply && <th>Поставка</th>}
+              {showSupply && <th>Задание</th>}
               <th>Магазин</th>
               <th>План</th>
               <th>Напечатано</th>
@@ -189,7 +201,46 @@ function ArticleTable({
                     </div>
                   </div>
                 </td>
-                {showSupply && <td>{row.supplyName}</td>}
+                {showSupply && (
+                  <td>
+                    {row.supplyName}
+                    {onlyUnconfirmed &&
+                      row.orders
+                        .filter(
+                          (order) =>
+                            rollPrinted(order) === null ||
+                            rollCut(order) === null,
+                        )
+                        .map((order) => {
+                          const phases = [
+                            rollPrinted(order) === null ? "печать" : "",
+                            rollCut(order) === null ? "порезка" : "",
+                          ].filter(Boolean);
+                          return (
+                            <small
+                              className="mw-cell-note"
+                              key={order.uid + ":" + order.row}
+                            >
+                              {order.sourceUrl ? (
+                                <a
+                                  href={
+                                    order.sourceUrl + "&range=E" + order.row
+                                  }
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  Строка {order.row}
+                                </a>
+                              ) : (
+                                `Строка ${order.row}`
+                              )}
+                              {" · "}
+                              {phases.join(" и ")}
+                            </small>
+                          );
+                        })}
+                  </td>
+                )}
                 <td>
                   <span className="mw-store">{row.store}</span>
                 </td>
@@ -202,9 +253,11 @@ function ArticleTable({
                 </td>
                 <td>
                   {row.cut.value === null ? "—" : num(row.cut.value)}
-                  {!row.cut.complete && row.cut.known > 0 && (
+                  {!row.cut.complete && (
                     <small className="mw-cell-note">
-                      Данные {row.cut.known}/{row.cut.expected}
+                      {row.cut.known
+                        ? `Данные ${row.cut.known}/${row.cut.expected}`
+                        : "Нет отметки порезки"}
                     </small>
                   )}
                 </td>
@@ -370,43 +423,352 @@ function DepartmentLane({
 const parameter = (name: string, fallback: string) =>
   new URLSearchParams(location.search).get(`mw_${name}`) || fallback;
 
-export function MachineWorkload(props: {live:LivePrinting|null;loading:boolean;error:string;onRefresh:()=>void;demo?:boolean}) {
-  const [tab,setTab]=useState(()=>parameter("tab","current")==="forecast"?"forecast":"current");
-  useEffect(()=>{const url=new URL(location.href);if(tab==="forecast")url.searchParams.set("mw_tab",tab);else url.searchParams.delete("mw_tab");history.replaceState(null,"",url);},[tab]);
-  return <><div className="forecast-section-tabs" aria-label="Загрузка и прогноз"><Button kind={tab==="current"?"primary":"secondary"} aria-pressed={tab==="current"} onClick={()=>setTab("current")}>Текущая загрузка</Button><Button kind={tab==="forecast"?"primary":"secondary"} aria-pressed={tab==="forecast"} onClick={()=>setTab("forecast")}>Прогноз сроков</Button></div>{tab==="current"?<CurrentMachineWorkload {...props}/>:<Suspense fallback={<div className="notice">Открываем прогноз сроков…</div>}><ProductionForecast live={props.live} loading={props.loading} onRefresh={props.onRefresh}/></Suspense>}</>;
+type MachineWorkloadProps = {
+  live: LivePrinting | null;
+  loading: boolean;
+  error: string;
+  onRefresh: () => void;
+  demo?: boolean;
+};
+
+export function MachineWorkload(props: MachineWorkloadProps) {
+  const [tab, setTab] = useState(() =>
+    parameter("tab", "current") === "forecast" ? "forecast" : "current",
+  );
+  useEffect(() => {
+    const url = new URL(location.href);
+    if (tab === "forecast") url.searchParams.set("mw_tab", tab);
+    else url.searchParams.delete("mw_tab");
+    history.replaceState(null, "", url);
+  }, [tab]);
+  const calendar = tab === "forecast";
+  const [forecasts, setForecasts] = useState<ForecastRow[]>([]);
+  const forecastBySupply = useMemo(
+    () => new Map(forecasts.map((row) => [row.key, row])),
+    [forecasts],
+  );
+  return (
+    <>
+      <div
+        className="mw-primary-tabs"
+        role="group"
+        aria-label="Загрузка и календарь"
+      >
+        <Button
+          kind={calendar ? "secondary" : "primary"}
+          aria-pressed={!calendar}
+          onClick={() => setTab("current")}
+        >
+          Загрузка
+        </Button>
+        <Button
+          kind={calendar ? "primary" : "secondary"}
+          aria-pressed={calendar}
+          onClick={() => setTab("forecast")}
+        >
+          <CalendarDays size={17} /> Календарь
+        </Button>
+      </div>
+      <div className={calendar ? "mw-page-grid is-calendar" : "mw-page-grid"}>
+        <div hidden={calendar}>
+          <CurrentMachineWorkload
+            {...props}
+            forecastBySupply={forecastBySupply}
+          />
+        </div>
+        <Suspense fallback={<Notice>Открываем календарь…</Notice>}>
+          <ProductionForecast
+            live={props.live}
+            loading={props.loading}
+            onRefresh={props.onRefresh}
+            compact={!calendar}
+            onForecastChange={setForecasts}
+            onOpenCalendar={() => setTab("forecast")}
+          />
+        </Suspense>
+      </div>
+    </>
+  );
 }
+
+function workloadFinished(machine: WorkloadMachine) {
+  return machine.rows.every((row) =>
+    row.orders.every(
+      (order) =>
+        (rollPrinted(order) ?? -1) >= order.quantity &&
+        (rollCut(order) ?? -1) >= order.quantity,
+    ),
+  );
+}
+
+function StationFact({
+  metric,
+  plan,
+  label,
+}: {
+  metric: Fact;
+  plan: number;
+  label: string;
+}) {
+  return (
+    <div className="mw-station-fact">
+      <span>
+        <strong>
+          {metric.value === null
+            ? "—"
+            : `${metric.complete ? "" : "≥ "}${num(metric.value)}`}
+        </strong>{" "}
+        / {num(plan)}
+      </span>
+      <Meter metric={metric} plan={plan} label={label} />
+    </div>
+  );
+}
+
+const stationDeadline = new Intl.DateTimeFormat("ru-RU", {
+  timeZone: "Europe/Moscow",
+  day: "numeric",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+const stationTiming = {
+  done: { label: "Готово", tone: "success" },
+  "on-time": { label: "К сроку", tone: "success" },
+  risk: { label: "Под риском", tone: "warning" },
+  late: { label: "Позже срока", tone: "danger" },
+  unknown: { label: "Нужны данные", tone: "warning" },
+  "no-deadline": { label: "Срок не задан", tone: "neutral" },
+} as const;
+
+function StationOverview({
+  machines,
+  supplies,
+  selected,
+  forecastBySupply,
+  onSelect,
+}: {
+  machines: WorkloadMachine[];
+  supplies: WorkloadSupply[];
+  selected: WorkloadMachine;
+  forecastBySupply: ReadonlyMap<string, ForecastRow>;
+  onSelect: (key: string) => void;
+}) {
+  const detailId = useId();
+  const [openSupply, setOpenSupply] = useState<string | null>(null);
+  const matches = supplies.flatMap((supply) => {
+    const machine = supply.machines.find(
+      (item) =>
+        item.id === selected.id && item.department === selected.department,
+    );
+    return machine ? [{ supply, machine }] : [];
+  });
+  const unconfirmed = selected.rows.filter(
+    (row) => !row.printed.complete || !row.cut.complete,
+  );
+  return (
+    <>
+      <section className="card mw-station-overview">
+        <h2>По станкам</h2>
+        <table className="mw-station-table">
+          <thead>
+            <tr>
+              <th>Станок</th>
+              <th>Напечатано, шт.</th>
+              <th>Порезано, шт.</th>
+              <th>Осталось печатать, шт.</th>
+            </tr>
+          </thead>
+          <tbody>
+            {machines.map((machine) => {
+              const left = machine.printed.complete
+                ? machine.rows.reduce(
+                    (sum, row) =>
+                      sum +
+                      row.orders.reduce(
+                        (total, order) =>
+                          total +
+                          Math.max(
+                            0,
+                            order.quantity - (rollPrinted(order) ?? 0),
+                          ),
+                        0,
+                      ),
+                    0,
+                  )
+                : null;
+              return (
+                <tr
+                  className={machine.key === selected.key ? "is-selected" : ""}
+                  key={machine.key}
+                  onClick={() => onSelect(machine.key)}
+                >
+                  <th scope="row">
+                    <button
+                      type="button"
+                      aria-pressed={machine.key === selected.key}
+                      aria-controls={detailId}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onSelect(machine.key);
+                      }}
+                    >
+                      <strong>{machine.label}</strong>
+                      <small>{departmentName(machine.department)}</small>
+                    </button>
+                  </th>
+                  <td>
+                    <StationFact
+                      metric={machine.printed}
+                      plan={machine.plan}
+                      label={`Напечатано · ${machine.label}`}
+                    />
+                  </td>
+                  <td>
+                    <StationFact
+                      metric={machine.cut}
+                      plan={machine.plan}
+                      label={`Порезано · ${machine.label}`}
+                    />
+                  </td>
+                  <td className="mw-station-left">
+                    {left === null ? (
+                      <small>Нет точных данных</small>
+                    ) : (
+                      <strong>{num(left)}</strong>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </section>
+      <section className="card mw-station-supplies" id={detailId}>
+        <header>
+          <h2>Задания на {selected.label}</h2>
+          <small>
+            {num(matches.length)}{" "}
+            {countWord(matches.length, "задание", "задания", "заданий")}
+          </small>
+        </header>
+        {unconfirmed.length > 0 && (
+          <details className="mw-missing-data">
+            <summary>
+              Что проверить · {num(unconfirmed.length)}{" "}
+              {countWord(unconfirmed.length, "позиция", "позиции", "позиций")}
+            </summary>
+            <p>
+              Источник не подтвердил количество по этим строкам. Знак ≥
+              показывает подтверждённый минимум.
+            </p>
+            <ArticleTable
+              key={selected.key}
+              rows={unconfirmed}
+              showSupply
+              onlyUnconfirmed
+            />
+          </details>
+        )}
+        <div className="mw-station-supply-columns">
+          <span>Поставка или запасы</span>
+          <span>К сроку</span>
+        </div>
+        {matches.map(({ supply, machine }) => {
+          const open = openSupply === supply.key;
+          const forecast = forecastBySupply.get(supply.key);
+          const status = forecast ? stationTiming[forecast.status] : null;
+          const due = forecast?.readyAt ? Date.parse(forecast.readyAt) : NaN;
+          const timing =
+            status ||
+            (workloadFinished(machine)
+              ? stationTiming.done
+              : { label: "Прогноз в загрузке", tone: "neutral" });
+          return (
+            <div key={supply.key} className="mw-station-supply">
+              <button
+                type="button"
+                className="mw-station-supply-trigger"
+                aria-expanded={open}
+                onClick={() => setOpenSupply(open ? null : supply.key)}
+              >
+                <span>
+                  <strong>{supply.name}</strong>
+                  <small>
+                    {num(machine.plan)} шт. · {num(machine.rows.length)} поз.
+                  </small>
+                </span>
+                <span>
+                  <Badge tone={timing.tone}>{timing.label}</Badge>
+                  {Number.isFinite(due) && (
+                    <small>до {stationDeadline.format(due)}</small>
+                  )}
+                </span>
+                {open ? <CaretDown size={17} /> : <CaretRight size={17} />}
+              </button>
+              {open && (
+                <div className="mw-station-supply-detail">
+                  <a
+                    className="mw-open-supply"
+                    href={
+                      supply.stock
+                        ? "/?page=reserves"
+                        : `/?page=supplies&supplySheet=${encodeURIComponent(`${supply.sourceId}:${supply.sheetId}`)}`
+                    }
+                  >
+                    {supply.stock ? "Открыть запасы" : "Открыть поставку"}{" "}
+                    <ArrowSquareOut size={15} aria-hidden="true" />
+                  </a>
+                  <ArticleTable rows={machine.rows} showSupply={false} />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </section>
+    </>
+  );
+}
+
 function CurrentMachineWorkload({
   live,
   loading,
   error,
   onRefresh,
   demo = false,
+  forecastBySupply,
 }: {
   live: LivePrinting | null;
   loading: boolean;
   error: string;
   onRefresh: () => void;
   demo?: boolean;
+  forecastBySupply: ReadonlyMap<string, ForecastRow>;
 }) {
   const [view, setView] = useState(() =>
-    parameter("view", "supplies") === "machines" ? "machines" : "supplies",
+    parameter("view", "machines") === "supplies" ? "supplies" : "machines",
   );
+  const [scope, setScope] = useState(() => parameter("scope", "all"));
   const [market, setMarket] = useState(() => parameter("market", "all"));
   const [supply, setSupply] = useState(() => parameter("supply", "all"));
   const [department, setDepartment] = useState(() =>
     parameter("department", "all"),
   );
   const [machineId, setMachineId] = useState(() => parameter("machine", "all"));
-  const [state, setState] = useState(() => parameter("state", "all"));
+  const [state, setState] = useState(() => parameter("state", "active"));
+  const [selectedStation, setSelectedStation] = useState("");
   const [search, setSearch] = useState(() => parameter("q", ""));
-  const [filtersOpen, setFiltersOpen] = useState(
-    () =>
-      ["department", "machine", "state"].some(
-        (key) => parameter(key, "all") !== "all",
-      ) || !!parameter("q", ""),
+  const [filtersOpen, setFiltersOpen] = useState(() =>
+    ["scope", "market", "supply", "machine"].some(
+      (key) => parameter(key, "all") !== "all",
+    ),
   );
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  const all = useMemo(() => buildMachineWorkload(live), [live]);
+  const all = useMemo(
+    () => buildMachineWorkload(live, { includeStock: true }),
+    [live],
+  );
   useEffect(() => {
     if (live && supply !== "all" && !all.some((item) => item.key === supply))
       setSupply("all");
@@ -415,6 +777,7 @@ function CurrentMachineWorkload({
     const url = new URL(location.href);
     for (const [key, value] of Object.entries({
       view,
+      scope,
       market,
       supply,
       department,
@@ -423,20 +786,24 @@ function CurrentMachineWorkload({
       q: search,
     })) {
       if (
-        value === "all" ||
         value === "" ||
-        (key === "view" && value === "supplies")
+        (key === "view"
+          ? value === "machines"
+          : key === "state"
+            ? value === "active"
+            : value === "all")
       )
         url.searchParams.delete(`mw_${key}`);
       else url.searchParams.set(`mw_${key}`, value);
     }
     history.replaceState(null, "", url);
-  }, [view, market, supply, department, machineId, state, search]);
+  }, [view, scope, market, supply, department, machineId, state, search]);
   const filtered = useMemo(() => {
     const q = search.trim().toLocaleLowerCase("ru-RU");
     return all
       .filter(
         (item) =>
+          (scope === "all" || (scope === "stock" ? item.stock : !item.stock)) &&
           (market === "all" || item.market === market) &&
           (supply === "all" || item.key === supply),
       )
@@ -462,7 +829,13 @@ function CurrentMachineWorkload({
           })
           .filter(
             (m) =>
-              m.rows.length && (state === "all" || workloadState(m) === state),
+              m.rows.length &&
+              (state === "all" ||
+                (state === "active"
+                  ? !workloadFinished(m)
+                  : state === "unknown"
+                    ? !m.printed.complete || !m.cut.complete
+                    : workloadState(m) === state)),
           );
         const rows = machines.flatMap((m) => m.rows),
           orders = rows.flatMap((row) => row.orders);
@@ -475,7 +848,7 @@ function CurrentMachineWorkload({
         };
       })
       .filter((item) => item.machines.length);
-  }, [all, market, supply, department, machineId, state, search]);
+  }, [all, scope, market, supply, department, machineId, state, search]);
   const machines = useMemo(() => {
     const groups = new Map<string, WorkloadMachine[]>();
     for (const m of filtered.flatMap((item) => item.machines))
@@ -492,23 +865,43 @@ function CurrentMachineWorkload({
       ),
     );
   }, [filtered]);
+  const selectedMachine =
+    machines.find((machine) => machine.key === selectedStation) || machines[0];
   const unknown = filtered
     .flatMap((item) => item.machines)
     .filter((m) => m.id === "unknown")
     .reduce((n, m) => n + m.rows.length, 0);
+  const stockCount = filtered.filter((item) => item.stock).length;
+  const supplyCount = filtered.length - stockCount;
+  const positionCount = filtered.reduce(
+    (total, item) => total + item.articleCount,
+    0,
+  );
+  const unavailableStock =
+    live && scope !== "supplies" && market === "all"
+      ? ([
+          [live.stockRoll, "рулонная печать"],
+          [live.stockBox, "бокс"],
+        ] as const)
+      : [];
+  const missingStock = unavailableStock
+    .filter(([source]) => source?.status !== "available")
+    .map(([, label]) => label);
   const selectedFilters =
+    scope !== "all" ||
     market !== "all" ||
     supply !== "all" ||
     department !== "all" ||
     machineId !== "all" ||
-    state !== "all" ||
+    state !== "active" ||
     !!search;
   const clear = () => {
+    setScope("all");
     setMarket("all");
     setSupply("all");
     setDepartment("all");
     setMachineId("all");
-    setState("all");
+    setState("active");
     setSearch("");
   };
   const updated =
@@ -531,119 +924,130 @@ function CurrentMachineWorkload({
         </div>
       )}
       <div className="mw-toolbar">
-        <div
-          className="mw-view-switch"
-          role="group"
-          aria-label="Вид загруженности"
+        <select
+          aria-label="Участок"
+          value={department}
+          onChange={(event) => setDepartment(event.target.value)}
         >
-          <button
-            type="button"
-            aria-pressed={view === "supplies"}
-            onClick={() => setView("supplies")}
-          >
-            По поставкам
-          </button>
-          <button
-            type="button"
-            aria-pressed={view === "machines"}
-            onClick={() => setView("machines")}
-          >
-            По станкам
-          </button>
-        </div>
-        <label>
-          <span>Маркетплейс</span>
-          <select
-            aria-label="Маркетплейс загрузки станков"
-            value={market}
-            onChange={(e) => setMarket(e.target.value)}
-          >
-            <option value="all">Все маркетплейсы</option>
-            <option value="Ozon">Ozon</option>
-            <option value="WB">Wildberries</option>
-          </select>
-        </label>
-        <label className="mw-supply-filter">
-          <span>Поставка</span>
-          <select
-            aria-label="Поставка загрузки станков"
-            value={supply}
-            onChange={(e) => setSupply(e.target.value)}
-          >
-            <option value="all">Все поставки</option>
-            {all.map((item) => (
-              <option value={item.key} key={item.key}>
-                {item.name}
-              </option>
-            ))}
-          </select>
-        </label>
+          <option value="all">Все участки</option>
+          <option value="roll">Рулонная печать</option>
+          <option value="box">Бокс</option>
+        </select>
+        <select
+          aria-label="Готовность"
+          value={state}
+          onChange={(event) => setState(event.target.value)}
+        >
+          <option value="active">Только незавершённые</option>
+          <option value="all">Все задания</option>
+          <option value="pending">Нет отметок печати</option>
+          <option value="remaining">Есть остаток печати</option>
+          <option value="done">Печать выполнена</option>
+          <option value="unknown">Данные неполные</option>
+        </select>
+        <Search
+          value={search}
+          onChange={setSearch}
+          label="Найти поставку или артикул"
+        />
         <Button
           className="mw-filter-toggle"
+          title="Фильтры"
+          aria-label="Фильтры"
           onClick={() => setFiltersOpen(!filtersOpen)}
           aria-expanded={filtersOpen}
           aria-controls="mw-extra-filters"
         >
           <Sliders size={18} aria-hidden="true" />
-          Фильтры{selectedFilters && <span className="mw-filter-indicator" />}
+          {selectedFilters && <span className="mw-filter-indicator" />}
         </Button>
-        <Button onClick={onRefresh} disabled={loading}>
+        <Button
+          onClick={onRefresh}
+          disabled={loading}
+          aria-label="Обновить загрузку"
+          title="Обновить загрузку"
+        >
           <ArrowsClockwise
             size={18}
             className={loading ? "spin" : ""}
             aria-hidden="true"
           />
-          {loading ? "Обновляем…" : "Обновить"}
         </Button>
       </div>
       {filtersOpen && (
         <div className="mw-filter-row" id="mw-extra-filters">
-          <Search
-            value={search}
-            onChange={setSearch}
-            label="Найти артикул, товар или станок…"
-          />
-          <label className="sr-only" htmlFor="mw-department">
-            Участок
-          </label>
-          <select
-            id="mw-department"
-            value={department}
-            onChange={(e) => setDepartment(e.target.value)}
+          <div
+            className="mw-view-switch"
+            role="group"
+            aria-label="Вид загруженности"
           >
-            <option value="all">Все участки</option>
-            <option value="roll">Рулонная печать</option>
-            <option value="box">Бокс</option>
-          </select>
-          <label className="sr-only" htmlFor="mw-machine">
-            Станок
-          </label>
+            <button
+              type="button"
+              aria-pressed={view === "machines"}
+              onClick={() => setView("machines")}
+            >
+              По станкам
+            </button>
+            <button
+              type="button"
+              aria-pressed={view === "supplies"}
+              onClick={() => setView("supplies")}
+            >
+              По поставкам
+            </button>
+          </div>
           <select
-            id="mw-machine"
+            aria-label="Тип заданий"
+            value={scope}
+            onChange={(event) => {
+              setScope(event.target.value);
+              setSupply("all");
+              if (event.target.value === "stock") setMarket("all");
+            }}
+          >
+            <option value="all">Поставки и запасы</option>
+            <option value="supplies">Только поставки</option>
+            <option value="stock">Только запасы</option>
+          </select>
+          <select
+            aria-label="Маркетплейс загрузки станков"
+            value={market}
+            onChange={(event) => setMarket(event.target.value)}
+          >
+            <option value="all">Все маркетплейсы</option>
+            <option value="Ozon">Ozon</option>
+            <option value="WB">Wildberries</option>
+          </select>
+          <select
+            aria-label="Задание загрузки станков"
+            value={supply}
+            onChange={(event) => setSupply(event.target.value)}
+          >
+            <option value="all">Все поставки и запасы</option>
+            {all
+              .filter(
+                (item) =>
+                  scope === "all" ||
+                  (scope === "stock" ? item.stock : !item.stock),
+              )
+              .map((item) => (
+                <option value={item.key} key={item.key}>
+                  {item.name}
+                </option>
+              ))}
+          </select>
+          <select
+            aria-label="Станок"
             value={machineId}
-            onChange={(e) => setMachineId(e.target.value)}
+            onChange={(event) => setMachineId(event.target.value)}
           >
             <option value="all">Все станки</option>
-            {MACHINES.map((m) => (
-              <option value={m.id} key={m.id}>
-                {m.label}
+            {MACHINES.map((machine) => (
+              <option value={machine.id} key={machine.id}>
+                {machine.label}
               </option>
             ))}
             <option value="unknown">Станок не определён</option>
-          </select>
-          <label className="sr-only" htmlFor="mw-state">
-            Готовность
-          </label>
-          <select
-            id="mw-state"
-            value={state}
-            onChange={(e) => setState(e.target.value)}
-          >
-            <option value="all">Любая готовность</option>
-            <option value="pending">Нет отметок печати</option>
-            <option value="remaining">Есть остаток печати</option>
-            <option value="done">Печать выполнена</option>
-            <option value="unknown">Данные неполные</option>
           </select>
           {selectedFilters && (
             <Button kind="ghost" onClick={clear}>
@@ -662,15 +1066,10 @@ function CurrentMachineWorkload({
               : "Рабочие данные не загружены"}
         </span>
         <span>
-          Автообновление 5 мин · {num(filtered.length)}{" "}
-          {countWord(filtered.length, "поставка", "поставки", "поставок")} ·{" "}
-          {num(filtered.reduce((n, s) => n + s.articleCount, 0))}{" "}
-          {countWord(
-            filtered.reduce((n, s) => n + s.articleCount, 0),
-            "позиция",
-            "позиции",
-            "позиций",
-          )}
+          {num(supplyCount)}{" "}
+          {countWord(supplyCount, "поставка", "поставки", "поставок")} ·{" "}
+          {num(stockCount)} {countWord(stockCount, "лист", "листа", "листов")}{" "}
+          запасов · {num(positionCount)} поз.
         </span>
       </div>
       {(error || live?.stale) && (
@@ -680,6 +1079,12 @@ function CurrentMachineWorkload({
           {live && " Состав и готовность могут быть неактуальны."}
         </Notice>
       )}
+      {missingStock.length > 0 && !demo && (
+        <Notice tone="warning">
+          Загрузка запасов подтверждена частично. Нет данных участка:{" "}
+          {missingStock.join(", ")}.
+        </Notice>
+      )}
       {unknown > 0 && (
         <Notice tone="warning">
           Станок не определён: {num(unknown)}{" "}
@@ -687,41 +1092,44 @@ function CurrentMachineWorkload({
           показаны отдельно внутри своего участка.
         </Notice>
       )}
-      <div className="mw-layout">
-        <div className="mw-main-list">
-          {!filtered.length && (
-            <section className="mw-empty-panel">
-              <Empty
-                title={
-                  loading && !live
-                    ? "Загружаем поставки…"
-                    : live
-                      ? "По этим фильтрам нет заданий"
-                      : "Поставки пока не загружены"
-                }
-              >
-                {loading && !live
-                  ? "Читаем состав поставок, станки и готовность печати."
+      <div className="mw-main-list">
+        {!filtered.length && (
+          <section className="mw-empty-panel">
+            <Empty
+              title={
+                loading && !live
+                  ? "Загружаем поставки…"
                   : live
+                    ? "По этим фильтрам нет заданий"
+                    : "Поставки пока не загружены"
+              }
+            >
+              {loading && !live
+                ? "Читаем состав поставок, станки и готовность печати."
+                : live
                   ? "Измените фильтры или поиск. Новые поставки появятся после обновления."
                   : "Нажмите «Обновить», чтобы прочитать поставки и распределение по станкам."}
-              </Empty>
-              {selectedFilters && (
-                <Button onClick={clear}>Сбросить фильтры</Button>
-              )}
-            </section>
-          )}
-          {view === "supplies"
-            ? filtered.map((item) => {
-                const isExpanded = expanded.has(item.key);
-                return (
+            </Empty>
+            {selectedFilters && (
+              <Button onClick={clear}>Сбросить фильтры</Button>
+            )}
+          </section>
+        )}
+        {view === "supplies"
+          ? filtered.map((item) => {
+              const isExpanded = expanded.has(item.key);
+              return (
                 <article className="mw-supply" key={item.key}>
                   <header className="mw-supply-header">
                     <span
                       className={`mw-market is-${item.market === "WB" ? "wb" : item.market === "Ozon" ? "ozon" : "neutral"}`}
                       translate="no"
                     >
-                      {item.market === "Ozon" ? "OZON" : item.market || "RITM"}
+                      {item.stock
+                        ? "Запасы"
+                        : item.market === "Ozon"
+                          ? "OZON"
+                          : item.market || "RITM"}
                     </span>
                     <div className="mw-supply-title">
                       <h2>{item.name}</h2>
@@ -748,9 +1156,13 @@ function CurrentMachineWorkload({
                     </span>
                     <a
                       className="mw-open-supply"
-                      href={`/?page=supplies&supplySheet=${encodeURIComponent(`${item.sourceId}:${item.sheetId}`)}`}
+                      href={
+                        item.stock
+                          ? "/?page=reserves"
+                          : `/?page=supplies&supplySheet=${encodeURIComponent(`${item.sourceId}:${item.sheetId}`)}`
+                      }
                     >
-                      Открыть поставку{" "}
+                      {item.stock ? "Открыть запасы" : "Открыть поставку"}{" "}
                       <ArrowSquareOut size={15} aria-hidden="true" />
                     </a>
                     <button
@@ -759,7 +1171,9 @@ function CurrentMachineWorkload({
                       onClick={() =>
                         setExpanded((old) => {
                           const next = new Set(old);
-                          next.has(item.key) ? next.delete(item.key) : next.add(item.key);
+                          next.has(item.key)
+                            ? next.delete(item.key)
+                            : next.add(item.key);
                           return next;
                         })
                       }
@@ -806,96 +1220,18 @@ function CurrentMachineWorkload({
                     </>
                   )}
                 </article>
-                );
-              })
-            : machines.map((m) => (
-                <article className="mw-station-panel" key={m.key}>
-                  <header>
-                    <span className={`mw-lane-icon is-${m.department}`}>
-                      <DepartmentIcon department={m.department} />
-                    </span>
-                    <div>
-                      <h2>{m.label}</h2>
-                      <p>
-                        {departmentName(m.department)} ·{" "}
-                        {new Set(m.rows.map((r) => r.supplyKey)).size}{" "}
-                        {countWord(
-                          new Set(m.rows.map((r) => r.supplyKey)).size,
-                          "поставка",
-                          "поставки",
-                          "поставок",
-                        )}
-                      </p>
-                    </div>
-                    <span className={`mw-status is-${workloadState(m)}`}>
-                      {workloadStateLabel(m)}
-                    </span>
-                  </header>
-                  <MachineBlock machine={m} showSupply />
-                </article>
-              ))}
-        </div>
-        <aside className="mw-machine-overview" aria-label="Сводка по станкам">
-          <header>
-            <h2>Загрузка станков</h2>
-            <p>Незавершённые задания в выборке</p>
-          </header>
-          {(["roll", "box"] as const).map((d) => (
-            <section key={d}>
-              <h3>
-                <DepartmentIcon department={d} size={21} />
-                {departmentName(d)}
-              </h3>
-              {MACHINES.filter((m) => m.department === d).map((def) => {
-                const m = machines.find((item) => item.id === def.id),
-                  left = m ? remaining(m) : null;
-                return (
-                  <button
-                    className={`mw-overview-machine${machineId === def.id ? " is-selected" : ""}`}
-                    key={def.id}
-                    onClick={() => {
-                      setMachineId(machineId === def.id ? "all" : def.id);
-                      setView("machines");
-                    }}
-                    type="button"
-                    aria-pressed={machineId === def.id}
-                  >
-                    <span
-                      className={`mw-state-dot${m ? (left === null ? " is-unknown" : left <= 0 ? " is-done" : " is-remaining") : ""}`}
-                    />
-                    <span>
-                      <strong>{def.label}</strong>
-                      <small>
-                        {!live
-                          ? "Данные не загружены"
-                          : !m
-                            ? "Нет заданий в выборке"
-                            : left === null
-                              ? "Остаток не подтверждён"
-                              : left <= 0
-                                ? "Печать выполнена"
-                                : `Осталось ${num(left)} шт.`}
-                      </small>
-                      {m && (
-                        <span className="mw-overview-supplies">
-                          {[
-                            ...new Set(m.rows.map((row) => row.supplyName)),
-                          ].join(", ")}
-                        </span>
-                      )}
-                    </span>
-                    <CaretRight size={17} aria-hidden="true" />
-                  </button>
-                );
-              })}
-            </section>
-          ))}
-          <p className="mw-overview-note">
-            <FileText size={16} aria-hidden="true" />
-            Поставки и станки берутся из рабочих листов. Здесь показана
-            готовность печати.
-          </p>
-        </aside>
+              );
+            })
+          : selectedMachine && (
+              <StationOverview
+                key={selectedMachine.key}
+                machines={machines}
+                supplies={filtered}
+                selected={selectedMachine}
+                forecastBySupply={forecastBySupply}
+                onSelect={setSelectedStation}
+              />
+            )}
       </div>
     </div>
   );

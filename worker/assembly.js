@@ -38,6 +38,7 @@ function validDate_(date) {
   const parsed = new Date(date + "T12:00:00Z");
   return !isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
 }
+export { periodStart_ as assemblyPeriodStart, validDate_ as validAssemblyDate };
 
 export function summarizeAssembly(records, date, period = "day") {
   if (!validDate_(date)) throw new Error("Invalid assembly date");

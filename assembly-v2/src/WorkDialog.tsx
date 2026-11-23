@@ -1,10 +1,12 @@
 import { useRef, useState, type FormEvent } from "react";
 import type { Operation, Position, Supply } from "../shared/model";
 import { number, operationLabels } from "../shared/model";
-import { availableOperations } from "../shared/assembly";
 import type { Workspace } from "./useWorkspace";
 import { Button, Dialog, NativeSelect } from "./ui";
 import { useDirty, useDraftNavigation } from "./DraftGuard";
+
+// The planned cutting route does not restrict which work was actually done.
+const workOperations: readonly Operation[] = ["cut", "assembly", "packing"];
 
 export function WorkDialog({
   product: p,
@@ -143,7 +145,7 @@ export function WorkDialog({
         <fieldset className="operation-fieldset" disabled={w.busy}>
           <legend>Операция</legend>
           <div className="operation-choices">
-            {availableOperations(p).map((op) => (
+            {workOperations.map((op) => (
               <button
                 type="button"
                 key={op}

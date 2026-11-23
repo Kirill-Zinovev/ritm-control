@@ -56,6 +56,7 @@ export interface CatalogPhoto {
   sources: { sheet: string; row: number; raw: string[] }[];
 }
 export interface CatalogEntry {
+  printExtension?: string;
   photoUrl?: string | null;
   kindCorrection?: string;
   id: string;

@@ -1,7 +1,8 @@
 import { StockBoxSelect } from "./StockBoxSelect";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Fragment, useEffect, useRef, useState, type DragEvent, type FormEvent } from "react";
+import { ChevronDown, Download } from "lucide-react";
 import type { Operation, Supply } from "../shared/model";
-import { number, dateTime, operationLabels } from "../shared/model";
+import { countLabel, number, dateTime, operationLabels } from "../shared/model";
 import type { WarehouseCarton, WarehousePage, WarehouseReceipt } from "../shared/warehouse";
 import type { CatalogPage } from "../shared/catalog";
 import type { Workspace } from "./useWorkspace";
@@ -10,6 +11,7 @@ import { Button, Dialog, Empty, Field, NativeSelect, Pagination, Search } from "
 import { LabelDialog } from "./LabelDialog";
 import { ProductPhoto } from "./ProductPhoto";
 import { useDirty, useDraftNavigation } from "./DraftGuard";
+import { WarehouseCompositionPreview, WarehouseOverview, WarehousePageCheck } from "./WarehouseOverview";
 
 export function WarehouseStock({
   workspace: w,
@@ -39,6 +41,8 @@ export function WarehouseStock({
   const [over,setOver]=useState("");
   const [market,setMarket]=useState(""),[shop,setShop]=useState(""),[status,setStatus]=useState("");
   const [selected,setSelected]=useState<Set<string>>(new Set()),[downloading,setDownloading]=useState(false);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [exportError,setExportError]=useState("");
   async function downloadSelected(all=false){
     if(!all&&!selected.size)return;
@@ -62,10 +66,10 @@ export function WarehouseStock({
     setError("");
     const timer = setTimeout(() => {
       void request<WarehousePage>(
-        `/api/warehouse?q=${encodeURIComponent(query)}&page=${page}&market=${encodeURIComponent(market)}&store=${encodeURIComponent(shop)}&state=${status}`,
+        `/api/warehouse?q=${encodeURIComponent(query)}&page=${page}&market=${encodeURIComponent(market)}&store=${encodeURIComponent(shop)}&state=${status}${manager ? "&summary=1" : ""}`,
         { signal: abort.signal },
       )
-        .then(setData)
+        .then((next) => { if (!abort.signal.aborted) setData(next); })
         .catch((e) => {
           if (!abort.signal.aborted) setError(e.message);
         })
@@ -77,7 +81,7 @@ export function WarehouseStock({
       clearTimeout(timer);
       abort.abort();
     };
-  }, [query, page, market, shop, status, w.state?.revision]);
+  }, [query, page, market, shop, status, manager, loadAttempt, w.state?.revision]);
   async function command(
     action: string,
     payload: Record<string, unknown>,
@@ -123,33 +127,146 @@ export function WarehouseStock({
       setRemoval(null); setReason("");
     } catch (e) { setRemoveError((e as Error).message); }
   }
-  return (
-    <section aria-label="На склад" className="warehouse-stock-view">
-      {supply && <ManualReceipt workspace={w} supply={supply} />}
-      {manager && <div className="stock-manager-toolbar">
-        <div><h2>Запас на складе</h2><p className="muted">Складские короба «1скл1», «2скл1» и другие — открытые и закрытые. Товар остаётся запасом до назначения в поставку.</p></div>
-        <div className="tools">
-          <NativeSelect label="Маркетплейс запаса" value={market} onChange={e=>{setMarket(e.target.value);setPage(0);setSelected(new Set())}}><option value="">Все маркетплейсы</option><option value="OZON">OZON</option><option value="WB">WB</option></NativeSelect>
-          <Field label="Магазин запаса" placeholder="Все магазины" value={shop} onChange={e=>{setShop(e.target.value);setPage(0);setSelected(new Set())}}/>
-          <NativeSelect label="Статус складского короба" value={status} onChange={e=>{setStatus(e.target.value);setPage(0);setSelected(new Set())}}><option value="">Открытые и закрытые</option><option value="open">Открытые</option><option value="closed">Закрытые</option></NativeSelect>
+  function dropHandlers(box: WarehouseCarton) {
+    const eligible = dragged && !w.busy && box.state === "open" && dragged.box.id !== box.id
+      && dragged.box.market === box.market && dragged.box.store === box.store;
+    return {
+      onDragOver(event: DragEvent<HTMLElement>) {
+        if (!eligible) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        setOver(box.id);
+      },
+      onDragLeave() { setOver(""); },
+      onDrop(event: DragEvent<HTMLElement>) {
+        if (!eligible || !dragged) return;
+        event.preventDefault();
+        setMoving(dragged);
+        setMoveTarget(box.id);
+        setMoveQty(String(dragged.item.qty));
+        setError("");
+        setOver("");
+        setDragged(null);
+      },
+    };
+  }
+  const renderCarton = (box: WarehouseCarton) => (
+    <article className={`box-card stock-carton ${over === box.id ? "stock-drop-target" : ""}`} key={box.id}
+      {...dropHandlers(box)}>
+      <div className="stock-carton-heading">
+        <div>
+          <h3>{box.label}</h3>
+          <small className="readonly-note">
+            {box.current
+              ? "Текущий короб"
+              : box.state === "closed"
+                ? "Закрыт"
+                : "Открыт"}{" "}
+            · {box.market} · Магазин {box.store} · {number(box.qty)} шт.
+          </small>
         </div>
         <div className="actions">
-          <Button primary disabled={downloading||loading||!data?.total||w.busy} onClick={()=>void downloadSelected(true)}>{downloading?"Готовим Excel…":market||shop||status||query?`Скачать короба по фильтру · ${data?.total??0}`:`Скачать все короба · ${data?.total??0}`}</Button>
-          <Button disabled={downloading||!selected.size||w.busy} onClick={()=>void downloadSelected()}>{`Скачать Excel выбранных · ${selected.size}`}</Button>
-          <Button disabled={loading||!data?.cartons.length} onClick={()=>setSelected(previous=>new Set([...previous,...(data?.cartons.map(b=>b.id)||[])]))}>Выбрать всю страницу</Button>
-          {selected.size>0&&<Button onClick={()=>setSelected(new Set())}>Снять выбор</Button>}
-          <small className="muted">{data?`Найдено коробов: ${number(data.total)}. `:""}Отметьте нужные короба галочками. В Excel попадёт полный состав.</small>
+          {box.current ? (
+            <Button
+              disabled={w.busy}
+              onClick={() =>
+                void command(
+                  "warehouse.create",
+                  { market: box.market, store: box.store },
+                  "Новый складской короб создан.",
+                )
+              }
+            >
+              + Новый короб
+            </Button>
+          ) : null}
+          {box.state === "open" ? (
+            <Button
+              disabled={w.busy || !box.qty}
+              onClick={() => setConfirm(box)}
+            >
+              Закрыть короб
+            </Button>
+          ) : <Button disabled={w.busy} onClick={() => setReopen(box)}>Открыть для исправления</Button>}
         </div>
-        {exportError&&<p className="form-error" role="alert">{exportError}</p>}
-      </div>}
-      <Button onClick={() => safely(() => {
+      </div>
+      {confirm?.id === box.id ? (
+        <div className="stock-close-confirmation">
+          <p>
+            Закрыть {box.label}? Новые товары будут направляться в другой
+            открытый или новый короб этого магазина.
+          </p>
+          <div className="actions">
+            <Button onClick={() => setConfirm(null)} disabled={w.busy}>
+              Отмена
+            </Button>
+            <Button
+              primary
+              disabled={w.busy}
+              onClick={() =>
+                void command(
+                  "warehouse.close",
+                  { cartonId: box.id, version: confirm.version },
+                  "Складской короб закрыт.",
+                )
+              }
+            >
+              Подтвердить закрытие
+            </Button>
+          </div>
+        </div>
+      ) : null}
+      {box.items.map((item) => (
+        <div className="stock-transfer" key={item.id} draggable={!w.busy && box.state==="open"}
+          onDragStart={e=>{e.dataTransfer.setData("text/plain",item.id);e.dataTransfer.effectAllowed="move";setDragged({box,item});}} onDragEnd={()=>{setDragged(null);setOver("");}}>
+          <ProductPhoto
+            importId={item.catalogImportId || ""}
+            id={item.photoId}
+            sourceUrl={item.photoUrl}
+            sku={item.sku}
+            className="stock-product-photo"
+          />
+          <div className="stock-product-info">
+            <strong className="stock-product-name">{item.name}</strong>
+            <span className="stock-product-sku">{item.sku}</span>
+            <small className="readonly-note">{item.supply}</small>
+            <span>{item.employee}</span>
+            {item.workId ? <small className="readonly-note">
+              {item.workQty && item.workQty!==item.qty ? `Часть упаковки ${number(item.workQty)} шт. · Кэф всей работы: ` : "Новая упаковка · Кэф: "}{item.coefficient != null ? Number(item.coefficient).toLocaleString("ru-RU", { maximumFractionDigits: 4 }) : "норма не задана"}
+            </small> : null}
+            <small className="readonly-note">
+              {dateTime(item.createdAt)} МСК
+            </small>
+            {item.comment ? <small>{item.comment}</small> : null}
+            <div className="stock-item-actions actions">
+              <Button disabled={w.busy} aria-label={`Этикетка ${item.sku}`} onClick={() => setLabelReceipt(item.id)}>Этикетка</Button>
+              <Button disabled={w.busy || box.state !== "open"} onClick={()=>{setMoving({box,item});setMoveTarget("");setMoveQty(String(item.qty));setError("");}}>Переместить</Button>
+              <Button danger disabled={w.busy || box.state !== "open" || !!(item.workId && item.workQty && item.workQty !== item.qty)} aria-label={`Удалить из короба ${item.sku}`}
+                onClick={() => { setRemoval({ box, item }); setReason(""); setRemoveError(""); }}>Удалить из короба</Button>
+            </div>
+            {item.workId && item.workQty && item.workQty !== item.qty ? <small className="readonly-note">Упаковка разделена. Отменить всю исходную работу можно в истории работы в запас.</small> : null}
+            {box.state === "closed" ? <small className="readonly-note">Для удаления откройте короб для исправления.</small> : null}
+          </div>
+          <strong className="stock-product-quantity">
+            {number(item.qty)} шт.
+          </strong>
+        </div>
+      ))}
+      {box.items.length < box.itemCount ? (
+        <Button onClick={() => void more(box)}>
+          Показать ещё поступления · {box.itemCount - box.items.length}
+        </Button>
+      ) : null}
+    </article>
+  );
+  const filtered = !!(market || shop || status || query);
+  const historyButton = <Button onClick={() => safely(() => {
         const url = new URL(location.href);
         url.searchParams.set("view", "work");
         url.searchParams.set("historySupply", "warehouse");
         location.assign(url.href);
-      })}>История работы в запас</Button>
-      <p className="label">Найти на складе</p>
-      <Search
+      })}>История работы в запас</Button>;
+  const search = <Search
         label="Артикул, название или номер короба"
         value={query}
         onChange={(q) =>
@@ -159,7 +276,34 @@ export function WarehouseStock({
             setSelected(new Set());
           })
         }
-      />
+      />;
+  return (
+    <section aria-label={manager ? "Запас на складе" : "На склад"} className="warehouse-stock-view">
+      {supply && <ManualReceipt workspace={w} supply={supply} />}
+      {manager ? <>
+        <WarehouseOverview title="Запас на складе" metrics={[
+          { label: filtered ? "Коробов по фильтрам" : "Складских коробов", value: loading ? null : data?.total ?? null },
+          { label: "Изделий в коробах", value: loading ? null : data?.summary?.qty ?? null },
+          { label: "Открытых коробов", value: loading ? null : data?.summary?.openCount ?? null },
+        ]} actions={<>
+          {historyButton}
+          <Button disabled={downloading || loading || !data?.total || w.busy} onClick={() => void downloadSelected(true)}>
+            <Download size={17} />
+            {downloading ? "Готовим Excel…" : filtered ? "Скачать короба по фильтру" : "Скачать все короба"}
+          </Button>
+        </>} />
+        <div className="tools warehouse-filters">
+          {search}
+          <NativeSelect label="Маркетплейс запаса" value={market} onChange={e=>{setMarket(e.target.value);setPage(0);setSelected(new Set())}}><option value="">Все маркетплейсы</option><option value="OZON">OZON</option><option value="WB">WB</option></NativeSelect>
+          <Field label="Магазин запаса" placeholder="Все магазины" value={shop} onChange={e=>{setShop(e.target.value);setPage(0);setSelected(new Set())}}/>
+          <NativeSelect label="Статус складского короба" value={status} onChange={e=>{setStatus(e.target.value);setPage(0);setSelected(new Set())}}><option value="">Открытые и закрытые</option><option value="open">Открытые</option><option value="closed">Закрытые</option></NativeSelect>
+        </div>
+        {exportError && <p className="form-error" role="alert">{exportError}</p>}
+      </> : <>
+        {historyButton}
+        <p className="label">Найти на складе</p>
+        {search}
+      </>}
       <p className="readonly-note">
         Выберите короб при добавлении товара. Для переноса перетащите строку товара в открытый короб того же магазина или нажмите «Переместить».
       </p>
@@ -168,7 +312,7 @@ export function WarehouseStock({
           <p className="form-error" role="alert">
             {error}
           </p>
-          <Button disabled={w.busy} onClick={() => void w.refresh()}>
+          <Button disabled={w.busy} onClick={() => setLoadAttempt((attempt) => attempt + 1)}>
             Повторить загрузку
           </Button>
         </div>
@@ -177,124 +321,83 @@ export function WarehouseStock({
         <p role="status">Загружаем складские короба…</p>
       ) : !data?.cartons.length ? (
         <Empty
-          title={query ? "Ничего не найдено" : "Складских коробов пока нет"}
+          title={filtered ? "Коробов по фильтрам нет" : "Складских коробов пока нет"}
         >
-          {query
-            ? "Измените поиск."
-            : "Добавьте товар выше или разместите излишек упаковки."}
+          {filtered && manager ? <Button onClick={() => {
+            setQuery("");
+            setMarket("");
+            setShop("");
+            setStatus("");
+            setPage(0);
+            setSelected(new Set());
+          }}>Сбросить фильтры</Button> : filtered ? "Измените поиск."
+            : supply ? "Добавьте товар выше или разместите излишек упаковки."
+              : "Складские короба появятся после добавления запаса на сборке."}
         </Empty>
-      ) : (
-        data.cartons.map((box) => (
-          <article className={`box-card stock-carton ${over===box.id ? "stock-drop-target" : ""}`} key={box.id}
-            onDragOver={e=>{if(dragged && !w.busy && box.state==="open" && box.id!==dragged.box.id && box.market===dragged.box.market && box.store===dragged.box.store){e.preventDefault();e.dataTransfer.dropEffect="move";setOver(box.id);}}}
-            onDragLeave={()=>setOver("")} onDrop={e=>{e.preventDefault();setOver("");if(dragged&&!w.busy){setMoving(dragged);setMoveTarget(box.id);setMoveQty(String(dragged.item.qty));setError("");}setDragged(null);}}>
-            <div className="stock-carton-heading">
-              <div>
-                <h3>{manager && <input className="stock-select" type="checkbox" aria-label={`Выбрать складской короб ${box.label}`} checked={selected.has(box.id)} onChange={e=>setSelected(previous=>{const next=new Set(previous);if(e.target.checked)next.add(box.id);else next.delete(box.id);return next})}/>} {box.label}</h3>
-                <small className="readonly-note">
-                  {box.current
-                    ? "Текущий короб"
-                    : box.state === "closed"
-                      ? "Закрыт"
-                      : "Открыт"}{" "}
-                  · {box.market} · Магазин {box.store} · {number(box.qty)} шт.
-                </small>
-              </div>
-              <div className="actions">
-                {box.current ? (
-                  <Button
-                    disabled={w.busy}
-                    onClick={() =>
-                      void command(
-                        "warehouse.create",
-                        { market: box.market, store: box.store },
-                        "Новый складской короб создан.",
-                      )
-                    }
-                  >
-                    + Новый короб
-                  </Button>
-                ) : null}
-                {box.state === "open" ? (
-                  <Button
-                    disabled={w.busy || !box.qty}
-                    onClick={() => setConfirm(box)}
-                  >
-                    Закрыть короб
-                  </Button>
-                ) : <Button disabled={w.busy} onClick={() => setReopen(box)}>Открыть для исправления</Button>}
-              </div>
-            </div>
-            {confirm?.id === box.id ? (
-              <div className="stock-close-confirmation">
-                <p>
-                  Закрыть {box.label}? Новые товары будут направляться в другой
-                  открытый или новый короб этого магазина.
-                </p>
-                <div className="actions">
-                  <Button onClick={() => setConfirm(null)} disabled={w.busy}>
-                    Отмена
-                  </Button>
-                  <Button
-                    primary
-                    disabled={w.busy}
-                    onClick={() =>
-                      void command(
-                        "warehouse.close",
-                        { cartonId: box.id, version: confirm.version },
-                        "Складской короб закрыт.",
-                      )
-                    }
-                  >
-                    Подтвердить закрытие
-                  </Button>
-                </div>
-              </div>
-            ) : null}
-            {box.items.map((item) => (
-              <div className="stock-transfer" key={item.id} draggable={!w.busy && box.state==="open"}
-                onDragStart={e=>{e.dataTransfer.setData("text/plain",item.id);e.dataTransfer.effectAllowed="move";setDragged({box,item});}} onDragEnd={()=>{setDragged(null);setOver("");}}>
-                <ProductPhoto
-                  importId={item.catalogImportId || ""}
-                  id={item.photoId}
-                  sourceUrl={item.photoUrl}
-                  sku={item.sku}
-                  className="stock-product-photo"
-                />
-                <div className="stock-product-info">
-                  <strong className="stock-product-name">{item.name}</strong>
-                  <span className="stock-product-sku">{item.sku}</span>
-                  <small className="readonly-note">{item.supply}</small>
-                  <span>{item.employee}</span>
-                  {item.workId ? <small className="readonly-note">
-                    {item.workQty && item.workQty!==item.qty ? `Часть упаковки ${number(item.workQty)} шт. · Кэф всей работы: ` : "Новая упаковка · Кэф: "}{item.coefficient != null ? Number(item.coefficient).toLocaleString("ru-RU", { maximumFractionDigits: 4 }) : "норма не задана"}
-                  </small> : null}
-                  <small className="readonly-note">
-                    {dateTime(item.createdAt)} МСК
-                  </small>
-                  {item.comment ? <small>{item.comment}</small> : null}
-                  <div className="stock-item-actions actions">
-                    <Button disabled={w.busy} aria-label={`Этикетка ${item.sku}`} onClick={() => setLabelReceipt(item.id)}>Этикетка</Button>
-                    <Button disabled={w.busy || box.state !== "open"} onClick={()=>{setMoving({box,item});setMoveTarget("");setMoveQty(String(item.qty));setError("");}}>Переместить</Button>
-                    <Button danger disabled={w.busy || box.state !== "open" || !!(item.workId && item.workQty && item.workQty !== item.qty)} aria-label={`Удалить из короба ${item.sku}`}
-                      onClick={() => { setRemoval({ box, item }); setReason(""); setRemoveError(""); }}>Удалить из короба</Button>
-                  </div>
-                  {item.workId && item.workQty && item.workQty !== item.qty ? <small className="readonly-note">Упаковка разделена. Отменить всю исходную работу можно в истории работы в запас.</small> : null}
-                  {box.state === "closed" ? <small className="readonly-note">Для удаления откройте короб для исправления.</small> : null}
-                </div>
-                <strong className="stock-product-quantity">
-                  {number(item.qty)} шт.
-                </strong>
-              </div>
-            ))}
-            {box.items.length < box.itemCount ? (
-              <Button onClick={() => void more(box)}>
-                Показать ещё поступления · {box.itemCount - box.items.length}
-              </Button>
-            ) : null}
-          </article>
-        ))
-      )}
+      ) : manager ? (
+        <div className="table-scroll" tabIndex={0} role="region" aria-label="Складские короба">
+          <table className="warehouse-table stock-inventory-table">
+            <thead><tr>
+              <th><WarehousePageCheck rows={data.cartons} selected={selected} onChange={setSelected} /></th>
+              <th scope="col">Короб</th>
+              <th scope="col">Магазин</th>
+              <th scope="col">Статус</th>
+              <th scope="col">Состав</th>
+              <th scope="col">Изделий</th>
+              <th scope="col">Действие</th>
+            </tr></thead>
+            <tbody>
+              {data.cartons.map((box) => {
+                const open = expanded === box.id;
+                const toggleDetails = () => setExpanded(open ? null : box.id);
+                return (
+                  <Fragment key={box.id}>
+                    <tr className={(selected.has(box.id) ? "is-selected " : "") + (over === box.id ? "stock-drop-target" : "")}
+                      {...dropHandlers(box)}>
+                      <td><input type="checkbox" aria-label={`Выбрать складской короб ${box.label}`}
+                        checked={selected.has(box.id)} onChange={(event) => {
+                          const checked = event.target.checked;
+                          setSelected((previous) => {
+                            const next = new Set(previous);
+                            if (checked) next.add(box.id);
+                            else next.delete(box.id);
+                            return next;
+                          });
+                        }} /></td>
+                      <td><button className="text-action carton-select" type="button" aria-expanded={open} onClick={toggleDetails}>
+                        <ChevronDown size={16} />{box.label}
+                      </button></td>
+                      <td><strong>{box.market}</strong><small>Магазин {box.store}</small></td>
+                      <td>
+                        <span className="stock-inventory-status" data-state={box.state}>
+                          {box.current ? "Текущий" : box.state === "open" ? "Открыт" : "Закрыт"}
+                        </span>
+                        {box.closedAt && <small>{dateTime(box.closedAt)} МСК</small>}
+                      </td>
+                      <td><WarehouseCompositionPreview items={box.items} total={box.itemCount} /></td>
+                      <td className="numeric"><strong>{number(box.qty)}</strong></td>
+                      <td><Button aria-expanded={open} onClick={toggleDetails}>{open ? "Свернуть" : "Состав"}</Button></td>
+                    </tr>
+                    {open && <tr className="stock-inventory-expanded"><td colSpan={7}>{renderCarton(box)}</td></tr>}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : data.cartons.map(renderCarton)}
+      {manager && selected.size > 0 && <div className="selection-bar">
+        <div className="warehouse-selected">
+          <strong>Выбрано {countLabel(selected.size, ["короб", "короба", "коробов"])}</strong>
+          {selected.size > 100 && <span><small>До 100 выбранных коробов за одну выгрузку.</small></span>}
+        </div>
+        <div className="actions">
+          <Button className="warehouse-clear-selection" onClick={() => setSelected(new Set())}>Снять выбор</Button>
+          <Button primary disabled={downloading || w.busy || selected.size > 100} onClick={() => void downloadSelected()}>
+            <Download size={17} />Скачать выбранные
+          </Button>
+        </div>
+      </div>}
       {data ? (
         <Pagination
           page={page}

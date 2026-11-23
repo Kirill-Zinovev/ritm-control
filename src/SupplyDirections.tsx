@@ -47,7 +47,7 @@ function Progress({
     <div className={`direction-progress ${field}`}>
       <span>
         <strong>
-          {p.known
+          {p.known || p.done > 0
             ? `${p.complete && !missing ? "" : "≥ "}${num(p.done)}`
             : "—"}
         </strong>{" "}
@@ -55,7 +55,9 @@ function Progress({
         <b>
           {p.percent !== null && !missing
             ? `${p.percent}%`
-            : "Нет полных данных"}
+            : field === "packed" && p.lowerPercent !== null && !missing
+              ? `≥ ${p.lowerPercent}%`
+              : "Нет полных данных"}
         </b>
       </span>
       <div className="direction-progress-track">
@@ -144,6 +146,14 @@ export function SupplyDirections({
                 g.jobs.flatMap((j) => j.orders),
                 "packed",
               );
+              const missingPositions = g.jobs.some((job) => job.missingPositions > 0);
+              const percent = missingPositions ? null : p.percent;
+              const lowerPercent = missingPositions ? null : p.lowerPercent;
+              const progressLabel = percent !== null ? `${percent}%`
+                : lowerPercent !== null ? `≥ ${lowerPercent}%` : "—";
+              const progressTitle = percent === null
+                ? `Подтверждено ${num(p.done)} из ${num(p.plan)} шт. Данные об упаковке неполные.`
+                : `Упаковано ${num(p.done)} из ${num(p.plan)} шт.`;
               return (
                 <button
                   key={g.id}
@@ -171,10 +181,10 @@ export function SupplyDirections({
                       магазина
                     </small>
                     <i className="direction-progress-track">
-                      <i style={{ width: `${p.percent || 0}%` }} />
+                      <i style={{ width: `${percent ?? lowerPercent ?? 0}%` }} />
                     </i>
                   </span>
-                  <b>{p.percent === null ? "—" : `${p.percent}%`}</b>
+                  <b title={progressTitle}>{progressLabel}</b>
                 </button>
               );
             })}
@@ -363,7 +373,7 @@ export function SupplyDirections({
                       </Button>
                       {assemblyUrl && (
                         <a href={assemblyUrl} target="_blank" rel="noreferrer">
-                          Открыть Assembly <ExternalLink size={15} />
+                          Открыть сборку <ExternalLink size={15} />
                         </a>
                       )}
                       <small>

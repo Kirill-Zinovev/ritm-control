@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {CloudStore} from '../worker/cloud/store.js';
-import {drainOutbox, refreshSnapshot} from '../worker/cloud/runtime.js';
+import {refreshSnapshot} from '../worker/cloud/runtime.js';
 import {AssemblyTransferService} from '../agent/assemblyTransfer.js';
 import {LocalD1} from './helpers/d1-sqlite.mjs';
 import {cloudSchemaStatements} from './helpers/cloud-schema.mjs';
@@ -76,28 +76,4 @@ test('a lean refresh still refuses an unresolved move and keeps the last confirm
   assert.match(result.staleReason,/PENDING-SKU/);
   assert.deepEqual(result.events,[{id:'saved-fact'}]);
   assert.equal(await store.leaseIsActive('refresh:printing'),false);
-});
-
-test('legacy delivery uses confirmed identities without cloning or recovering source write plans', async t => {
-  const {db,store,env} = await fixture(t);
-  const before = db.db.prepare('SELECT payload FROM cloud_operations ORDER BY kind,id').all();
-  const scope = store.scope.bind(store);
-  store.scope = async (...args) => {
-    const value = await scope(...args), meta = value.meta.bind(value);
-    value.meta = function(key,...rest) {
-      assert.notEqual(key,'productionSupplyOperations','delivery must not copy the production history');
-      return meta(key,...rest);
-    };
-    return value;
-  };
-  let requests = 0;
-  const result = await drainOutbox(env,store,async (_url,init) => {
-    requests++;
-    const {event} = JSON.parse(init.body);
-    return Response.json({ok:true,eventId:event.eventId,status:'synced'});
-  });
-  assert.equal(requests,1);
-  assert.equal(result.pending,0);
-  assert.deepEqual(db.db.prepare('SELECT payload FROM cloud_operations ORDER BY kind,id').all(),before);
-  assert.equal(await store.leaseIsActive('production'),false);
 });

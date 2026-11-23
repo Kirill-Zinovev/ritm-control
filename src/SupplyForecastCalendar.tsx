@@ -195,7 +195,7 @@ export function SupplyForecastCalendar({
               </>}
               {id === "packing" && currentPackingPlan && <div className="supply-calendar-overview-packing-plan">{packingPlanText(currentPackingPlan)} <span>· не прогноз</span></div>}
               <div className={`supply-calendar-overview-forecast ${!complete && !excluded && !forecastReady ? "needs-data" : ""}`}>
-                <strong>{excluded ? "Нет задания Assembly" : !fact.positions ? "Нет данных по позициям" : complete ? "Этап выполнен" : forecastReady ? `Прогноз: ${instant(finish)}` : segments.length ? "Расчёт частичный" : "Прогноз не рассчитан"}</strong>
+                <strong>{excluded ? "Нет задания «RITM Сборка»" : !fact.positions ? "Нет данных по позициям" : complete ? "Этап выполнен" : forecastReady ? `Прогноз: ${instant(finish)}` : segments.length ? "Расчёт частичный" : "Прогноз не рассчитан"}</strong>
                 {!complete && !excluded && !forecastReady && <small>{reasons[0] || "Не хватает данных для расчёта"}{reasons.length > 1 ? ` · ещё ${reasons.length - 1}` : ""}</small>}
               </div>
             </article>;
@@ -361,7 +361,7 @@ export function SupplyForecastCalendar({
                             <strong><span className={`supply-calendar-phase-icon ${completed ? "complete" : ""}`} aria-hidden="true">{completed ? "✓" : "◔"}</span>{label} {completed ? "" : allUnknown ? "· нет данных" : fact.positions ? `${fact.unknownCount ? "≥" : ""}${percentage}%` : ""}</strong>
                             <small>
                               {phase === "packing" && row.packingExcluded ? (
-                                "Не в Assembly"
+                                "Не в «RITM Сборка»"
                               ) : allUnknown ? (
                                 "Факт не подтверждён"
                               ) : (
@@ -390,7 +390,7 @@ export function SupplyForecastCalendar({
                               {packingPlan.status === "ready" ? `Окно по графику: ${num(packingPlan.hours, 1)} ч` : packingPlanText(packingPlan)}
                             </small>}
                           </div>
-                          <div className="supply-calendar-fact" aria-label={phase === "packing" && row.packingExcluded ? `${label}: нет задания Assembly` : allUnknown || !fact.positions ? `${label}: данные не подтверждены` : `${label}: подтверждено ${num(fact.ready)} из ${num(fact.plan)} штук${fact.unknownCount ? ", данные неполные" : ""}`}>
+                          <div className="supply-calendar-fact" aria-label={phase === "packing" && row.packingExcluded ? `${label}: нет задания «RITM Сборка»` : allUnknown || !fact.positions ? `${label}: данные не подтверждены` : `${label}: подтверждено ${num(fact.ready)} из ${num(fact.plan)} штук${fact.unknownCount ? ", данные неполные" : ""}`}>
                             {phase === "packing" && row.packingExcluded ? <span>Нет задания</span> : allUnknown ? <span>Нет данных</span> : fact.positions ? <>
                               <div className="supply-calendar-fact-track"><span style={{ width: `${percentage}%` }} /></div>
                               <strong>{fact.unknownCount ? "≥ " : ""}{num(fact.ready)} / {num(fact.plan)}</strong>
@@ -442,7 +442,7 @@ export function SupplyForecastCalendar({
                             {!segments.length &&
                               (phase === "packing" && row.packingExcluded ? (
                                 <small className="supply-calendar-message">
-                                  Нет задания Assembly
+                                  Нет задания «RITM Сборка»
                                 </small>
                               ) : fact.positions &&
                                 !fact.unknownCount &&
@@ -528,7 +528,7 @@ export function SupplyForecastCalendar({
               <small>Прогноз упаковки</small>
               <strong>
                 {current.packingExcluded
-                  ? "Нет задания Assembly"
+                  ? "Нет задания «RITM Сборка»"
                   : current.packingStatus === "done"
                     ? "Готово"
                     : current.packingFinishAt
@@ -563,7 +563,7 @@ export function SupplyForecastCalendar({
               </p>
             )}
             {limitingResource && limitingResource.rate > 0 && <p>Скорость участка: <strong>{resourceRate(limitingResource)}</strong></p>}
-            {!current.packingExcluded && packingResource && packingResource.rate > 0 && <p>Упаковка Assembly: <strong>{resourceRate(packingResource)}</strong></p>}
+            {!current.packingExcluded && packingResource && packingResource.rate > 0 && <p>Упаковка «RITM Сборка»: <strong>{resourceRate(packingResource)}</strong></p>}
             <Button onClick={() => onSelect(current.key)}>
               Изменить сроки и открыть детали
             </Button>

@@ -36,4 +36,5 @@ export interface WarehousePage {
   total: number;
   page: number;
   itemPage: number;
+  summary?: { qty: number; openCount: number };
 }

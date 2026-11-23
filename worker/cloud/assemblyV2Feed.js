@@ -1,9 +1,10 @@
-import { createHmac } from "node:crypto";
-import { CloudError, json } from "./access.js";
+import { createHash, createHmac } from "node:crypto";
+import { CloudError } from "./access.js";
 import { cloudConfig, sourceId } from "./config.js";
 import { shipmentLock } from "./shipmentLocks.js";
 import { boxRemovalKind } from "./boxPositionRemoval.js";
 import { physicalShipmentId, productionOperationPending, productionOperationTarget } from "./productionOperationTarget.js";
+import { readPlanning } from "./productionPlanning.js";
 
 const PATH = "/api/assembly-v2/feed";
 function assemblyPhoto(value) {
@@ -79,6 +80,21 @@ const key = (o) =>
 const rootId = (o) =>
   o.assemblyShipmentId ||
   `RITM-${o.sourceId === "box-printing" ? "BOX" : "ROLL"}-${o.sheetId}`;
+
+function assemblySchedule(group, planning, orders) {
+  const key = `shipment:${group.shipmentId}`;
+  // The RITM calendar keys standalone BOX jobs by physical sheet.
+  const boxKey = group.shipmentId.startsWith("RITM-BOX-") ?
+    `sheet:box-printing:${group.shipmentId.slice("RITM-BOX-".length)}` : "";
+  const dates = Object.hasOwn(planning.deadlines, key)
+    ? planning.deadlines[key] : planning.deadlines[boxKey];
+  const { readyAt = null, packingAt = null, shipAt = null } = dates || {};
+  const urgent = group.title.includes("🔥");
+  if (!readyAt && !packingAt && !shipAt && !urgent) return undefined;
+  const complete = (field) => orders.length > 0 &&
+    orders.every(order => Number.isFinite(order[field]) && order[field] >= order.quantity);
+  return { readyAt, packingAt, shipAt, urgent, printed: complete("printProgress"), cut: complete("cutProgress") };
+}
 
 export function buildAssemblyV2Feed({
   snapshot,
@@ -232,6 +248,7 @@ export function buildAssemblyV2Feed({
     } catch {}
   }
   const groups = new Map(),
+    scheduleOrders = new Map(),
     issues = [],
     active = new Set();
   const issue = (id, title, message) => {
@@ -319,7 +336,14 @@ export function buildAssemblyV2Feed({
       issue(id, title, "Повторяются исходные ID позиций.");
       continue;
     }
+    const orders = scheduleOrders.get(id) || [];
+    orders.push(o);
+    scheduleOrders.set(id, orders);
     const photoUrl = assemblyPhoto(o.photoUrl);
+    const catalogStores = registry.get(id)?.catalogStores;
+    const article = o.article.trim().normalize("NFC").toUpperCase();
+    const fromAssembly = !!catalogStores && Object.hasOwn(catalogStores, article);
+    const confirmedStore = fromAssembly ? catalogStores[article] : "";
     group.positions.push({
       positionId,
       sku: o.article.trim(),
@@ -330,9 +354,9 @@ export function buildAssemblyV2Feed({
       sheetId: o.sheetId,
       row: o.row,
       rawUid: o.rawUid || null,
-      store: o.shopCatalogStatus === "matched" ? String(o.shop || "") : "",
-      storeStatus: o.shopCatalogStatus || "unknown",
-      unitsPerBox: o.shopCatalogStatus === "matched" && Number.isSafeInteger(o.catalogUnitsPerBox) && o.catalogUnitsPerBox > 0 ? o.catalogUnitsPerBox : null,
+      store: fromAssembly ? confirmedStore : o.shopCatalogStatus === "matched" ? String(o.shop || "") : "",
+      storeStatus: fromAssembly ? (confirmedStore ? "matched" : "unknown") : o.shopCatalogStatus || "unknown",
+      unitsPerBox: !fromAssembly && o.shopCatalogStatus === "matched" && Number.isSafeInteger(o.catalogUnitsPerBox) && o.catalogUnitsPerBox > 0 ? o.catalogUnitsPerBox : null,
     });
     groups.set(id, group);
   }
@@ -416,8 +440,16 @@ export function buildAssemblyV2Feed({
     });
   }
   const blocked = new Set(issues.map((i) => i.shipmentId));
-  // A lock checkpoint can change independently of the printing snapshot.
-  let sourceRevision = snapshot.at;
+  // Planning and lock checkpoints can change independently of the printing snapshot.
+  const planning = readPlanning(scope);
+  const planningAt = Date.parse(planning.updatedAt || "");
+  let sourceRevision = Number.isFinite(planningAt) && planningAt <= now + 60000
+    ? Math.max(snapshot.at, planningAt) : snapshot.at;
+  for (const row of operations) {
+    if (row.kind !== "assembly-only-item" || !groups.has(row.value?.shipmentId)) continue;
+    const at = Date.parse(row.value.removedAt || row.value.createdAt || "");
+    if (Number.isFinite(at) && at <= now + 60000) sourceRevision = Math.max(sourceRevision, at);
+  }
   for (const id of groups.keys()) {
     const changedAt = Date.parse(shipmentLock(scope, id).changedAt || "");
     if (Number.isFinite(changedAt) && changedAt > sourceRevision) {
@@ -437,12 +469,14 @@ export function buildAssemblyV2Feed({
     activeShipmentIds: [...active].sort(),
     supplies: [...groups.values()]
       .filter((g) => !blocked.has(g.shipmentId))
-      .map((g) => ({
-        ...g,
-        positions: g.positions.sort((a, b) =>
-          a.positionId.localeCompare(b.positionId),
-        ),
-      }))
+      .map((g) => {
+        const schedule = assemblySchedule(g, planning, scheduleOrders.get(g.shipmentId) || []);
+        return {
+          ...g,
+          ...(schedule ? { schedule } : {}),
+          positions: g.positions.sort((a, b) => a.positionId.localeCompare(b.positionId)),
+        };
+      })
       .sort((a, b) => a.shipmentId.localeCompare(b.shipmentId)),
     issues,
   };
@@ -475,5 +509,10 @@ export async function assemblyV2Feed(request, bindings, store) {
       "assembly_v2_source_busy",
       "Состав РИТМ изменяется. Повторим чтение после подтверждения.",
     );
-  return json(feed);
+  const body = JSON.stringify(feed);
+  const etag = '"' + createHash("sha256").update(body).digest("hex") + '"';
+  const headers = { etag, "cache-control": "no-store", "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff" };
+  return request.headers.get("if-none-match") === etag
+    ? new Response(null, { status: 304, headers })
+    : new Response(body, { headers });
 }

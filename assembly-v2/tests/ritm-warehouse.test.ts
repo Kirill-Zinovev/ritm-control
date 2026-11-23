@@ -17,8 +17,14 @@ test("короб из сборки виден РИТМ: свежий соста�
   await assert.rejects(f.cmd("ritm.carton.dispatch",{cartonId:box.assemblyV2Id,status:"sent",fingerprint:cartonFingerprint(box)}),/закрытый/);
   const snap=await db.snapshot(f.supply.id) as {cartons:{id:string;items:{id:string;qty:number}[]}[]};
   await f.cmd("carton.close",{cartonId:box.assemblyV2Id,items:snap.cartons[0].items.map(i=>({id:i.id,qty:i.qty})).sort((a,b)=>a.id.localeCompare(b.id))});
-  const closed=(await readRitmWarehousePage(db.store,new URL("https://assembly.test/api/ritm/warehouse"))).cartons[0];
+  let closed=(await readRitmWarehousePage(db.store,new URL("https://assembly.test/api/ritm/warehouse"))).cartons[0];
   await assert.rejects(f.cmd("ritm.carton.dispatch",{cartonId:box.assemblyV2Id,status:"sent",fingerprint:cartonFingerprint(box)}),/изменился/);
+  await f.cmd("carton.reopen",{cartonId:box.assemblyV2Id,closedAt:closed.closedAt});
+  const reopened=(await readRitmWarehousePage(db.store,new URL("https://assembly.test/api/ritm/warehouse"))).cartons[0];
+  assert.equal(reopened.status,"open");
+  assert.deepEqual(reopened.contents,closed.contents);
+  await f.cmd("carton.close",{cartonId:box.assemblyV2Id,items:snap.cartons[0].items.map(i=>({id:i.id,qty:i.qty})).sort((a,b)=>a.id.localeCompare(b.id))});
+  closed=(await readRitmWarehousePage(db.store,new URL("https://assembly.test/api/ritm/warehouse"))).cartons[0];
   const payload={cartonId:box.assemblyV2Id,status:"sent",fingerprint:cartonFingerprint(closed),changedBy:"Менеджер"},key=crypto.randomUUID();
   await f.cmd("ritm.carton.dispatch",payload,key);await f.cmd("ritm.carton.dispatch",payload,key);
   assert.equal(db.sqlite.prepare("select count(*) n from av2_dispatches").get()!.n,1);

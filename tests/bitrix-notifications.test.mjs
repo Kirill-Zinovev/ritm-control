@@ -253,14 +253,39 @@ test('ambiguous delivery is recorded once and is not sent again', async () => {
 
 test('outbox suppresses obsolete single-stage notifications but sends normal jobs', async () => {
   const scope=createScope(); scope.checkpoint=async()=>{};
-  for (const id of ['stock:box:7:uid:cut:0','stock:box:7:uid:print:0','stock:box:7:uid:complete:0','watch:s:box:cut','stock:new:shared'])
+  for (const id of ['stock:box:7:uid:cut:0','stock:box:7:uid:print:0','stock:box:7:uid:complete:0','watch:s:box:cut','watch:s:box:reminder','stock:new:shared'])
     scope.putOperation('bitrix-notification',{id,status:'pending',department:'roll',message:'test'});
   const bindings={RITM_ASSEMBLY_SYNC_SECRET:'a'.repeat(64)};
   const encrypted=await encryptBitrixConfig(bindings,config); scope.meta=()=>encrypted;
-  let calls=0; await drainBitrixNotifications(bindings,{scope:async()=>scope,withScope:async callback=>callback(scope)},async()=>{calls++;return Response.json({result:1})});
-  assert.equal(calls,1);
+  const destinations=[]; await drainBitrixNotifications(bindings,{scope:async()=>scope,withScope:async callback=>callback(scope)},async(url,init)=>{destinations.push(JSON.parse(init.body).DIALOG_ID);return Response.json({result:1})});
+  assert.deepEqual(destinations,['chat2']);
   assert.equal(scope.operations.get('bitrix-notification:stock:box:7:uid:cut:0').value.status,'superseded');
   assert.equal(scope.operations.get('bitrix-notification:stock:new:shared').value.status,'sent');
+  assert.equal(scope.operations.get('bitrix-notification:watch:s:box:reminder').value.status,'superseded');
+});
+
+test('a failed private completion delivery does not stop the other recipient or repeat on the next drain', async () => {
+  const scope = createScope();
+  scope.checkpoint = async () => {};
+  const bindings = {RITM_ASSEMBLY_SYNC_SECRET:'a'.repeat(64)};
+  scope.meta('bitrixNotificationConfig', await encryptBitrixConfig(bindings, config));
+  const id = 'watch:s:roll:complete';
+  scope.putOperation('bitrix-notification', {id,status:'pending',department:'roll',message:'Готово'});
+  const store = {scope:async()=>scope,withScope:async callback=>callback(scope)};
+  const recipients = [];
+  const fake = async (url, init) => {
+    const {DIALOG_ID} = JSON.parse(init.body);
+    recipients.push(DIALOG_ID);
+    if (DIALOG_ID === '1698') throw Error('lost acknowledgement');
+    return Response.json({result:123});
+  };
+  await drainBitrixNotifications(bindings, store, fake);
+  await drainBitrixNotifications(bindings, store, fake);
+  const notification = scope.operations.get(`bitrix-notification:${id}`).value;
+  assert.deepEqual(recipients,['1698','2374']);
+  assert.equal(notification.status,'uncertain');
+  assert.equal(notification.deliveries['1698'].status,'uncertain');
+  assert.equal(notification.deliveries['2374'].status,'sent');
 });
 
 test('credentials are encrypted at rest and cannot be decrypted with a different key', async()=>{

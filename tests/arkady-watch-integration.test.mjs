@@ -62,7 +62,7 @@ test('a mixed stock upload produces one native completion after every member is 
   const store=new CloudStore(db,{now:()=>Date.parse('2026-11-07T12:00:00Z')}),scope=await store.scope();
   const boxId='SYNTHETIC_STOCK_BOX_000000000',rollId='SYNTHETIC_STOCK_ROLL_000000000';
   const bindings={RITM_GOOGLE_STOCK_BOX_PRINTING_ID:boxId,RITM_GOOGLE_STOCK_ROLL_PRINTING_ID:rollId,RITM_ASSEMBLY_SYNC_SECRET:'a'.repeat(64)};
-  scope.meta('bitrixNotificationConfig',await encryptBitrixConfig(bindings,{RITM_BITRIX_WEBHOOK_URL:'https://kaleidoskop.bitrix24.ru/rest/1/fictionalkey/',RITM_BITRIX_BOT_TOKEN:'fictional-client-key',RITM_BITRIX_BOT_ID:'5768',RITM_BITRIX_BOX_CHAT:'chat1',RITM_BITRIX_ROLL_CHAT:'chat2'}));
+  scope.meta('bitrixNotificationConfig',await encryptBitrixConfig(bindings,{RITM_BITRIX_WEBHOOK_URL:'https://kaleidoskop.bitrix24.ru/rest/1/testhook0001/',RITM_BITRIX_BOT_TOKEN:'fictional-client-key',RITM_BITRIX_BOT_ID:'5768',RITM_BITRIX_BOX_CHAT:'chat1',RITM_BITRIX_ROLL_CHAT:'chat2'}));
   const cell=value=>({userEnteredValue:typeof value==='number'?{numberValue:value}:typeof value==='boolean'?{boolValue:value}:{stringValue:value}});
   const source=(sheetId,entries)=>{
     const rowData=Array.from({length:entries.length+4},()=>({values:[]}));rowData[3].values[4]=cell('Артикул');rowData[3].values[15]=cell('Кол-во');
@@ -100,10 +100,10 @@ test('a mixed stock upload produces one native completion after every member is 
   assert.equal((await runArkadyStockWatch(bindings,store,noNetwork)).queued,1);
   const event=(await store.scope()).operations.get('bitrix-notification:stock-batch:mixed-list:complete').value;
   assert.equal(event.presentation.sections.length,2);assert.equal(event.presentation.entries.length,3);assert.equal(event.presentation.quantity,62);
-  let sends=0;const fake=async(url,init)=>{sends++;assert.ok(url.endsWith('imbot.message.add'));const payload=JSON.parse(init.body),body=JSON.stringify(payload.ATTACH);const articleRows=payload.ATTACH.BLOCKS.flatMap(block=>block.GRID||[]).filter(row=>/^(ROLL|BOX)00/.test(row.NAME));assert.deepEqual(articleRows.map(({NAME,VALUE})=>[NAME,VALUE]),[['ROLL001','20 шт.'],['BOX001','32 шт.'],['BOX002','10 шт.']]);assert.match(body,/✅ Печать и порезка готовы/);return Response.json({result:123});};
+  const recipients=[];const fake=async(url,init)=>{assert.ok(url.endsWith('imbot.message.add'));const payload=JSON.parse(init.body),body=JSON.stringify(payload.ATTACH);recipients.push(payload.DIALOG_ID);const articleRows=payload.ATTACH.BLOCKS.flatMap(block=>block.GRID||[]).filter(row=>/^(ROLL|BOX)00/.test(row.NAME));assert.deepEqual(articleRows.map(({NAME,VALUE})=>[NAME,VALUE]),[['ROLL001','20 шт.'],['BOX001','32 шт.'],['BOX002','10 шт.']]);assert.match(body,/✅ Печать и порезка готовы/);return Response.json({result:123});};
   await drainBitrixNotifications(bindings,store,fake);
   const reloaded=new CloudStore(db,{now:store.now});assert.equal((await runArkadyStockWatch(bindings,reloaded,noNetwork)).queued,0);await drainBitrixNotifications(bindings,reloaded,fake);
-  const saved=await reloaded.scope();assert.equal(sends,1);assert.equal(saved.meta('bitrixCompletionPraisesUsed').length,1);assert.deepEqual(saved.meta('arkadyStockWatchStates'),legacyState);
+  const saved=await reloaded.scope();assert.deepEqual(recipients,['1698','2374']);assert.equal(saved.meta('bitrixCompletionPraisesUsed').length,1);assert.deepEqual(saved.meta('arkadyStockWatchStates'),legacyState);
   assert.equal(saved.operations.get('bitrix-notification:stock-batch:mixed-list:complete').value.status,'sent');
   assert.equal(saved.operations.get('bitrix-notification:stock:box:7:old:complete:0').value.status,'uncertain');assert.deepEqual([...books],sourceBefore);
 });

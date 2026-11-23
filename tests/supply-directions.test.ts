@@ -74,3 +74,15 @@ test("progress caps each position and never masks missing facts or counts anothe
   );
   assert.equal(directionJobReady(job("a", "OZON Москва")), true);
 });
+
+test("an incomplete city shows a rounded-down packing bound without declaring readiness", () => {
+  const orders = [
+    order({ quantity: 10, packed: null, packedConfirmed: 4 }),
+    order({ uid: "b", quantity: 7, packed: 3 }),
+  ];
+  const progress = directionProgress(orders, "packed");
+  assert.equal(progress.done, 7);
+  assert.equal(progress.percent, null);
+  assert.equal(progress.lowerPercent, 41);
+  assert.equal(directionJobReady(job("a", "OZON Москва", orders)), false);
+});

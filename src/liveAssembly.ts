@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-export const FBO_URL = import.meta.env.VITE_FBO_SOURCE_URL || "";
+export const ASSEMBLY_URL = "https://assembly-v2.zinovevkirill234.chatgpt.site";
+export type AssemblyDateRange = { start: string; end: string };
 
 export type AssemblyTypeCount = { name: string; quantity: number };
 export type AssemblyEvent = {
@@ -89,7 +90,7 @@ export type LiveAssembly = {
   sourceUpdatedAt?: string | null;
   quality?: { status: string; invalidRecords: number };
   sources?: {
-    fbo: {
+    fbo?: {
       status: "available" | "unavailable" | "partial";
       checkedAt: string;
       lastSuccessAt?: string | null;
@@ -117,14 +118,14 @@ export type LiveAssembly = {
       correctionsApplied: number;
       cancellationsApplied: number;
     };
-    catalog: {
+    catalog?: {
       status: "available" | "unavailable" | "partial";
       missingRecords: number;
       message: string;
     };
   };
   sourcePolicy?: {
-    mode: "simultaneous";
+    mode: "simultaneous" | "assembly-only";
     cutover: null;
     overlap: boolean;
   };
@@ -158,6 +159,7 @@ export type LiveAssembly = {
     rows: AssemblyNorm[];
     message?: string;
   };
+  reportRange?: AssemblyDateRange;
   rows: AssemblySummary[];
   history: AssemblyDaily[];
   events?: AssemblyEvent[];
@@ -188,19 +190,24 @@ function validSummary(row: AssemblySummary) {
   );
 }
 
-function snapshotKey(date: string, period: string) {
-  return `ritm-assembly-analytics:v2:${date}:${period}`;
+function snapshotKey(date: string, period: string, range: AssemblyDateRange | undefined, assemblyOnly: boolean) {
+  return `ritm-assembly-analytics:${assemblyOnly ? "d1" : "v2"}:${date}:${period}:${range?.start ?? ""}:${range?.end ?? ""}`;
 }
 
-function readSnapshot(date: string, period: string): LiveAssembly | null {
+function matchesReport(value: LiveAssembly | null, date: string, period: string, range: AssemblyDateRange | undefined, assemblyOnly: boolean) {
+  return !!value && value.date === date && value.period === period &&
+    (!assemblyOnly || value.sourcePolicy?.mode === "assembly-only") &&
+    (!range || value.reportRange?.start === range.start && value.reportRange?.end === range.end);
+}
+
+function readSnapshot(date: string, period: string, range: AssemblyDateRange | undefined, assemblyOnly: boolean): LiveAssembly | null {
   try {
-    const raw = localStorage.getItem(snapshotKey(date, period));
+    const raw = localStorage.getItem(snapshotKey(date, period, range, assemblyOnly));
     if (!raw) return null;
     const cached = JSON.parse(raw) as LiveAssembly;
     if (
       cached?.schemaVersion !== 2 ||
-      cached?.date !== date ||
-      cached?.period !== period ||
+      !matchesReport(cached, date, period, range, assemblyOnly) ||
       !Array.isArray(cached.rows) ||
       !Array.isArray(cached.history) ||
       cached.rows.some((row) => !validSummary(row)) ||
@@ -215,9 +222,9 @@ function readSnapshot(date: string, period: string): LiveAssembly | null {
   }
 }
 
-function hasBothSources(snapshot: LiveAssembly | null | undefined) {
+export function assemblyReportComplete(snapshot: LiveAssembly | null | undefined) {
   return (
-    snapshot?.sources?.fbo.status === "available" &&
+    (snapshot?.sourcePolicy?.mode === "assembly-only" || snapshot?.sources?.fbo?.status === "available") &&
     snapshot?.sources?.assembly.status === "available"
   );
 }
@@ -266,7 +273,8 @@ function keepLastGoodSnapshot(
       freshSources && cachedSources
         ? {
             ...cachedSources,
-            fbo: mergeSource(freshSources.fbo, cachedSources.fbo),
+            ...(freshSources.fbo && cachedSources.fbo
+              ? { fbo: mergeSource(freshSources.fbo, cachedSources.fbo) } : {}),
             assembly: mergeSource(
               freshSources.assembly,
               cachedSources.assembly,
@@ -292,9 +300,10 @@ export function useLiveAssembly(
   date: string,
   period: "day" | "week" | "month",
   enabled = true,
+  { range, assemblyOnly = false }: { range?: AssemblyDateRange; assemblyOnly?: boolean } = {},
 ) {
   const [value, setValue] = useState<LiveAssembly | null>(() =>
-    readSnapshot(date, period),
+    readSnapshot(date, period, range, assemblyOnly),
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -302,8 +311,10 @@ export function useLiveAssembly(
   const retryTimer = useRef<number | null>(null);
   const pending = useRef(false);
   const pendingForce = useRef(false);
-  const requestKey = useRef(`${date}|${period}`);
-  requestKey.current = `${date}|${period}`;
+  const from = range?.start, to = range?.end;
+  const key = snapshotKey(date, period, range, assemblyOnly);
+  const requestKey = useRef(key);
+  requestKey.current = key;
   const reloadRef = useRef<(force?: boolean) => Promise<void>>(async () => {});
   const scheduleRetry = useCallback((delayMs: number) => {
     if (retryTimer.current !== null) window.clearTimeout(retryTimer.current);
@@ -323,18 +334,15 @@ export function useLiveAssembly(
       window.clearTimeout(retryTimer.current);
       retryTimer.current = null;
     }
-    const key = `${date}|${period}`;
+    const requestedRange = from && to ? { start: from, end: to } : undefined;
     const controller = new AbortController();
     active.current = controller;
     setLoading(true);
     try {
-      const query =
-        "?date=" +
-        encodeURIComponent(date) +
-        "&period=" +
-        encodeURIComponent(period) +
-        (force ? "&refresh=1" : "");
-      const response = await fetch("/api/assembly" + query, {
+      const params = new URLSearchParams({ date, period });
+      if (requestedRange) { params.set("from", requestedRange.start); params.set("to", requestedRange.end); }
+      if (force) params.set("refresh", "1");
+      const response = await fetch("/api/assembly?" + params, {
         cache: "no-store",
         signal: AbortSignal.any([
           controller.signal,
@@ -349,13 +357,11 @@ export function useLiveAssembly(
             : data.message || "Сервер не смог обновить данные сборщиков.",
         );
       }
-      if (data.ok && data.schemaVersion !== 2) {
-        throw new Error("На этом адресе работает старая серверная версия RITM. Обновите сервер, чтобы подключить FBO и Assembly.");
-      }
       if (
         !response.ok ||
         !data.ok ||
         data.schemaVersion !== 2 ||
+        !matchesReport(data, date, period, requestedRange, assemblyOnly) ||
         !Array.isArray(data.rows) ||
         !Array.isArray(data.history) ||
         data.rows.some((row: AssemblySummary) => !validSummary(row)) ||
@@ -368,22 +374,22 @@ export function useLiveAssembly(
         throw new Error("source");
       if (!controller.signal.aborted && requestKey.current === key) {
         const unavailableMessages = [
-          data.sources?.fbo?.status !== "available"
-            ? data.sources.fbo.message || "FBO недоступен."
+          data.sourcePolicy?.mode !== "assembly-only" && data.sources?.fbo?.status !== "available"
+            ? data.sources?.fbo?.message || "FBO недоступен."
             : "",
           data.sources?.assembly?.status !== "available"
-            ? data.sources.assembly.message || "WorkLog недоступен."
+            ? data.sources?.assembly?.message || "Отчёт сборки недоступен."
             : "",
         ].filter(Boolean);
-        const stale = data.stale === true || !hasBothSources(data);
+        const stale = data.stale === true || !assemblyReportComplete(data);
         const warning = data.staleReason || unavailableMessages.join(" ");
         setError(stale ? warning || "Данные сборщиков устарели. Повторяю обновление." : "");
-        if (hasBothSources(data)) {
+        if (assemblyReportComplete(data)) {
           setValue(data);
           if (!stale) {
             try {
               localStorage.setItem(
-                snapshotKey(date, period),
+                key,
                 JSON.stringify(data),
               );
             } catch {
@@ -391,12 +397,11 @@ export function useLiveAssembly(
             }
           }
         } else {
-          const cached = readSnapshot(date, period);
+          const cached = readSnapshot(date, period, requestedRange, assemblyOnly);
           setValue((previous) => {
             const lastGood =
-              previous?.date === date &&
-              previous.period === period &&
-              hasBothSources(previous)
+              matchesReport(previous, date, period, requestedRange, assemblyOnly) &&
+              assemblyReportComplete(previous)
                 ? previous
                 : cached;
             return lastGood ? keepLastGoodSnapshot(data, lastGood) : data;
@@ -419,10 +424,10 @@ export function useLiveAssembly(
             ? cause.message
             : "Не удалось обновить источники. Показаны последние полученные данные.";
         setError(message);
-        const cached = readSnapshot(date, period);
+        const cached = readSnapshot(date, period, requestedRange, assemblyOnly);
         setValue((previous) => {
           const lastGood =
-            previous?.date === date && previous.period === period
+            matchesReport(previous, date, period, requestedRange, assemblyOnly)
               ? previous
               : cached;
           return lastGood ? { ...lastGood, stale: true } : null;
@@ -441,7 +446,7 @@ export function useLiveAssembly(
         }
       }
     }
-  }, [date, period, scheduleRetry]);
+  }, [date, period, key, from, to, assemblyOnly, scheduleRetry]);
   reloadRef.current = reload;
 
   useEffect(() => {
@@ -462,5 +467,5 @@ export function useLiveAssembly(
 
   useEffect(() => () => active.current?.abort(), []);
 
-  return { value, loading, error, reload };
+  return { value: matchesReport(value, date, period, range, assemblyOnly) ? value : null, loading, error, reload };
 }

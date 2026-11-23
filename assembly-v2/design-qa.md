@@ -24,3 +24,27 @@ Root cause identified in read queries: LEFT JOIN of the resolved UNION catalog m
 Warehouse reserve tab reuses existing warehouse actions, filters open/closed boxes and exports selected complete compositions atomically without modifying stock or work. Desktop/mobile browser verification passed. Collector default rendering is unchanged.
 
 Follow-up: reserve export now supports all cartons (or current filters) and explicit multi-selection across pages. Select-page and clear-selection controls added. Direction carton export also supports all filtered cartons and mixed-scope selections; preparing a dispatch still requires compatible scope. Local browser downloaded and reopened both all-carton and two-selected-carton Excel files successfully. Original legacy UI deployed as retired version 115; archived data readback verified, all 90 sheets unchanged.
+
+## Ozon shipments, selected table design
+
+Compared the selected second mockup with the local warehouse tab at 1487 × 1058. Increased the tab and action text sizes and restored the taller table rows after the first capture. The navy summary, stage headings and cluster columns match the selected layout. The live UI uses the RITM navigation, actual box counts and a continuous barcode progress indicator.
+
+At 390 px, the overview wraps and the table scrolls inside its region. In the isolated preview, finding cartons, preparing a batch, switching saved batches, saving barcode pairs and reopening them after reload all passed. The three downloaded XLSX files reopened with canonical Ozon article suffixes, original quantities and complete cargo barcodes. Typecheck and all 146 tests passed.
+
+Final result: passed.
+
+## Shipment history, selected master-detail design
+
+Compared the chosen first mockup and the isolated browser at 1536 × 1024. The date-grouped list, navy overview, expandable cartons and adjacent totals match the layout. The carton headers also show the saved Ozon cargo barcode next to the RITM number. Increased the barcode and carton-label sizes after the first capture.
+
+Verified three pairs with a different preparation order, the composition of an expanded carton, the combined total of 310 units, the download and the existing format dialog. The canceled preparation shows its saved composition and a missing-pair state. At 390 px the codes are readable with no page overflow. Typecheck and all 147 tests passed.
+
+Final result: passed.
+
+## Ready cartons and warehouse stock
+
+Compared the selected first ready-carton mockup with the isolated browser at 1536 × 1024. The navy overview, filter row, highlighted selection and sticky actions are in place. Adjusted row density, tab spacing and the search width after captures. The stock tab uses the same layout with status, actual filtered totals and expanded contents.
+
+Ready cartons passed the two-carton download, city filter export, full composition and preparation preview. A selection from different shops kept the preparation action disabled. Stock passed status filtering, selection across two pages and a partial transfer between open cartons. Four browser-downloaded workbooks reopened with the expected cartons and totals. Stock fit a 390 px viewport with a separately scrollable table. Typecheck and all 147 tests passed.
+
+Final result: passed.

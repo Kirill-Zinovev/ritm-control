@@ -148,6 +148,55 @@ test("закрытие проверяет состав; закрытые кор�
   await assert.rejects(c.pack(1, c.a.id, box), /Короб закрыт/);
   assert.equal((await c.snapshot()).positions[0].packing, 15);
 });
+test("менеджер возвращает закрытый короб сборщикам с прежним составом и выработкой", async (t) => {
+  const c = await context();
+  t.after(() => c.db.sqlite.close());
+  const cartonId = await c.box();
+  await c.pack(20, c.a.id, cartonId);
+  await c.close(cartonId);
+  const before = await c.snapshot();
+  const payload = { cartonId, closedAt: before.cartons[0].closedAt };
+  const key = crypto.randomUUID();
+  const reopen = (role: "manager" | "collector") =>
+    api(new Request("https://assembly.test/api/command", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "carton.reopen", key, supplyId: c.supply.id, payload }),
+    }), c.db, "test-" + role, role);
+
+  assert.equal((await reopen("collector")).status, 403);
+  const draft = await c.cmd("dispatch.create", { cartonIds: [cartonId] });
+  const reserved = await reopen("manager");
+  assert.equal(reserved.status, 409);
+  assert.match((await reserved.json()).error, /отмените подготовку/);
+  await c.cmd("dispatch.cancel", { dispatchId: draft.dispatchId });
+  const opened = await reopen("manager");
+  assert.equal(opened.status, 200);
+  const revision = await c.db.revision();
+  assert.equal((await reopen("manager")).status, 200);
+  assert.equal(await c.db.revision(), revision);
+
+  const response = await api(new Request(
+    `https://assembly.test/api/state?directions=1&cartons=supply&supply=${c.supply.id}`,
+  ), c.db, "test-collector", "collector");
+  const after = (await response.json()) as Snapshot;
+  assert.equal(after.cartons[0].state, "open");
+  assert.equal(after.cartons[0].closedAt, null);
+  assert.deepEqual(after.cartons[0].items, before.cartons[0].items);
+  assert.deepEqual(after.works, before.works);
+  assert.equal(after.positions.find(p => p.id === c.a.id)?.packing, 20);
+  await assert.rejects(c.cmd("dispatch.create", { cartonIds: [cartonId] }), /недоступен/);
+
+  await c.pack(5, c.a.id, cartonId);
+  await c.close(cartonId);
+  const reclosed = (await c.snapshot()).cartons[0];
+  assert.equal(reclosed.qty, 25);
+  await assert.rejects(c.cmd("carton.reopen", { cartonId, closedAt: null }), /Статус короба изменился/);
+  const dispatch = await c.cmd("dispatch.create", { cartonIds: [cartonId] });
+  await c.cmd("dispatch.send", { dispatchId: dispatch.dispatchId, confirmed: true });
+  await assert.rejects(c.cmd("carton.reopen", { cartonId, closedAt: reclosed.closedAt }), /Короб уже отправлен/);
+});
+
 test("отгрузка резервирует короба, выгрузка не отправляет, снимок неизменяем", async (t) => {
   const c = await context();
   t.after(() => c.db.sqlite.close());

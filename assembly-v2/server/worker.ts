@@ -3,9 +3,10 @@ import { createDatabase, camelRows } from "./database";
 import { catalogApi, type FileStore } from "./catalog-api";
 import { ritmApi, ritmConfigured, type RitmEnv } from "./ritm-api";
 import { drainWorkOutbox } from "./ritm-outbox";
-import { accessApi, authenticate, sameOrigin, type AccessEnv } from "./access";
+import { accessApi, assemblyOwnerAccount, authenticate, sameOrigin, type AccessEnv } from "./access";
 import { readRitmWarehousePage } from "./ritm-warehouse";
 import { labelsApi } from "./labels-api";
+import { databaseBackup, databaseBackupPath } from "./database-backup.mjs";
 interface Prepared {
   bind(...values: (string | number | null)[]): Prepared;
   all(): Promise<{ results: Record<string, unknown>[] }>;
@@ -68,6 +69,9 @@ export default {
     ctx?: { waitUntil(promise: Promise<unknown>): void },
   ): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname === databaseBackupPath) {
+      return databaseBackup(request, env.DB, "assembly", Boolean(assemblyOwnerAccount(request, env)));
+    }
     const store=env.DB ? accessStore(env.DB) : undefined;
     if (url.pathname.startsWith("/api/access")) return accessApi(request,env,store);
     if (url.pathname === "/api/config")
@@ -194,6 +198,6 @@ export default {
     }
     return env.ASSETS
       ? env.ASSETS.fetch(request)
-      : new Response("Assembly", { status: 404 });
+      : new Response("RITM Сборка", { status: 404 });
   },
 };

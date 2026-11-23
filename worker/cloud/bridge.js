@@ -2,7 +2,7 @@ import { createHash, createHmac } from "node:crypto";
 import { CloudError, readBytes } from "./access.js";
 
 const reads = new Set(["/api/printing", "/api/assembly", "/api/assembly-stocks", "/api/roll-supplies/status", "/api/roll-supplies/operations", "/api/assembly-transfers/sources", "/api/assembly-transfers/links", "/api/assembly-transfers/source", "/api/assembly-transfers/operation", "/api/cloud/registry", "/api/cloud/bridge-lease", "/api/cloud/export", "/api/stocks/pending-status"]);
-const writes = new Set(["/api/roll-supplies", "/api/roll-supplies/preview", "/api/assembly-transfers", "/api/assembly-transfers/preview", "/api/cloud/bridge-lease"]);
+const writes = new Set(["/api/roll-supplies", "/api/roll-supplies/preview", "/api/assembly-transfers", "/api/assembly-transfers/preview", "/api/cloud/bridge-lease", "/api/cloud/production-extensions"]);
 export const isOperationalRoute = (method, pathname) => (method === "GET" ? reads : method === "POST" ? writes : new Set()).has(pathname);
 export function bridgeSignature(secret, { method, path, timestamp, nonce, body = "" }) {
   const bodyHash = createHash("sha256").update(body).digest("hex");
@@ -29,11 +29,17 @@ export async function verifyAssemblyControlApp(request, bindings, now = Date.now
   return "assembly-control-app";
 }
 
-export async function verifyBridge(request, bindings, now = Date.now()) {
+export function verifyPrintingWorkspaceBridge(request,bindings) {
+  return verifyBridge(request,bindings,Date.now(),(method,pathname) =>
+    method === 'GET' && pathname === '/api/printing-workspace-feed' ||
+    method === 'POST' && pathname === '/api/printing-workspace-write');
+}
+
+export async function verifyBridge(request, bindings, now = Date.now(), isAllowed = isOperationalRoute) {
   const url = new URL(request.url), id = request.headers.get("x-ritm-bridge-id"), timestamp = request.headers.get("x-ritm-bridge-at"), nonce = request.headers.get("x-ritm-bridge-nonce"), signature = request.headers.get("x-ritm-bridge-signature");
   const secret = bindings.RITM_LOCAL_BRIDGE_SECRET;
   const fail = () => { throw new CloudError("bridge_forbidden", "Связь с локальным RITM не подтверждена.", 403); };
-  if (!id || id !== bindings.RITM_LOCAL_BRIDGE_ID || !/^[a-f0-9]{64}$/i.test(secret || "") || !/^\d{13}$/.test(timestamp || "") || Math.abs(now - Number(timestamp)) > 120000 || !/^[a-f0-9-]{36}$/i.test(nonce || "") || !/^[a-f0-9]{64}$/i.test(signature || "") || !isOperationalRoute(request.method, url.pathname) || !bindings.DB) fail();
+  if (!id || id !== bindings.RITM_LOCAL_BRIDGE_ID || !/^[a-f0-9]{64}$/i.test(secret || "") || !/^\d{13}$/.test(timestamp || "") || Math.abs(now - Number(timestamp)) > 120000 || !/^[a-f0-9-]{36}$/i.test(nonce || "") || !/^[a-f0-9]{64}$/i.test(signature || "") || !isAllowed(request.method, url.pathname) || !bindings.DB) fail();
   const body = request.method === "GET" ? "" : new TextDecoder().decode(await readBytes(request.clone()));
   const expected = bridgeSignature(secret, { method: request.method, path: url.pathname + url.search, timestamp, nonce, body });
   let mismatch = 0;

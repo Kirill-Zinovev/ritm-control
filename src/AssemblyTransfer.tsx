@@ -362,7 +362,7 @@ export function AssemblyTransfer({ onDelivered }: { onDelivered?: () => void }) 
           if (!busy) setOpen(false);
         }}
         title="Передать в сборку"
-        description="Выберите товары из существующего листа печати. Запись выполняется только в Assembly."
+        description="Выберите товары из существующего листа печати для передачи в сборку."
       >
         <div className="assembly-transfer">
           {(error || sourcesError) && (
@@ -376,10 +376,10 @@ export function AssemblyTransfer({ onDelivered }: { onDelivered?: () => void }) 
                 tone={operation.status === "conflict" ? "warning" : "info"}
               >
                 {operation.status === "delivered"
-                  ? "Состав подтверждён в Assembly"
+                  ? "Состав подтверждён в сборке"
                   : operation.status === "conflict"
                     ? "Передача остановлена: источник изменился"
-                    : "Передача в Assembly выполняется"}
+                    : "Передача в сборку выполняется"}
               </Notice>
               <h3 ref={stageHeading} tabIndex={-1}>
                 {operation.receipt?.name || operation.name}
@@ -438,7 +438,7 @@ export function AssemblyTransfer({ onDelivered }: { onDelivered?: () => void }) 
                   rel="noreferrer"
                 >
                   <ArrowSquareOut size={17} />
-                  Открыть Assembly
+                  Открыть прежнюю сборку
                 </a>
               </div>
               {missingOperation && !busy && (
@@ -459,10 +459,10 @@ export function AssemblyTransfer({ onDelivered }: { onDelivered?: () => void }) 
               </div>
               <p>
                 {preview.destinationName && !preview.managed
-                  ? `Позиции бокса будут добавлены к существующей поставке «${preview.destinationName}» в Assembly.`
+                  ? `Позиции бокса будут добавлены к существующей поставке «${preview.destinationName}» в сборке.`
                   : preview.managed
                   ? "Будет обновлён полный состав общей поставки обоих участков."
-                  : "Выбранные товары попадут в отдельную поставку Assembly."}{" "}
+                  : "Выбранные товары попадут в отдельную поставку для сборки."}{" "}
                 Повторные позиции не создадут дубли.
               </p>
               <div className="assembly-transfer-table">

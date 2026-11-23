@@ -38,7 +38,7 @@ export function Setup({ workspace: w }: { workspace: Workspace }) {
         !parsed.title ||
         !Array.isArray(parsed.positions)
       )
-        throw new Error("Нужен файл поставки Assembly JSON с исходными ID.");
+        throw new Error("Нужен JSON-файл поставки с исходными ID.");
       setData(parsed);
       setFile(item.name);
     } catch (e) {
@@ -53,7 +53,7 @@ export function Setup({ workspace: w }: { workspace: Workspace }) {
       await w.command(
         "supply.import",
         data as unknown as Record<string, unknown>,
-        "Поставка загружена в новую версию Assembly.",
+        "Поставка загружена в RITM Сборка.",
       );
       setData(null);
       setFile("");
@@ -121,13 +121,13 @@ export function Setup({ workspace: w }: { workspace: Workspace }) {
             </strong>
             <p>
               {w.ritm?.configured
-                ? "Подтверждённые поставки поступают из РИТМ. Записанная работа сохраняется в Assembly и передаётся обратно в РИТМ."
-                : "Проверьте настройку связи с РИТМ. Сохранённые данные Assembly остаются доступны."}
+                ? "Подтверждённые поставки поступают из РИТМ. Записанная работа сохраняется в RITM Сборка и передаётся обратно в РИТМ."
+                : "Проверьте настройку связи с РИТМ. Сохранённые данные остаются доступны."}
             </p>
           </div>
           {w.ritm?.configured ? (
             <>
-              <div className="connection-status-rows"><div><PackageCheck size={20}/><strong>Поставки → Assembly</strong><span>{w.ritm.message}</span></div><div><ArrowRightLeft size={20}/><strong>Работа → РИТМ</strong><span>{w.ritm.workDelivery ? `Передано: ${number(w.ritm.workDelivery.delivered || 0)} · ожидают: ${number(w.ritm.workDelivery.pending || 0)}` : 'Нет подтверждения передачи'}</span></div></div>
+              <div className="connection-status-rows"><div><PackageCheck size={20}/><strong>Поставки → RITM Сборка</strong><span>{w.ritm.message}</span></div><div><ArrowRightLeft size={20}/><strong>Работа → РИТМ</strong><span>{w.ritm.workDelivery ? `Передано: ${number(w.ritm.workDelivery.delivered || 0)} · ожидают: ${number(w.ritm.workDelivery.pending || 0)}` : 'Нет подтверждения передачи'}</span></div></div>
               <p>
                 {number(w.ritm.supplies)} поставок РИТМ ·{" "}
                 {number(w.ritm.groups)} направлений по магазинам ·{" "}

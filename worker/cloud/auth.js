@@ -184,14 +184,20 @@ export async function getManagerSession(request, db, now = Date.now()) {
   return { role: "manager", id: row.id, username: row.username, displayName: row.display_name, mustChangePin: row.must_change_pin === 1 };
 }
 
-export async function resolvePrincipal(request, bindings, now = Date.now()) {
+export function ritmOwnerAccount(request, bindings) {
   const id = request.headers.get("oai-authenticated-user-id");
   const owners = String(bindings.RITM_OWNER_USER_IDS || "").split(",").map((value) => value.trim()).filter(Boolean);
-  if (id && owners.includes(id)) return { role: "owner", id, displayName: "Кирилл", username: null, mustChangePin: false };
+  return id && owners.includes(id) ? id : null;
+}
+
+export async function resolvePrincipal(request, bindings, now = Date.now()) {
+  const owner = ritmOwnerAccount(request, bindings);
+  if (owner) return { role: "owner", id: owner, displayName: "Кирилл", username: null, mustChangePin: false };
   if (request.headers.has("cookie") || request.headers.has("authorization")) {
     const manager = await getManagerSession(request, bindings.DB, now);
     if (manager) return manager;
   }
+  const id = request.headers.get("oai-authenticated-user-id");
   return id ? { role: "unrecognized", id, displayName: null, username: null, mustChangePin: false } : null;
 }
 

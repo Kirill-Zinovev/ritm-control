@@ -74,6 +74,7 @@ export function unavailableAssemblyPacking(printing, checkedAt, reason) {
     supplies: (printing.supplies || []).map((order) => ({
       ...order,
       packed: null,
+      packedConfirmed: null,
       packingRecords: null,
       packingEventIds: null,
       assemblyMachineCut: null,
@@ -277,12 +278,18 @@ export function attachAssemblyPacking(printing, workLog, checkedAt) {
     if (!["roll-printing", "box-printing"].includes(order.sourceId)) return order;
     const shipmentId = workShipmentId(order);
     const positionId = workPositionId(order);
+    const summary = byPosition.get(positionId);
     if (
       affectedShipments.has(shipmentId) ||
       affectedPositions.has(positionId)
     )
-      return { ...order, packed: null, packingRecords: null, packingEventIds: null };
-    const summary = byPosition.get(positionId);
+      return {
+        ...order,
+        packed: null,
+        packedConfirmed: affectedPositions.has(positionId) ? null : summary?.quantity ?? null,
+        packingRecords: null,
+        packingEventIds: null,
+      };
     return {
       ...order,
       packed: summary?.quantity ?? 0,

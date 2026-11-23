@@ -138,7 +138,7 @@ export function useBoxPositionRemoval(onVerified: (key: string) => void) {
       description={target ? `${target.article} · ${num(target.quantity)} шт. · ${target.sheetName}` : undefined}
       onClose={() => setTarget(null)}>
       <form onSubmit={event => { event.preventDefault(); void submit(); }}>
-        <p className="supply-delete-warning">Позиция исчезнет из таблицы бокса и из активных заданий новой Assembly. Перед удалением проверим работу по артикулу.</p>
+        <p className="supply-delete-warning">Позиция исчезнет из таблицы бокса и из активных заданий «RITM Сборка». Перед удалением проверим работу по артикулу.</p>
         {busy && <p role="status">Проверяем работу и подтверждаем изменение в таблице…</p>}
         {message && <p role="alert" className="supply-operation-error">{message}</p>}
         <div className="modal-actions">

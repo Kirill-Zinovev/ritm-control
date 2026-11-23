@@ -21,13 +21,13 @@ export async function callAssemblyV2(
 ) {
   if (
     !assemblyV2Configured(bindings) ||
-    !/^\/api\/ritm\/(?:sync|deliver|warehouse(?:\/dispatch)?)(?:\?|$)/.test(
+    !/^\/api\/ritm\/(?:sync|deliver|remove-manual-item|retire-shipments|production-catalog|production-extensions|work-report|warehouse(?:\/dispatch)?)(?:\?|$)/.test(
       path,
     )
   )
     throw new CloudError(
       "assembly_v2_unconfigured",
-      "Связь с новым Assembly не настроена.",
+      "Связь с «RITM Сборка» не настроена.",
       503,
     );
   const at = String(now),

@@ -13,8 +13,17 @@ test("warehouse manager filters and complete Excel include open/closed reserve c
   db.sqlite.prepare('insert into av2_warehouse_cartons(id,label,market,store,state,created_at) values(?,?,?,?,?,?)').run(id,label,market,shop,state,at);
  }
  for(let i=0;i<32;i++)db.sqlite.prepare('insert into av2_warehouse_receipts(id,carton_id,sku,name,search,qty,employee_id,employee,supply,comment,actor,created_at) values(?,?,?,?,?,?,?,?,?,?,?,?)').run('r'+i,'a','SKU'+i,'Товар '+i,'SKU'+i,2,f.employee.id,f.employee.name,'На склад','','test',at);
+ db.sqlite.prepare("update av2_warehouse_receipts set voided_at=? where id='r0'").run(at);
+ db.sqlite.prepare('insert into av2_warehouse_receipts(id,carton_id,sku,name,search,qty,employee_id,employee,supply,comment,actor,created_at) values(?,?,?,?,?,?,?,?,?,?,?,?)').run('r32','a','SKU32','Товар 32','SKU32',2,f.employee.id,f.employee.name,'На склад','','test',at);
  const read=(q='')=>readWarehouse(db.store,new URL('https://local/api/warehouse'+q));
  assert.equal((await read()).total,3);
+ assert.deepEqual((await read('?summary=1')).summary,{qty:64,openCount:2});
+ assert.deepEqual((await read('?summary=1&market=OZON&store=1&q=1СКЛ1')).summary,{qty:64,openCount:1});
+ assert.deepEqual((await read('?summary=1&state=closed')).summary,{qty:0,openCount:0});
+ assert.deepEqual((await read('?summary=1&page=1')).summary,{qty:64,openCount:2});
+ const summaryUrl='https://local/api/warehouse?summary=1';
+ assert.deepEqual((await (await api(new Request(summaryUrl),db,'manager','manager')).json()).summary,{qty:64,openCount:2});
+ assert.equal((await (await api(new Request(summaryUrl),db,'collector','collector')).json()).summary,undefined);
  assert.equal((await read('?market=OZON&store=1&state=open')).cartons[0].label,'1скл1');
  assert.equal((await read('?state=closed')).cartons[0].label,'2скл1');
  assert.equal((await read('?export=all')).cartons.length,3);

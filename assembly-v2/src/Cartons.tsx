@@ -12,20 +12,24 @@ export function CartonDetails({
   box,
   workspace: w,
   onClose,
+  onReopened,
   inline=false,
 }: {
   box: Carton;
   workspace: Workspace;
   onClose(): void;
+  onReopened?(cartonId: string): void;
   inline?:boolean;
 }) {
   const [confirmClose, setConfirmClose] = useState(false);
+  const [confirmReopen, setConfirmReopen] = useState<Pick<Carton, "closedAt"> | null>(null);
   const [remove, setRemove] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [error, setError] = useState("");
   const [allItems,setAllItems]=useState(false);
   const [printing,setPrinting]=useState(false);
   const current = w.state?.cartons.find((b) => b.id === box.id) ?? box;
+  const canReopen = !!onReopened && current.state === "closed" && !current.dispatchId;
   async function close() {
     try {
       await w.command(
@@ -52,6 +56,21 @@ export function CartonDetails({
       );
       setRemove(null);
       setReason("");
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+  async function reopen() {
+    if (!confirmReopen || !canReopen) return;
+    setError("");
+    try {
+      await w.command(
+        "carton.reopen",
+        { cartonId: current.id, closedAt: confirmReopen.closedAt },
+        `${current.label} снова открыт у сборщиков.`,
+      );
+      setConfirmReopen(null);
+      onReopened?.(current.id);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -187,6 +206,21 @@ export function CartonDetails({
           )}
         </div>
       ) : null}
+      {canReopen && <div className="stack">
+        {confirmReopen ? <div className="callout">
+          <p>Короб снова появится у сборщиков в списке открытых. Содержимое сохранится.</p>
+          <div className="actions">
+            <Button disabled={w.busy} onClick={() => { setConfirmReopen(null); setError(""); }}>Отмена</Button>
+            <Button primary disabled={w.busy} onClick={() => void reopen()}>Открыть короб</Button>
+          </div>
+        </div> : <Button disabled={w.busy} onClick={() => {
+          setError("");
+          setConfirmReopen({ closedAt: current.closedAt });
+        }}>Открыть для исправления</Button>}
+      </div>}
+      {onReopened && current.state === "closed" && current.dispatchState === "draft" && (
+        <p className="muted">Чтобы открыть короб, сначала отмените подготовленную отгрузку.</p>
+      )}
       {inline && <div className="carton-label-action"><Button onClick={()=>setPrinting(true)}><Printer size={17}/>Этикетка короба</Button></div>}
       {printing && <CartonLabel box={current} onClose={()=>setPrinting(false)}/>}
     </Surface>
@@ -212,6 +246,7 @@ export function Cartons({ workspace: w }: { workspace: Workspace }) {
     {boxes.length ? <div className="cartons-workspace"><section className="cartons-list-pane"><div className="table-scroll"><table className="manager-carton-table"><thead><tr><th>Короб</th><th>Направление</th><th>Товаров</th><th>Заполнение</th></tr></thead><tbody>
       {boxes.slice(pg*30,(pg+1)*30).map(b=><tr key={b.id} className={selected?.id===b.id?'is-selected':''}><td><button className="text-action carton-select" aria-pressed={selected?.id===b.id} onClick={()=>setOpenId(b.id)}>{b.label}</button><small className="muted">{b.dispatchId?'На отгрузке':b.state==='open'?'Открыт':'Закрыт'}</small></td><td>{warehouseCity(b).label}<small>Магазин {b.store || 'не определён'}</small><span className={`market-pill ${b.market.toLowerCase()}`}>{b.market}</span></td><td><strong>{number(b.qty)} шт.</strong><small>{countLabel(b.items.length,['вложение','вложения','вложений'])}</small></td><td>{b.capacityUnknown?'Норма не уточнена':`${Math.round(b.fill*100)}%`}{!b.capacityUnknown && <progress max={1} value={b.fill} aria-label={`Заполнение ${b.label}`}/>}</td></tr>)}
     </tbody></table></div><Pagination page={pg} size={30} total={boxes.length} onChange={setPage}/></section>
-    {selected && <CartonDetails key={selected.id} inline box={selected} workspace={w} onClose={()=>setOpenId('')}/>}</div> : <Empty title="Коробов по выбранным фильтрам нет"><Button onClick={()=>{setSearch('');setCity('');setMarket('');setShop('');setStatus('')}}>Сбросить фильтры</Button></Empty>}
+    {selected && <CartonDetails key={selected.id} inline box={selected} workspace={w} onClose={()=>setOpenId('')}
+      onReopened={id=>{setStatus('open');setPage(0);setOpenId(id)}}/>}</div> : <Empty title="Коробов по выбранным фильтрам нет"><Button onClick={()=>{setSearch('');setCity('');setMarket('');setShop('');setStatus('')}}>Сбросить фильтры</Button></Empty>}
   </main>;
 }

@@ -147,11 +147,11 @@
       }
       .legacy-assembly .brand-word span {
         display: block;
-        font-size: 9px;
-        letter-spacing: 0.17em;
+        font-size: 13px;
+        letter-spacing: 0.06em;
         color: var(--muted);
-        font-weight: 650;
-        margin-top: 4px;
+        font-weight: 700;
+        margin-top: 2px;
       }
       .legacy-assembly .nav-heading {
         padding: 0 12px;
@@ -1609,9 +1609,7 @@
         }
         .legacy-assembly .brand-word span {
           display: inline;
-          font-size: 11px;
           margin-left: 6px;
-          letter-spacing: 0.06em;
         }
         .legacy-assembly .sidebar-foot {
           position: absolute;

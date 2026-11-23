@@ -191,6 +191,11 @@ test("compiled Workers receives v2 work into D1 and exposes the same facts in re
       await mf.dispatchFetch("https://ritm.test/api/printing", { headers })
     ).json();
     assert.equal(progress.supplies[0].packed, 20);
+    await db.prepare("update cloud_snapshots set updated_at=? where kind='printing'").bind(now-310000).run();
+    const firstView = await (await mf.dispatchFetch("https://ritm.test/api/printing?view=last-confirmed",{headers})).json();
+    assert.equal(firstView.stale,true);
+    assert.equal(firstView.refreshOnOpen,true);
+    assert.equal(firstView.supplies[0].packed,20);
     report = await (
       await mf.dispatchFetch("https://ritm.test/api/assembly?date=" + day, {
         headers,

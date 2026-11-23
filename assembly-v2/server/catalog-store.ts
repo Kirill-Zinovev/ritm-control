@@ -167,7 +167,9 @@ export function effectiveCatalogData(alias="e"):string {
   if(!/^[a-z]+$/.test(alias))throw new Error("Недопустимая таблица справочника.");
   const correction=`(select o.kind from av2_catalog_kind_overrides o where o.market=${alias}.market and o.store=${alias}.store and o.sku=${alias}.sku)`;
   const photo=`coalesce((select o.url from av2_photo_overrides o where o.sku=upper(${alias}.sku)),(select case when count(distinct o.url)=1 then min(o.url) end from av2_photo_overrides o where o.sku in(select upper(value) from json_each(${alias}.data,'$.aliases'))))`;
-  return `json_set(${alias}.data,'$.photoUrl',coalesce(json_extract(${alias}.data,'$.photoUrl'),${photo}),'$.kind',coalesce(nullif(trim(json_extract(${alias}.data,'$.kind')),''),${correction},''),'$.kindCorrection',case when nullif(trim(json_extract(${alias}.data,'$.kind')),'') is null then coalesce((select o.reason from av2_catalog_kind_overrides o where o.market=${alias}.market and o.store=${alias}.store and o.sku=${alias}.sku),'') else '' end)`;
+  const extension = `(select case when count(distinct x.extension)=1 then min(x.extension) end
+    from av2_print_extensions x where x.sku in(select value from json_each(${alias}.data,'$.aliases')))`;
+  return `json_set(${alias}.data,'$.photoUrl',coalesce(json_extract(${alias}.data,'$.photoUrl'),${photo}),'$.kind',coalesce(nullif(trim(json_extract(${alias}.data,'$.kind')),''),${correction},''),'$.kindCorrection',case when nullif(trim(json_extract(${alias}.data,'$.kind')),'') is null then coalesce((select o.reason from av2_catalog_kind_overrides o where o.market=${alias}.market and o.store=${alias}.store and o.sku=${alias}.sku),'') else '' end,'$.printExtension',coalesce(json_extract(${alias}.data,'$.printExtension'),${extension},''))`;
 }
 // A LEFT JOIN to the compound resolved view makes SQLite materialize the whole
 // imported catalog. Probe the exact position key instead, keeping a nullable row.

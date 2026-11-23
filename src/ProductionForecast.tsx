@@ -29,6 +29,7 @@ import type { LivePrinting } from "./livePrinting";
 import { useLiveAssembly } from "./liveAssembly";
 import { SupplyForecastCalendar } from "./SupplyForecastCalendar";
 import { GlobalProductionCalendar } from "./GlobalProductionCalendar";
+import { moscowDay } from "./globalCalendar";
 import { DailySupplyCalendar } from "./DailySupplyCalendar";
 import { MACHINES } from "./machineWorkloadData";
 import {
@@ -58,6 +59,7 @@ import {
 import { num } from "./model";
 import {
   productionRateHistory,
+  RATE_WINDOW_DAYS,
   estimateProductionRate,
   planningWithAutomaticRates,
   type ProductionRateHistory,
@@ -67,7 +69,7 @@ export const PLANNING_RESOURCES = [
   ...MACHINES.map((m) => ({ id: m.id, label: `Печать · ${m.label}` })),
   { id: "cut-roll", label: "Порезка · рулонная печать" },
   { id: "cut-box", label: "Порезка · бокс" },
-  { id: "packing", label: "Упаковка · Assembly" },
+  { id: "packing", label: "Упаковка · «RITM Сборка»" },
 ];
 const resourceName = (id: string | null) =>
   PLANNING_RESOURCES.find((r) => r.id === id)?.label || id || "—";
@@ -135,10 +137,16 @@ export function ProductionForecast({
   live,
   onRefresh,
   loading,
+  compact,
+  onForecastChange,
+  onOpenCalendar,
 }: {
   live: LivePrinting | null;
   onRefresh: () => void;
   loading: boolean;
+  compact: boolean;
+  onForecastChange: (rows: ForecastRow[]) => void;
+  onOpenCalendar: () => void;
 }) {
   const auth = useCloudAuth();
   const [planning, setPlanning] = useState<Planning>(emptyPlanning),
@@ -149,7 +157,7 @@ export function ProductionForecast({
     [loaded, setLoaded] = useState(false),
     [error, setError] = useState(""),
     [reading, setReading] = useState(false);
-  const [view, setView] = useState<"supplies" | "calendar">("supplies"),
+  const [view, setView] = useState<"supplies" | "calendar">("calendar"),
     [search, setSearch] = useState(""),
     [filter, setFilter] = useState("all"),
     [selected, setSelected] = useState<string | null>(null),
@@ -160,13 +168,22 @@ export function ProductionForecast({
     at: number;
   } | null>(null);
   const [now, setNow] = useState(Date.now);
-  const assemblyDate = new Intl.DateTimeFormat("en-CA", {
+  const [selectedDay, setSelectedDay] = useState(() => moscowDay(Date.now()));
+  const moscowDate = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Europe/Moscow",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).format(now);
-  const assembly = useLiveAssembly(assemblyDate, "month", true);
+  });
+  const assemblyDate = moscowDate.format(now);
+  const historyStart = (extras?.items || []).reduce((start, item) => {
+    const createdAt = Date.parse(item.createdAt);
+    return Number.isFinite(createdAt) ? Math.min(start, createdAt) : start;
+  }, now - RATE_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  const assembly = useLiveAssembly(assemblyDate, "month", true, {
+    assemblyOnly: auth.mode === "cloud",
+    range: auth.mode === "cloud" ? { start: moscowDate.format(historyStart), end: assemblyDate } : undefined,
+  });
   const [stockSnapshot, setStockSnapshot] =
     useState<AssemblyStockSnapshot | null>(null);
   const [stockReason, setStockReason] = useState(
@@ -235,6 +252,7 @@ export function ProductionForecast({
       pending = false,
       retryTimer: number | null = null;
     const controller = new AbortController();
+    let forceStockRead = stockRevision > 0;
     const load = async () => {
       if (pending) return;
       if (retryTimer !== null) {
@@ -243,7 +261,7 @@ export function ProductionForecast({
       }
       pending = true;
       try {
-        const response = await fetch("/api/assembly-stocks", {
+        const response = await fetch(forceStockRead ? "/api/assembly-stocks?view=forecast&refresh=1" : "/api/assembly-stocks?view=forecast", {
           cache: "no-store",
           signal: AbortSignal.any([
             controller.signal,
@@ -251,13 +269,13 @@ export function ProductionForecast({
           ]),
         });
         if (response.status === 401 || response.status === 403)
-          throw new Error("Нет доступа к заданиям «Запасы склад» в Assembly. Войдите повторно.");
+          throw new Error("Нет доступа к заданиям «Запасы склад» в «RITM Сборка». Войдите повторно.");
         const data = await response.json();
         if (!response.ok && data?.error === "assembly_stock_unavailable" &&
             typeof data.message === "string" && data.message.startsWith("Запасы для сборки: "))
           throw new Error(data.message.replace(/[\r\n\t]/g, " ").slice(0, 200));
         if (!response.ok)
-          throw new Error("Не удалось получить задания «Запасы склад» из Assembly. Повторяем запрос.");
+          throw new Error("Не удалось получить задания «Запасы склад» из «RITM Сборка». Повторяем запрос.");
         if (
           data?.ok !== true ||
           data.shipmentId !== "RITM-STOCK-WAREHOUSE" ||
@@ -268,6 +286,7 @@ export function ProductionForecast({
         )
           throw new Error("Данные заданий «Запасы склад» неполные. Повторяем запрос.");
         if (active) {
+          forceStockRead = false;
           setStockSnapshot({ updatedAt: data.updatedAt, items: data.items });
           setStockReason("");
         }
@@ -278,7 +297,7 @@ export function ProductionForecast({
             ? e.message
             : e instanceof Error && e.message.startsWith("Данные заданий")
               ? e.message
-              : "Не удалось получить задания «Запасы склад» из Assembly. Повторяем запрос.");
+              : "Не удалось получить задания «Запасы склад» из «RITM Сборка». Повторяем запрос.");
           retryTimer = window.setTimeout(() => {
             if (document.visibilityState === "visible") void load();
           }, 60000);
@@ -341,21 +360,25 @@ export function ProductionForecast({
     () => buildForecast(input, effectivePlanning, now, rateProblems),
     [input, effectivePlanning, now, rateProblems],
   );
-  const filtered = rows.filter(
-    (r) =>
+  useEffect(() => {
+    if (loaded) onForecastChange(rows);
+  }, [loaded, rows, onForecastChange]);
+  const filtered = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase("ru-RU");
+    const articleMatches = new Set<string>();
+    if (query) {
+      for (const task of input.tasks) {
+        if (task.article.toLocaleLowerCase("ru-RU").includes(query))
+          articleMatches.add(task.supplyKey);
+      }
+    }
+    return rows.filter((row) =>
       (filter === "all" ||
-        (filter === "stock" && r.stock) ||
-        overallForecastStatus(r) === filter) &&
-      [
-        r.name,
-        ...input.tasks
-          .filter((t) => t.supplyKey === r.key)
-          .map((t) => t.article),
-      ]
-        .join(" ")
-        .toLocaleLowerCase("ru-RU")
-        .includes(search.toLocaleLowerCase("ru-RU")),
-  );
+        (filter === "stock" && row.stock) ||
+        overallForecastStatus(row) === filter) &&
+      (!query || row.name.toLocaleLowerCase("ru-RU").includes(query) || articleMatches.has(row.key)),
+    );
+  }, [rows, input.tasks, filter, search]);
   const row = rows.find((r) => r.key === selected) || null;
   const save = async (body: Record<string, unknown>) => {
     const next = (
@@ -367,39 +390,85 @@ export function ProductionForecast({
     setPlanning(next);
     return next;
   };
+  const monthOverview = view === "calendar" && calendarMode === "months";
+  const refreshForecast = () => {
+    void read();
+    onRefresh();
+    void assembly.reload(true);
+    setStockRevision((n) => n + 1);
+  };
+  const calendarToolbar = (
+    <>
+        <Search value={search} onChange={setSearch} label="Поставка или артикул" />
+        <select aria-label="Вид календаря" value={view === "supplies" ? "process" : calendarMode} onChange={(event) => {
+          const mode = event.target.value;
+          setFilter("all");
+          if (mode === "process") setView("supplies");
+          else {
+            setView("calendar");
+            if (mode === "months" || mode === "supplies" || mode === "resources") setCalendarMode(mode);
+          }
+        }}>
+          <option value="months">Обзор месяцев</option>
+          <option value="supplies">По поставкам</option>
+          <option value="resources">По станкам</option>
+          <option value="process">Процесс и прогноз</option>
+        </select>
+        {!monthOverview && <select aria-label="Статус прогноза" value={filter} onChange={(event) => setFilter(event.target.value)}>
+          <option value="all">Все задания</option>
+          <option value="stock">Запасы</option>
+          {Object.entries(statusLabel).map(([id, label]) => <option value={id} key={id}>{label}</option>)}
+        </select>}
+        <Button onClick={refreshForecast} disabled={reading || loading}>Обновить</Button>
+        {auth.role === "owner" && <Button disabled={!loaded || reading} onClick={() => setSettings(true)}><Settings2 size={17} /> Скорость и график</Button>}
+    </>
+  );
+  const monthCalendar = (isCompact: boolean) => (
+    <GlobalProductionCalendar
+      rows={isCompact ? rows : filtered}
+      tasks={input.tasks}
+      now={now}
+      onSelect={setSelected}
+      planning={effectivePlanning}
+      fresh={input.fresh}
+      selectedDay={selectedDay}
+      onDayChange={setSelectedDay}
+      compact={isCompact}
+      toolbar={!isCompact && calendarToolbar}
+      onOpenCalendar={() => {
+        setView("calendar");
+        setCalendarMode("months");
+        setSearch("");
+        setFilter("all");
+        onOpenCalendar();
+      }}
+      onOpenResources={() => {
+        setCalendarFocus({ key: "", at: selectedDay });
+        setCalendarMode("resources");
+      }}
+    />
+  );
   return (
     <section
       className="forecast-workspace"
       aria-label="Прогноз сроков производства"
     >
-      <div className="forecast-heading">
-        <div>
-          <span className="forecast-eyebrow">ПЛАНИРОВАНИЕ ПРОИЗВОДСТВА</span>
-          <h2>Успеваем к сроку?</h2>
-          <p>Печать, порезка и упаковка по общей очереди поставок и запасов.</p>
-        </div>
-        <div className="forecast-actions">
-          <Button
-            onClick={() => {
-              void read();
-              onRefresh();
-              void assembly.reload(true);
-              setStockRevision((n) => n + 1);
-            }}
-            disabled={reading || loading}
-          >
-            Обновить
-          </Button>
-          {auth.role === "owner" && (
-            <Button
-              disabled={!loaded || reading}
-              onClick={() => setSettings(true)}
-            >
-              <Settings2 size={17} /> Скорость и график
-            </Button>
+      {compact ? (
+        <>
+          {loaded ? monthCalendar(true) : (
+            <section className="card global-calendar global-calendar-compact">
+              <header className="global-calendar-heading">
+                <h3>Календарь</h3>
+                <Button onClick={onOpenCalendar}>Обзор месяцев</Button>
+              </header>
+              <div className="global-calendar-empty" role="status">
+                {error ? <Button onClick={() => void read()}>Повторить загрузку сроков</Button> : "Загружаем сроки поставок…"}
+              </div>
+            </section>
           )}
-        </div>
-      </div>
+        </>
+      ) : (
+        <>
       {error && (
         <Notice tone="warning">
           {error}{" "}
@@ -411,7 +480,7 @@ export function ProductionForecast({
       {!loaded && !error ? (
         <Notice>Загружаем настройки прогноза…</Notice>
       ) : null}
-      {loaded && !planning.resources.length && (
+      {loaded && !planning.resources.length && !monthOverview && (
         <div className="forecast-setup">
           <CalendarDays size={30} />
           <div>
@@ -430,9 +499,7 @@ export function ProductionForecast({
           )}
         </div>
       )}
-      <div
-        className={`forecast-summary ${view === "calendar" ? "compact" : ""}`}
-      >
+      {!monthOverview && <div className="forecast-summary">
         {[
           ["on-time", "Успеваем"],
           ["risk", "Под риском"],
@@ -452,43 +519,8 @@ export function ProductionForecast({
             </strong>
           </button>
         ))}
-      </div>
-      <div className="forecast-toolbar">
-        <div className="forecast-tabs" aria-label="Представление прогноза">
-          <Button
-            kind={view === "supplies" ? "primary" : "secondary"}
-            aria-pressed={view === "supplies"}
-            onClick={() => setView("supplies")}
-          >
-            Процесс
-          </Button>
-          <Button
-            kind={view === "calendar" ? "primary" : "secondary"}
-            aria-pressed={view === "calendar"}
-            onClick={() => setView("calendar")}
-          >
-            <CalendarDays size={16} /> Календарь
-          </Button>
-        </div>
-        <Search
-          value={search}
-          onChange={setSearch}
-          label="Поставка или артикул"
-        />
-        <select
-          aria-label="Статус прогноза"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-        >
-          <option value="all">Все задания</option>
-          <option value="stock">Запасы</option>
-          {Object.entries(statusLabel).map(([id, label]) => (
-            <option value={id} key={id}>
-              {label}
-            </option>
-          ))}
-        </select>
-      </div>
+      </div>}
+      {(!monthOverview || !loaded) && <div className="forecast-toolbar mw-calendar-toolbar">{calendarToolbar}</div>}
       {loaded && view === "supplies" && (
         <ProductionProcess
           rows={filtered}
@@ -618,7 +650,7 @@ export function ProductionForecast({
                       {r.packingFinishAt
                         ? `Упаковка: ${date(r.packingFinishAt)}`
                         : r.packingExcluded
-                          ? "Не передаётся в Assembly"
+                          ? "Не передаётся в «RITM Сборка»"
                           : r.packingReasons[0] || "Срок упаковки не рассчитан"}
                     </small>
                   </>
@@ -640,42 +672,7 @@ export function ProductionForecast({
           />
         </details>
       )}
-      {loaded && view === "calendar" && (
-        <div className="forecast-calendar-mode" aria-label="Вид календаря">
-          <Button
-            kind={calendarMode === "months" ? "primary" : "secondary"}
-            aria-pressed={calendarMode === "months"}
-            onClick={() => setCalendarMode("months")}
-          >
-            Обзор месяцев
-          </Button>
-          <Button
-            kind={calendarMode === "supplies" ? "primary" : "secondary"}
-            aria-pressed={calendarMode === "supplies"}
-            onClick={() => setCalendarMode("supplies")}
-          >
-            По поставкам
-          </Button>
-          <Button
-            kind={calendarMode === "resources" ? "primary" : "secondary"}
-            aria-pressed={calendarMode === "resources"}
-            onClick={() => setCalendarMode("resources")}
-          >
-            По станкам
-          </Button>
-        </div>
-      )}
-      {loaded && view === "calendar" && calendarMode === "months" && (
-        <GlobalProductionCalendar
-          rows={filtered}
-          tasks={input.tasks}
-          now={now}
-          onSelect={setSelected}
-          focus={calendarFocus}
-          planning={effectivePlanning}
-          fresh={input.fresh}
-        />
-      )}
+      {loaded && monthOverview && monthCalendar(false)}
       {loaded && view === "calendar" && calendarMode === "supplies" && supplyCalendarLayout === "cards" && (
         <DailySupplyCalendar
           rows={filtered}
@@ -722,15 +719,17 @@ export function ProductionForecast({
           }
         />
       )}
-      <div className="forecast-method">
+      {!monthOverview && <div className="forecast-method">
         <Clock3 size={18} />
         <span>
           Оценка по заданной скорости, а не обещание отгрузки. Срочные задания
           идут первыми, затем задания с ближайшим сроком. Порезка начинается
           партиями после печати. Расчёт обновлён {date(now)} МСК. Упаковка
-          рассчитывается отдельно с учётом общей очереди Assembly.
+          рассчитывается отдельно с учётом общей очереди «RITM Сборка».
         </span>
-      </div>
+      </div>}
+        </>
+      )}
       <Modal
         open={!!row}
         onClose={() => setSelected(null)}
@@ -757,8 +756,9 @@ export function ProductionForecast({
               });
               setView("calendar");
               setCalendarMode("supplies");
-              setSearch(row.name);
               setFilter("all");
+              onOpenCalendar();
+              setSearch(row.name);
               setSelected(null);
             }}
             editable={loaded && !row.stock}
@@ -878,7 +878,7 @@ function ForecastDetail({
             Упаковка
             <strong>
               {row.packingExcluded
-                ? "Не передаётся в Assembly"
+                ? "Не передаётся в «RITM Сборка»"
                 : row.packingStatus === "done"
                   ? "Готово"
                   : date(row.packingFinishAt)}

@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import type {
   AssemblyDaily,
+  AssemblyDateRange,
   AssemblyEvent,
   AssemblySourceContribution,
   LiveAssembly,
@@ -39,6 +40,8 @@ type Props = {
   loading: boolean;
   error: string;
   onRefresh: () => void;
+  assemblyOnly?: boolean;
+  onRangeChange?: (range: AssemblyDateRange) => void;
 };
 
 type EmployeeStats = {
@@ -179,6 +182,23 @@ function hasType(row: AssemblyDaily, type: string) {
     (item) => normalize(item.name) === key,
   );
 }
+
+function filterAssemblyDay(row: AssemblyDaily, productType: string): AssemblyDaily | null {
+  const events = (row.events || []).filter(event => normalize(event.productType) === normalize(productType));
+  const source = row.sourceContributions?.find(item => item.sourceKind === "assembly");
+  if (!events.length || !source) return null;
+  const machineCut = events.filter(event => event.operationId === "cut").reduce((sum, event) => sum + event.quantity, 0);
+  const manualCut = events.filter(event => event.operationId === "assembly").reduce((sum, event) => sum + event.quantity, 0);
+  const packed = events.filter(event => event.operationId === "packing").reduce((sum, event) => sum + event.quantity, 0);
+  const cut = machineCut + manualCut;
+  const totals = {
+    machineCut, manualCut, packed, cut, total: cut + packed,
+    coefficient: sourceCoefficientSum(events),
+    cutTypes: cut ? [{ name: productType, quantity: cut }] : [],
+    packTypes: packed ? [{ name: productType, quantity: packed }] : [],
+  };
+  return { ...row, ...totals, events, sourceContributions: [{ ...source, ...totals, recordCount: events.length }] };
+}
 function sumType(
   rows: AssemblyDaily[],
   type: string,
@@ -244,8 +264,8 @@ function rowsForSource(rows: AssemblyDaily[], sourceKind: "fbo" | "assembly") {
 
 function sourceBadgeLabel(sourceKinds: Array<"fbo" | "assembly">) {
   if (sourceKinds.includes("fbo") && sourceKinds.includes("assembly"))
-    return "FBO + Assembly";
-  return sourceKinds.includes("fbo") ? "FBO" : "Assembly";
+    return "FBO + RITM Сборка";
+  return sourceKinds.includes("fbo") ? "FBO" : "RITM Сборка";
 }
 
 function sumSourceContributions(
@@ -726,7 +746,7 @@ function NormsTable({
   );
 }
 
-export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
+export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOnly = false, onRangeChange }: Props) {
   const today = moscowToday();
   const [preset, setPreset] = useState<RangePreset>("today");
   const [customStart, setCustomStart] = useState(today);
@@ -744,6 +764,10 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
     () => ranges(preset, today, customStart, customEnd),
     [preset, today, customStart, customEnd],
   );
+  useEffect(() => {
+    if (assemblyOnly && range.start && range.end && range.start <= range.end) onRangeChange?.(range);
+  }, [assemblyOnly, onRangeChange, range]);
+  const aggregateType = assemblyOnly ? "" : productType;
   const history = value?.history || [];
   const productOptions = useMemo(() => {
     const items = new Map<string, string>();
@@ -765,17 +789,21 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
       history.filter(
         (row) =>
           row.date >= range.start && row.date <= range.end && rowHasWork(row),
-      ),
-    [history, range.start, range.end],
+      ).flatMap(row => {
+        if (!assemblyOnly || !productType) return [row];
+        const filtered = filterAssemblyDay(row, productType);
+        return filtered ? [filtered] : [];
+      }),
+    [history, range.start, range.end, assemblyOnly, productType],
   );
   const team = useMemo(() => {
     const identities = new Set(
-      periodRows.filter((row) => hasType(row, productType)).map(identityOf),
+      periodRows.filter((row) => hasType(row, aggregateType)).map(identityOf),
     );
     return [...identities].map((identityKey) =>
-      aggregateEmployee(periodRows, identityKey, productType),
+      aggregateEmployee(periodRows, identityKey, aggregateType),
     );
-  }, [periodRows, productType]);
+  }, [periodRows, aggregateType]);
   const visibleTeam = useMemo(() => {
     const query = normalize(search);
     const rows = team.filter(
@@ -817,43 +845,43 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
     team.find((row) => row.identityKey === selectedEmployee) || null;
   const activeDays = new Set(
     periodRows
-      .filter((row) => hasType(row, productType))
+      .filter((row) => hasType(row, aggregateType))
       .map((row) => row.date),
   ).size;
   const sourceMetrics = useMemo(
     () => ({
-      fbo: sumSourceContributions(periodRows, "fbo", productType),
-      assembly: sumSourceContributions(periodRows, "assembly", productType),
-      approved: sumSourceContributions(periodRows, "all", productType, true),
-      combined: sumSourceContributions(periodRows, "all", productType),
+      fbo: sumSourceContributions(periodRows, "fbo", aggregateType),
+      assembly: sumSourceContributions(periodRows, "assembly", aggregateType),
+      approved: sumSourceContributions(periodRows, "all", aggregateType, true),
+      combined: sumSourceContributions(periodRows, "all", aggregateType),
     }),
-    [periodRows, productType],
+    [periodRows, aggregateType],
   );
   const hasApprovedMetrics = sourceMetrics.approved.recordCount > 0;
   const machineTotal =
-    productType || !hasApprovedMetrics
+    aggregateType || !hasApprovedMetrics
       ? null
       : sourceMetrics.approved.machineCut;
   const manualTotal =
-    productType || !hasApprovedMetrics
+    aggregateType || !hasApprovedMetrics
       ? null
       : sourceMetrics.approved.manualCut;
   const packedTotal = hasApprovedMetrics ? sourceMetrics.approved.packed : null;
   const coefficientTotal =
-    productType || !sourceMetrics.combined.recordCount
+    aggregateType || !sourceMetrics.combined.recordCount
       ? null
       : sourceMetrics.combined.coefficient;
   const reconciliationStatus =
     !value ||
     value.staleSnapshot ||
-    value.sources?.fbo.status === "unavailable" ||
+    (!assemblyOnly && value.sources?.fbo?.status === "unavailable") ||
     value.sources?.assembly.status === "unavailable" ||
     periodRows.some((row) => row.reconciliationStatus === "unknown")
       ? "unknown"
       : periodRows.some((row) => row.reconciliationStatus === "needs_review")
         ? "needs_review"
         : "clear";
-  const needsReconciliation = !!value && reconciliationStatus !== "clear";
+  const needsReconciliation = !assemblyOnly && !!value && reconciliationStatus !== "clear";
   const sourceTotalsNote = (
     metric: "packed" | "machineCut" | "manualCut" | "coefficient",
   ) => {
@@ -865,8 +893,8 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
       source: "fbo" | "assembly",
       sourceValue: number | null,
     ) => {
-      const status = value?.sources?.[source].status;
-      const name = source === "fbo" ? "FBO" : "Assembly";
+      const status = value?.sources?.[source]?.status;
+      const name = source === "fbo" ? "FBO" : "RITM Сборка";
       if (value?.staleSnapshot)
         return `${name} снимок ${sourceValue === null ? "—" : fmt(sourceValue, metric === "coefficient")} ${caption}`;
       if (status === "unavailable") return `${name} недоступен`;
@@ -876,6 +904,7 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
         ? `${name} нет полной разбивки`
         : `${name} ${fmt(sourceValue, metric === "coefficient")} ${caption}`;
     };
+    if (assemblyOnly) return sourceLabel("assembly", assemblyValue);
     const combined = `${sourceLabel("fbo", fboValue)} · ${sourceLabel("assembly", assemblyValue)}`;
     return needsReconciliation
       ? `${combined} · сумма источников`
@@ -887,7 +916,7 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
     const values = [
       {
         stats: sourceMetrics.fbo,
-        state: value?.sources?.fbo.status,
+        state: value?.sources?.fbo?.status,
       },
       {
         stats: sourceMetrics.assembly,
@@ -914,10 +943,10 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
   const maxPacked = Math.max(1, ...visibleTeam.map((row) => row.packed));
   const selectedDays = selected?.days || [];
   const selectedHistory = [...selectedDays]
-    .filter((row) => !productType || hasType(row, productType))
+    .filter((row) => !aggregateType || hasType(row, aggregateType))
     .filter(
       (row) =>
-        productType ||
+        aggregateType ||
         operationFilter === "all" ||
         operationValue(row, operationFilter) > 0,
     )
@@ -936,7 +965,7 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
     (selected?.sourceContributions.length || 0) > 1;
   const latestRecordAt = value?.sources?.assembly.sourceUpdatedAt || "";
   const fboSyncAt =
-    value?.sources?.fbo.lastSuccessAt || value?.sources?.fbo.checkedAt || "";
+    value?.sources?.fbo?.lastSuccessAt || value?.sources?.fbo?.checkedAt || "";
   const assemblySyncAt =
     value?.sources?.assembly.lastSuccessAt ||
     value?.sources?.assembly.checkedAt ||
@@ -946,12 +975,12 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
       ? `В источниках есть ${value.quality.invalidRecords} некорректных строк; они исключены, поэтому показатели могут быть неполными.`
       : "";
   const workLogUnavailable = value?.sources?.assembly.status !== "available";
-  const fboUnavailable = value?.sources?.fbo.status !== "available";
+  const fboUnavailable = !assemblyOnly && value?.sources?.fbo?.status !== "available";
   const tabs: { id: DetailTab; label: string }[] = [
     { id: "summary", label: "Сводка" },
     { id: "history", label: "История" },
     { id: "chart", label: "График" },
-    { id: "norms", label: "Нормы" },
+    ...(assemblyOnly ? [] : [{ id: "norms" as const, label: "Нормы" }]),
   ];
   const setSort = (key: SortKey) => {
     if (sortKey === key) setSortDescending((value) => !value);
@@ -1017,7 +1046,7 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
               </label>
             </div>
           )}
-          <label className="assembly-select-wrap">
+          {!assemblyOnly && <label className="assembly-select-wrap">
             <span className="sr-only">Поставка</span>
             <select
               aria-label="Поставка"
@@ -1027,7 +1056,7 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
             >
               <option value="all">Все поставки · нет данных в FBO</option>
             </select>
-          </label>
+          </label>}
           <label className="assembly-select-wrap">
             <span className="sr-only">Вид товара</span>
             <select
@@ -1087,31 +1116,31 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
               ? `${dateTitle(range.start)}${range.start === range.end ? "" : ` — ${dateTitle(range.end)}`}`
               : "Выберите период"}
           </span>
-          <span>
+          {!assemblyOnly && <span>
             <Clock3 size={14} />
             {value?.staleSnapshot
               ? `FBO снимок · последняя успешная ${fboSyncAt ? `${moscowDateTime(fboSyncAt)} МСК` : "время неизвестно"}`
-              : value?.sources?.fbo.status === "unavailable"
+              : value?.sources?.fbo?.status === "unavailable"
                 ? `FBO недоступен${fboSyncAt ? ` · последняя успешная ${moscowDateTime(fboSyncAt)} МСК` : ""}`
-                : value?.sources?.fbo.status === "partial"
+                : value?.sources?.fbo?.status === "partial"
                   ? `FBO частично · проверено ${fboSyncAt ? `${moscowDateTime(fboSyncAt)} МСК` : "время неизвестно"}`
-                  : `FBO синхр. ${fboSyncAt ? `${moscowDateTime(fboSyncAt)} МСК` : "время неизвестно"}${value?.sources?.fbo.currentSheetUpdateTime ? ` · лист ${value.sources.fbo.currentSheetUpdateTime}` : ""}`}
-          </span>
+                  : `FBO синхр. ${fboSyncAt ? `${moscowDateTime(fboSyncAt)} МСК` : "время неизвестно"}${value?.sources?.fbo?.currentSheetUpdateTime ? ` · лист ${value.sources.fbo.currentSheetUpdateTime}` : ""}`}
+          </span>}
           <span>
             {value?.staleSnapshot
-              ? `Assembly снимок · последняя успешная ${assemblySyncAt ? `${moscowDateTime(assemblySyncAt)} МСК` : "время неизвестно"}`
+              ? `RITM Сборка · последняя синхронизация ${assemblySyncAt ? `${moscowDateTime(assemblySyncAt)} МСК` : "время неизвестно"}`
               : value?.sources?.assembly.status === "unavailable"
-                ? `Assembly недоступен${assemblySyncAt ? ` · последняя успешная ${moscowDateTime(assemblySyncAt)} МСК` : ""}`
+                ? `«RITM Сборка» недоступна${assemblySyncAt ? ` · последний снимок ${moscowDateTime(assemblySyncAt)} МСК` : ""}`
                 : value?.sources?.assembly.status === "partial"
-                  ? `Assembly частично · проверено ${assemblySyncAt ? `${moscowDateTime(assemblySyncAt)} МСК` : "время неизвестно"}`
-                  : `Assembly синхр. ${assemblySyncAt ? `${moscowDateTime(assemblySyncAt)} МСК` : "время неизвестно"}`}
+                  ? `RITM Сборка · данные загружены частично · проверено ${assemblySyncAt ? `${moscowDateTime(assemblySyncAt)} МСК` : "время неизвестно"}`
+                  : `RITM Сборка · обновлено ${assemblySyncAt ? `${moscowDateTime(assemblySyncAt)} МСК` : "время неизвестно"}`}
             {latestRecordAt
               ? ` · событие ${moscowDateTime(latestRecordAt)} МСК`
               : ""}
           </span>
-          <span className="assembly-source-label">
-            FBO «Все коэффициенты» + «История производства» · Assembly WorkLog
-          </span>
+          {!assemblyOnly && <span className="assembly-source-label">
+            FBO «Все коэффициенты» + «История производства» · журнал «RITM Сборка»
+          </span>}
         </div>
       </div>
 
@@ -1122,10 +1151,12 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
         >
           <span>
             {error}
-            {value?.staleSnapshot
+            {assemblyOnly
+              ? value?.stale ? " Показан последний полученный отчёт." : ""
+              : value?.staleSnapshot
               ? " Показаны последние сохранённые данные обоих источников; общий итог требует повторной сверки."
               : value
-                ? value.sources?.fbo.status === "unavailable" ||
+                ? value.sources?.fbo?.status === "unavailable" ||
                   value.sources?.assembly.status === "unavailable"
                   ? " Данные доступного источника сохранены отдельно; вклад недоступного источника неизвестен."
                   : " Показаны проверенные записи; общий итог может быть неполным."
@@ -1153,16 +1184,16 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
             <strong>
               {reconciliationStatus === "unknown"
                 ? "Общий результат не подтверждён"
-                : "Работа и кэф = FBO + Assembly"}
+                : "Работа и кэф = FBO + RITM Сборка"}
             </strong>
             <span>
               {reconciliationStatus === "unknown"
                 ? "Показатели доступных источников остаются видны. Автоматически объединяются только однозначные совпадения имён; общий итог появится после проверки доступности и возможных повторов."
-                : "Показаны количества по операциям и сумма коэффициентов обеих систем. В карточке — вклад каждой системы и работа по артикулам Assembly. FBO передаёт дневные итоги без артикулов и времени: совпадение работы между системами по ним проверить нельзя. Совпадение сотрудника и дня не доказывает повтор."}
+                : "Показаны количества по операциям и сумма коэффициентов обеих систем. В карточке — вклад каждой системы и работа по артикулам «RITM Сборка». FBO передаёт дневные итоги без артикулов и времени: совпадение работы между системами по ним проверить нельзя. Совпадение сотрудника и дня не доказывает повтор."}
             </span>
           </div>
         )}
-      {productType && (
+      {!assemblyOnly && productType && (
         <div className="assembly-filter-note">
           Для выбранного вида FBO показывает общий объём порезки по виду и
           упаковку по виду. Разделить станочную/ручную резку и коэффициент по
@@ -1180,7 +1211,7 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
             !value
               ? "Данные ещё не загружены."
               : needsReconciliation
-                ? "FBO и Assembly · возможны совпадения сотрудников"
+                ? "FBO и «RITM Сборка» · возможны совпадения сотрудников"
                 : "Есть записи за период"
           }
           tone="is-blue"
@@ -1301,7 +1332,7 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
             ) : !value ? (
               <div className="assembly-panel-state">
                 <strong>Данные временно недоступны</strong>
-                <span>Проверьте подключение к FBO и повторите загрузку.</span>
+                <span>Проверьте подключение к источнику и обновите отчёт.</span>
                 <button
                   className="assembly-button assembly-button-primary"
                   onClick={onRefresh}
@@ -1533,11 +1564,11 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
                 Полосы показывают объём относительно максимума среди видимых
                 сотрудников.
               </span>
-              <span>
+              {!assemblyOnly && <span>
                 FBO хранит дневные итоги, WorkLog — события. Фактические
                 значения видны по каждому источнику. Итоговый кэф складывает FBO
-                и Assembly; возможные повторы не вычитаются.
-              </span>
+                и «RITM Сборка»; возможные повторы не вычитаются.
+              </span>}
             </div>
           </section>
 
@@ -1571,9 +1602,9 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
                   <i />
                   {selectedHasMultipleSources &&
                   selected.reconciliationStatus !== "clear"
-                    ? "Сумма FBO + Assembly"
+                    ? "Сумма FBO + RITM Сборка"
                     : selected.sourceContributions.length === 1
-                      ? `Данные ${selected.sourceContributions[0].sourceKind === "fbo" ? "FBO" : "Assembly"}`
+                      ? `Данные ${selected.sourceContributions[0].sourceKind === "fbo" ? "FBO" : "RITM Сборка"}`
                       : "Работал · сверено"}
                 </span>
               </div>
@@ -1602,9 +1633,9 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
                   <p className="assembly-detail-source-note">
                     {selectedHasMultipleSources
                       ? selected.reconciliationStatus === "clear"
-                        ? "Общий итог подтверждён. Ниже можно отдельно посмотреть количества и коэффициенты FBO и Assembly."
-                        : "Выше — суммарная работа и кэф. Ниже — количества, операции и коэффициенты отдельно по FBO и Assembly."
-                      : `Показаны фактические данные ${selected.sourceContributions[0]?.sourceKind === "fbo" ? "FBO" : selected.sourceContributions[0]?.sourceKind === "assembly" ? "Assembly WorkLog" : "источника"}; они не смешиваются с другой системой.`}
+                        ? "Общий итог подтверждён. Ниже можно отдельно посмотреть количества и коэффициенты FBO и «RITM Сборка»."
+                        : "Выше — суммарная работа и кэф. Ниже — количества, операции и коэффициенты отдельно по FBO и «RITM Сборка»."
+                      : `Показаны фактические данные ${selected.sourceContributions[0]?.sourceKind === "fbo" ? "FBO" : selected.sourceContributions[0]?.sourceKind === "assembly" ? "журнала «RITM Сборка»" : "источника"}; они не смешиваются с другой системой.`}
                   </p>
                   <div className="assembly-employee-kpis">
                     <div className="is-green">
@@ -1645,7 +1676,7 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
                       <em>
                         {selectedHasMultipleSources &&
                         selected.reconciliationStatus !== "clear"
-                          ? "Сумма FBO + Assembly"
+                          ? "Сумма FBO + RITM Сборка"
                           : selected.sourceContributions.length === 1
                             ? "Коэффициент этого источника"
                             : selected.coefficient === null
@@ -1683,7 +1714,7 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
                         >
                           <div>
                             <strong>
-                              {source.sourceKind === "fbo" ? "FBO" : "Assembly"}
+                              {source.sourceKind === "fbo" ? "FBO" : "RITM Сборка"}
                             </strong>
                             <small>
                               {source.sourceKind === "fbo"
@@ -1731,7 +1762,7 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
                       selected.reconciliationStatus !== "clear"
                         ? "Количество и кэф складываются по источникам. FBO не передаёт артикулы и время операций, поэтому точную сверку повторов между системами выполнить нельзя; ничего не вычтено."
                         : selected.sourceContributions.length === 1
-                          ? `Вклад ${selected.sourceContributions[0].sourceKind === "fbo" ? "FBO" : "Assembly"}: ${fmt(selected.sourceContributions[0].total)} шт. · кэф ${fmt(selected.sourceContributions[0].coefficient, true)}.`
+                          ? `Вклад ${selected.sourceContributions[0].sourceKind === "fbo" ? "FBO" : "RITM Сборка"}: ${fmt(selected.sourceContributions[0].total)} шт. · кэф ${fmt(selected.sourceContributions[0].coefficient, true)}.`
                           : `Подтверждённый итог: ${fmt(selected.total)} шт. · кэф ${fmt(selected.coefficient, true)}`}
                     </p>
                   </div>
@@ -1746,7 +1777,7 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
                       </div>
                       <p className="assembly-detail-note">
                         FBO хранит дневной итог без точного времени, поставки и
-                        артикула. Он показан отдельно от событий Assembly.
+                        артикула. Он показан отдельно от событий «RITM Сборка».
                       </p>
                       <DetailRows
                         rows={selectedFboHistory.slice(0, 7)}
@@ -1758,7 +1789,7 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
                     <>
                       <div className="assembly-detail-section-heading">
                         <div>
-                          <h3>Assembly · операции WorkLog</h3>
+                          <h3>RITM Сборка · журнал операций</h3>
                           <p>Сохранённые события и время выполнения</p>
                         </div>
                         <span>{fmt(selected.events.length)} записей</span>
@@ -1803,10 +1834,10 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
                         <span className="assembly-muted">Нет данных</span>
                       )}
                     </div>
-                    <div className="assembly-supply-breakdown">
+                    {!assemblyOnly && <div className="assembly-supply-breakdown">
                       <h3>По поставкам</h3>
                       <p>В FBO «История производства» поставка не указана.</p>
-                    </div>
+                    </div>}
                   </div>
                 </>
               )}
@@ -1816,8 +1847,8 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
                     <label>
                       <span>Операция</span>
                       <select
-                        value={productType ? "all" : operationFilter}
-                        disabled={!!productType}
+                        value={aggregateType ? "all" : operationFilter}
+                        disabled={!!aggregateType}
                         onChange={(event) => {
                           setOperationFilter(
                             event.target.value as OperationFilter,
@@ -1831,18 +1862,18 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
                         <option value="packing">Упаковка</option>
                       </select>
                     </label>
-                    <label>
+                    {!assemblyOnly && <label>
                       <span>Поставка</span>
                       <select value="none" disabled>
                         <option value="none">Нет данных в FBO</option>
                       </select>
-                    </label>
+                    </label>}
                   </div>
-                  <p className="assembly-detail-note">
-                    FBO отображается дневными итогами, Assembly — отдельными
+                  {!assemblyOnly && <p className="assembly-detail-note">
+                    FBO отображается дневными итогами, «RITM Сборка» — отдельными
                     событиями с временем. Фильтры применены к выбранному
                     периоду.
-                  </p>
+                  </p>}
                   {selectedFboHistory.length > 0 && (
                     <>
                       <div className="assembly-detail-section-heading">
@@ -1861,7 +1892,7 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
                     <>
                       <div className="assembly-detail-section-heading">
                         <div>
-                          <h3>Assembly · операции WorkLog</h3>
+                          <h3>RITM Сборка · журнал операций</h3>
                           <p>Сохранённые действия с точным временем</p>
                         </div>
                       </div>
@@ -1883,9 +1914,9 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
                 </div>
               )}
               {tab === "chart" && (
-                <DetailChart stats={selected} productType={productType} />
+                <DetailChart stats={selected} productType={aggregateType} />
               )}
-              {tab === "norms" && (
+              {!assemblyOnly && tab === "norms" && (
                 <div className="assembly-norms-view">
                   <div className="assembly-detail-section-heading">
                     <div>
@@ -1904,7 +1935,7 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh }: Props) {
                 <Users size={25} />
               </div>
               <strong>Выберите сотрудника</strong>
-              <span>Здесь появятся сводка, журнал, график и нормы.</span>
+              <span>{assemblyOnly ? "Здесь появятся сводка, журнал и график." : "Здесь появятся сводка, журнал, график и нормы."}</span>
             </aside>
           )}
         </div>

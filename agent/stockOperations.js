@@ -12,7 +12,7 @@ export class StockOperations {
     Object.assign(this,{store,adapters,catalog,checkpoint,manager});
   }
   async preview(input) {
-    const [catalog,box,roll]=await Promise.all([this.catalog(),this.adapters.box.read(input.destination),this.adapters.roll.read(input.destination)]);
+    const [catalog,box,roll]=await Promise.all([this.catalog(input.lines),this.adapters.box.read(input.destination),this.adapters.roll.read(input.destination)]);
     return planStockAddition({...input,catalog,existing:{box,roll}});
   }
   async reconcile(operation) {

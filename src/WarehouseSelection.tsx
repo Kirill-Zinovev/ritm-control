@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { Button, Field, Modal } from "./ui";
+import { WarehouseExportDeparture } from "./WarehouseExportDeparture";
 import type { WarehouseCarton } from "./liveWarehouse";
 import { warehouseCartonFingerprint } from "./warehouseFingerprint";
 import type {
@@ -72,10 +73,12 @@ async function responseJson(response: Response) {
 }
 export function WarehouseSelectionActions({
   cartons,
+  warehouseCartons,
   onRefresh,
   onClear,
 }: {
   cartons: WarehouseCarton[];
+  warehouseCartons: WarehouseCarton[];
   onRefresh: () => void | Promise<void>;
   onClear: () => void;
 }) {
@@ -97,16 +100,9 @@ export function WarehouseSelectionActions({
   const [history, setHistory] = useState<
     { id: string; created_at: string; carton_count: number; quantity: number }[]
   >([]);
+  const [departure, setDeparture] = useState<SavedWarehouseExport | null>(null);
   const prepared = useRef<{ signature: string; key: string } | null>(null),
-    sendKeys = useRef<{
-      signature: string;
-      rows: {
-        cartonId: string;
-        shipmentId: string;
-        fingerprint: string;
-        commandKey: string;
-      }[];
-    } | null>(null);
+    sendKeys = useRef(new Map<string, string>());
   const currentSignature = JSON.stringify(
     cartons.map((b) => [b.id, signature(b)]).sort(),
   );
@@ -223,45 +219,50 @@ export function WarehouseSelectionActions({
       setBusy(false);
     }
   }
-  async function send() {
+  async function send(chosen: WarehouseCarton[], fromHistory = false) {
+    if (busy || !chosen.length || (!fromHistory && !confirmed)) return;
     setBusy(true);
     setError("");
     setNotice("");
     try {
-      if (!confirmed) throw new Error("Подтвердите фактический выезд.");
-      if (sendKeys.current?.signature !== currentSignature)
-        sendKeys.current = {
-          signature: currentSignature,
-          rows: cartons.map((b) => ({
-            cartonId: b.id,
-            shipmentId: b.shipmentId,
-            fingerprint: warehouseCartonFingerprint(b),
-            commandKey: crypto.randomUUID(),
-          })),
-        };
+      const rows = chosen.map((box) => {
+        const fingerprint = warehouseCartonFingerprint(box);
+        const commandKey = sendKeys.current.get(fingerprint) ?? crypto.randomUUID();
+        sendKeys.current.set(fingerprint, commandKey);
+        return { cartonId: box.id, shipmentId: box.shipmentId, fingerprint, commandKey };
+      });
       const body = await responseJson(
         await fetch("/api/warehouse/dispatch/batch", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ cartons: sendKeys.current.rows }),
+          body: JSON.stringify({ cartons: rows }),
         }),
       );
-      const failed = body.results.filter(
-        (r: { status: string }) => r.status === "unconfirmed",
-      ).length;
-      setNotice(
-        failed
-          ? `Не подтверждено: ${failed}. Остальные статусы сохранены; проверьте результат после обновления.`
-          : "Выбранные короба отмечены отправленными.",
+      if (!Array.isArray(body.results)) throw new Error("Статусы коробов не подтверждены.");
+      const statuses = new Map<string, string>(
+        body.results.map((result: { cartonId: string; status: string }) => [result.cartonId, result.status]),
       );
+      let sent = 0, alreadySent = 0;
+      for (const row of rows) {
+        const status = statuses.get(row.cartonId);
+        if (status === "sent") sent++;
+        else if (status === "already_sent") alreadySent++;
+        else continue;
+        sendKeys.current.delete(row.fingerprint);
+      }
+      const failed = rows.length - sent - alreadySent;
+      setNotice(
+        `Отмечено отправленными · ${sent}${alreadySent ? ` · уже отправлены · ${alreadySent}` : ""}`,
+      );
+      if (failed) setError(`Коробов без подтверждения выезда · ${failed}. Проверьте их статус перед повтором.`);
       await onRefresh();
       if (!failed) {
-        setMode(null);
-        onClear();
-      } else
-        setError(
-          "Часть коробов требует проверки. Не отмечайте их повторно до обновления склада.",
-        );
+        if (fromHistory) setDeparture(null);
+        else {
+          setMode(null);
+          onClear();
+        }
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Отправка не подтверждена.");
       await onRefresh();
@@ -273,6 +274,7 @@ export function WarehouseSelectionActions({
     setMode("history");
     setBusy(true);
     setError("");
+    setNotice("");
     try {
       setHistory(
         (
@@ -287,16 +289,19 @@ export function WarehouseSelectionActions({
       setBusy(false);
     }
   }
-  async function previous(id: string) {
+  async function previous(id: string, markDeparture = false) {
     setBusy(true);
     setError("");
+    setNotice("");
     try {
       const body = await responseJson(
         await fetch("/api/warehouse/exports?id=" + encodeURIComponent(id), {
           cache: "no-store",
         }),
       );
-      await account(body.snapshot);
+      if (!Array.isArray(body.snapshot?.cartons)) throw new Error("Состав выгрузки недоступен.");
+      if (markDeparture) setDeparture(body.snapshot);
+      else await account(body.snapshot);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Выгрузка недоступна.");
     } finally {
@@ -353,32 +358,50 @@ export function WarehouseSelectionActions({
           </Button>
         )}
       </div>
-      {error && (
+      {!mode && error && (
         <p className="error-text" role="alert">
           {error}
         </p>
       )}
-      {notice && <p role="status">{notice}</p>}
+      {!mode && notice && <p role="status">{notice}</p>}
       <Modal
         open={mode !== null}
         onClose={() => {
-          if (!busy) setMode(null);
+          if (!busy) {
+            setMode(null);
+            setDeparture(null);
+          }
         }}
         title={
           mode === "send"
             ? "Подтвердить выезд коробов"
-            : mode === "history"
+            : departure
+              ? "Отметить выезд по выгрузке"
+              : mode === "history"
               ? "Сохранённые выгрузки"
               : "Excel по шаблону маркетплейса"
         }
         description={
           mode === "send"
-            ? "Статус изменится в РИТМ и новом Assembly. Перед сохранением проверим состав каждого короба."
-            : "Скачивание Excel не отправляет короба."
+            ? "Статус изменится в РИТМ и «RITM Сборка». Перед сохранением проверим состав каждого короба."
+            : departure
+              ? "Проверьте список и оставьте галочки у коробов, которые фактически уехали."
+              : "Скачивание Excel не отправляет короба."
         }
       >
-        {mode === "history" ? (
-          <div className="wh-export-list">
+        {departure ? (
+          <WarehouseExportDeparture
+            snapshot={departure}
+            warehouseCartons={warehouseCartons}
+            busy={busy}
+            onBack={() => {
+              setDeparture(null);
+              setError("");
+            }}
+            onSend={(chosen) => void send(chosen, true)}
+          />
+        ) : mode === "history" ? (
+          <div className="wh-export-list wh-export-history">
             {history.map((row) => (
               <div key={row.id}>
                 <span>
@@ -387,9 +410,14 @@ export function WarehouseSelectionActions({
                   })}{" "}
                   · {row.carton_count} коробов · {row.quantity} шт.
                 </span>
-                <Button disabled={busy} onClick={() => void previous(row.id)}>
-                  Скачать учёт
-                </Button>
+                <div className="wh-export-actions">
+                  <Button disabled={busy} onClick={() => void previous(row.id)}>
+                    Скачать учёт
+                  </Button>
+                  <Button kind="primary" disabled={busy} onClick={() => void previous(row.id, true)}>
+                    Отметить выезд
+                  </Button>
+                </div>
               </div>
             ))}
             {!history.length && !busy && <p>Сохранённых выгрузок пока нет.</p>}
@@ -422,7 +450,7 @@ export function WarehouseSelectionActions({
                 <Button
                   kind="primary"
                   disabled={busy || !confirmed || !canSend}
-                  onClick={() => void send()}
+                  onClick={() => void send(cartons)}
                 >
                   {busy ? "Сохраняем…" : "Отметить отправленными"}
                 </Button>
@@ -431,7 +459,7 @@ export function WarehouseSelectionActions({
               <div className="wh-template-form">
                 <p>
                   Загрузите актуальный пустой шаблон из кабинета маркетплейса и
-                  сопоставьте колонки. Номера коробов Assembly не заменяют
+                  сопоставьте колонки. Номера коробов «RITM Сборка» не заменяют
                   назначенные маркетплейсом штрихкоды грузомест.
                 </p>
                 <Field label="Пустой шаблон .xlsx">
@@ -477,7 +505,7 @@ export function WarehouseSelectionActions({
                         key={field}
                         label={
                           field === "carton"
-                            ? "Номер короба Assembly"
+                            ? "Номер короба «RITM Сборка»"
                             : field === "sku"
                               ? "Артикул"
                               : field === "barcode"
@@ -515,7 +543,7 @@ export function WarehouseSelectionActions({
                           Проверено: {saved.cartons.length} коробов. Данные
                           заполнят только выбранные пустые колонки.
                         </p>
-                        <div className="wh-scroll"><table className="wh-table"><caption>Предпросмотр первых 10 строк</caption><thead><tr><th>Короб Assembly</th><th>Артикул</th><th>Штрихкод</th><th>Количество</th></tr></thead><tbody>{saved.cartons.flatMap(box=>box.contents.map(item=>({box:box.number,...item}))).slice(0,10).map((row,i)=><tr key={i}><td>{row.box}</td><td>{row.article}</td><td>{mapping.barcode?row.barcode:'Не переносится'}</td><td>{row.quantity}</td></tr>)}</tbody></table></div>
+                        <div className="wh-scroll"><table className="wh-table"><caption>Предпросмотр первых 10 строк</caption><thead><tr><th>Короб «RITM Сборка»</th><th>Артикул</th><th>Штрихкод</th><th>Количество</th></tr></thead><tbody>{saved.cartons.flatMap(box=>box.contents.map(item=>({box:box.number,...item}))).slice(0,10).map((row,i)=><tr key={i}><td>{row.box}</td><td>{row.article}</td><td>{mapping.barcode?row.barcode:'Не переносится'}</td><td>{row.quantity}</td></tr>)}</tbody></table></div>
                         <Button
                           kind="primary"
                           disabled={busy}
@@ -532,6 +560,7 @@ export function WarehouseSelectionActions({
           </>
         )}
         {busy && <p role="status">Подготавливаем данные…</p>}
+        {notice && <p role="status">{notice}</p>}
         {error && (
           <p className="error-text" role="alert">
             {error}

@@ -33,7 +33,7 @@ export async function readAssemblyStocks({ reader, boxId, rollId, signal }) {
     const snapshot = await readStockSnapshot(reader,documentId,'warehouse',signal);
     const items = snapshot.rows.map(row => stockItem(department,documentId,snapshot.sheetId,row.row,
       Array.from({length:30}, (_,i) => i === 29 ? entered(snapshot.data[row.row-1]?.values?.[i]) : value(snapshot.data[row.row-1]?.values?.[i]))));
-    const meta = await reader.metadata(documentId,signal);
+    const meta = snapshot.metadata;
     const archives = (meta.sheets || []).filter(s => s.properties?.title === '_RITM_STOCK_ARCHIVE');
     if (archives.length > 1) invalid('повторяется лист архива.');
     if (archives.length) {
@@ -69,4 +69,35 @@ export async function readAssemblyStocks({ reader, boxId, rollId, signal }) {
   if (items.length > 1500) invalid('слишком много позиций; требуется проверка архива.');
   return {ok:true,shipmentId:ASSEMBLY_STOCK_ID,destination:'warehouse',marketplace:'OZON',items,
     revision:createHash('sha256').update(JSON.stringify(items)).digest('hex'),updatedAt:new Date().toISOString()};
+}
+
+export async function forecastStocks(store, load, background, force) {
+  const kind = "forecast-stocks";
+  const cached = await store.snapshot(kind);
+  const age = cached ? store.now() - Date.parse(cached.value.updatedAt) : Infinity;
+  if (!force && age >= 0 && age < 60000) return cached.value;
+  const refresh = async () => {
+    const lease = await store.acquire("refresh:"+kind,60000);
+    try {
+      const value = await load();
+      await store.saveSnapshot(kind,value,lease);
+      return value;
+    } finally { await store.release(lease); }
+  };
+  if (!force && background && age >= 0 && age < 240000) {
+    background(refresh().catch(() => {}));
+    return cached.value;
+  }
+  try { return await refresh(); }
+  catch (error) {
+    if (error?.code !== "cloud_operation_busy") throw error;
+    // Another request already owns the Sheets read. Its snapshot can satisfy
+    // this request only after it has actually finished.
+    for (let n=0;n<20;n++) {
+      await new Promise(resolve=>setTimeout(resolve,1000));
+      const info = await store.snapshotInfo(kind);
+      if (info && info.at > (cached?.at || 0)) return (await store.snapshot(kind)).value;
+    }
+    throw error;
+  }
 }

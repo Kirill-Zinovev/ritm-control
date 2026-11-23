@@ -21,7 +21,7 @@ export function legacyCartonComparison(box) {
 const invalid = () =>
   new CloudError(
     "assembly_v2_warehouse_invalid",
-    "Новый Assembly не подтвердил полный список коробов. Предыдущие данные сохранены.",
+    "«RITM Сборка» не подтвердила полный список коробов. Предыдущие данные сохранены.",
     503,
   );
 function validBox(box, kind) {
@@ -158,7 +158,7 @@ export async function readAssemblyV2Warehouse(
         ...cached.value,
         stale: true,
         staleReason:
-          "Новый Assembly временно недоступен. Его короба показаны по последнему снимку.",
+          "«RITM Сборка» временно недоступна. Короба показаны по последнему снимку.",
       };
     return {
       cartons: [],
@@ -166,7 +166,7 @@ export async function readAssemblyV2Warehouse(
       checkedAt: null,
       stale: true,
       staleReason:
-        "Не удалось получить короба нового Assembly. Повторите обновление.",
+        "Не удалось получить короба «RITM Сборка». Повторите обновление.",
     };
   }
 }
@@ -218,7 +218,7 @@ export function mergeAssemblyWarehouses(legacy, modern) {
             dispatchBlocked: true,
             issues: [
               ...current.issues,
-              "Короб изменён в обеих версиях Assembly. Требуется сверка состава.",
+              "Короб изменён в обеих версиях сборки. Требуется сверка состава.",
             ],
           });
       }
@@ -236,7 +236,7 @@ export function mergeAssemblyWarehouses(legacy, modern) {
           box.dispatchBlocked = true;
           box.issues = [
             ...box.issues,
-            "Номер короба повторяется между версиями Assembly. Требуется сверка.",
+            "Номер короба повторяется в обеих версиях сборки. Требуется сверка.",
           ];
         }
     return boxes;
@@ -289,7 +289,7 @@ export function reconcileArchivedWarehouse(legacy, modern, dispatch = new Map())
       ...old, archivedOrigin: true, dispatchStatus: sent || copy?.dispatchStatus === "sent" ? "sent" : "pending",
       sourceStale: !!legacy.stale || !modern || !!modern.stale,
       dispatchBlocked: true,
-      issues: [...new Set([...(old.issues || []), "Архивный короб требует сверки двух версий Assembly."])],
+      issues: [...new Set([...(old.issues || []), "Архивный короб требует сверки с «RITM Сборка»."])],
     };
   });
 }
@@ -364,7 +364,7 @@ export async function dispatchAssemblyV2(
     throw new CloudError(
       "assembly_v2_dispatch_unconfirmed",
       body?.error ||
-        "Отправка в новом Assembly не подтверждена. Обновите склад перед повтором.",
+        "Отправка в «RITM Сборка» не подтверждена. Обновите склад перед повтором.",
       response.status === 409 ? 409 : 503,
     );
   await bindings.DB?.prepare("update cloud_snapshots set updated_at=0 where kind='warehouse-v2'").run();

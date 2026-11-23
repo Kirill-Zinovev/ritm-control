@@ -147,3 +147,58 @@ test('catalog equipment selects its workload lane without moving source jobs or 
  assert.equal(groups[0].machines[0].printed.value,15);assert.equal(groups[0].plan,60);
  assert.equal(order.sourceId,'roll-printing');assert.equal(input.supplies.length,1);assert.match(groups[0].machines[0].rows[0].issue, /рулонной печати.*2-GO.*УФ-планшет/);
 });
+
+test("stock loads combine with shipments by machine without reusing sheet identities", () => {
+  const shipment = snapshot([row()]);
+  const rollStock = row({
+    uid: "stock-roll", spreadsheetId: "stock-roll-book",
+    sheetName: "Запасы склад", quantity: 60, printProgress: 40, cutProgress: null,
+  });
+  const boxStock = row({
+    uid: "stock-box", spreadsheetId: "stock-box-book",
+    sheetName: "Срочные 2 этаж", quantity: 80, sourceId: "box-printing",
+    machine: "XEROX", sourceMachine: "XEROX", planningMachine: "УФ",
+    sheetsInProduct: 16, multiplicity: 8,
+    printProgress: 0, cutProgress: 0,
+    planningPrinted: 80, planningCut: 60, planningPhysicalUnits: true,
+  });
+  const input: LivePrinting = {
+    ...shipment,
+    stockRoll: { status: "available", orders: [rollStock, { ...rollStock, uid: "archived", archived: true }] },
+    stockBox: { status: "available", orders: [boxStock] },
+  };
+
+  assert.equal(buildMachineWorkload(input).length, 1, "forecast keeps its dedicated stock path");
+  const groups = buildMachineWorkload(input, { includeStock: true });
+  assert.equal(groups.length, 3);
+  assert.equal(new Set(groups.map((group) => group.key)).size, 3);
+  assert.equal(groups.reduce((sum, group) => sum + group.plan, 0), 240);
+  const roll = groups.find((group) => group.key === "stock:stock-roll-book:101")?.machines[0];
+  assert.equal(roll?.id, "2-go");
+  assert.equal(roll?.printed.value, 40);
+  assert.equal(roll?.cut.value, null);
+  const box = groups.find((group) => group.key === "stock:stock-box-book:101")?.machines[0];
+  assert.equal(box?.id, "xerox");
+  assert.equal(box?.printed.value, 40);
+  assert.equal(box?.cut.value, 30);
+  assert.equal(boxStock.printProgress, 0, "source snapshot remains immutable");
+});
+
+test("a failed stock read and a missing Xerox conversion cannot become confirmed zero", () => {
+  const input: LivePrinting = {
+    ...snapshot([]),
+    stockRoll: { status: "unavailable", orders: [row()] },
+    stockBox: {
+      status: "available",
+      orders: [row({
+        sourceId: "box-printing", machine: "XEROX",
+        planningPhysicalUnits: true, planningPrinted: 40, planningCut: null,
+        printProgress: 0, cutProgress: 0,
+      })],
+    },
+  };
+  const groups = buildMachineWorkload(input, { includeStock: true });
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].machines[0].printed.value, null);
+  assert.equal(groups[0].machines[0].cut.value, null);
+});

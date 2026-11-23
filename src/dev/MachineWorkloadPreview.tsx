@@ -91,7 +91,7 @@ function Preview() {
       <main className="machine-workload-page">
         <header className="page-header">
           <div>
-            <h1>Загруженность станков</h1>
+            <h1>Загрузка станков</h1>
             <p>Поставки, участки и прогресс по станкам</p>
           </div>
         </header>

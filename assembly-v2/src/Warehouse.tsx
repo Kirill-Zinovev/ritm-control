@@ -1,6 +1,5 @@
 import { Fragment, lazy, Suspense, useState } from "react";
 import { ChevronDown, Download } from "lucide-react";
-import { ProductPhoto } from "./ProductPhoto";
 import { CartonProduct } from "./CartonProduct";
 import type { Carton, Dispatch, Snapshot } from "../shared/model";
 import { countLabel, dateTime, number, sameScope } from "../shared/model";
@@ -10,9 +9,17 @@ import { filterWarehouseCartons, warehouseCity } from "../shared/warehouse-filte
 import { Button, Dialog, Empty, NativeSelect, Pagination, Search } from "./ui";
 import { CartonDetails } from "./Cartons";
 import { WarehouseStock } from "./WarehouseStock";
+import { WarehouseCompositionPreview, WarehouseOverview, WarehousePageCheck } from "./WarehouseOverview";
+import { PreparedDispatches, type DepartureReview } from "./PreparedDispatches";
+import "./warehouse-inventory.css";
 const ExportDialog = lazy(() => import("./exports/ExportDialog"));
+const OzonShipments = lazy(() => import("./OzonShipments"));
+const DispatchHistory = lazy(() => import("./DispatchHistory"));
 export function Warehouse({ workspace: w }: { workspace: Workspace }) {
-  const [tab, setTab] = useState("ready");
+  const [tab, setTab] = useState(() => {
+    const initial = new URLSearchParams(location.search).get("warehouse");
+    return initial === "ozon" || initial === "history" || initial === "stock" || initial === "draft" ? initial : "ready";
+  });
   const [query, setQuery] = useState("");
   const [market, setMarket] = useState("");
   const [city, setCity] = useState("");
@@ -22,7 +29,8 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [review, setReview] = useState(false);
   const [details, setDetails] = useState<Carton | null>(null);
-  const [send, setSend] = useState<Dispatch | null>(null);
+  const [send, setSend] = useState<DepartureReview | null>(null);
+  const [draftRefresh, setDraftRefresh] = useState(0);
   const [cancel, setCancel] = useState<Dispatch | null>(null);
   const [exporting, setExporting] = useState<Dispatch | null>(null);
   const [error, setError] = useState("");
@@ -34,6 +42,7 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
   );
   const selection = ready.filter((b) => selected.has(b.id));
   const first = selection[0];
+  const compatible = first && selection.every((box) => sameScope(first, box));
   const filters = {market, city, store: shop, query};
   const filtered = filterWarehouseCartons(ready, filters);
   const cities = [...new Map(ready.filter(b => !market || b.market === market).map(b => {
@@ -42,9 +51,18 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
   const shops = [...new Set(ready.filter(b => (!market || b.market === market) && (!city || warehouseCity(b).key === city)).map(b => b.store))].sort((a,b)=>a.localeCompare(b,"ru",{numeric:true}));
   const pg = Math.min(page, Math.max(0, Math.ceil(filtered.length / 30) - 1));
   const rows = filtered.slice(pg * 30, (pg + 1) * 30);
-  const dispatches = state.dispatches.filter((d) =>
-    tab === "draft" ? d.state === "draft" : d.state !== "draft",
-  );
+  const draftCount = state.dispatches.filter((dispatch) => dispatch.state === "draft").length;
+  const departingCartons = send?.drafts.flatMap((draft) => draft.cartons) ?? [];
+  const inventory = tab === "ready" || tab === "stock";
+  const standalone = inventory || tab === "ozon" || tab === "history";
+  function selectTab(key: string) {
+    setTab(key);
+    setPage(0);
+    const url = new URL(location.href);
+    if (key === "ozon" || key === "history" || key === "stock" || key === "draft") url.searchParams.set("warehouse", key);
+    else url.searchParams.delete("warehouse");
+    if (url.href !== location.href) history.replaceState(null, "", url);
+  }
   function toggle(box: Carton) {
     setSelected((s) => {
       const next = new Set(s);
@@ -80,7 +98,7 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
       );
       setReview(false);
       setSelected(new Set());
-      setTab("draft");
+      selectTab("draft");
       setExporting(
         w.state?.dispatches.find((d) => d.id === r.dispatchId) ?? null,
       );
@@ -93,11 +111,16 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
     try {
       await w.command(
         "dispatch.send",
-        { dispatchId: send.id, confirmed: true },
-        `${send.label}: фактический выезд записан.`,
+        {
+          confirmed: true,
+          departures: send.drafts.map(({ dispatchId, cartons }) => ({
+            dispatchId, cartonIds: cartons.map(({ id }) => id),
+          })),
+        },
+        `Выезд записан · ${countLabel(departingCartons.length, ["короб", "короба", "коробов"])}.`,
       );
       setSend(null);
-      setTab("history");
+      setDraftRefresh((value) => value + 1);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -111,21 +134,22 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
         "Отгрузка отменена. Короба снова доступны для выбора.",
       );
       setCancel(null);
+      setDraftRefresh((value) => value + 1);
     } catch (e) {
       setError((e as Error).message);
     }
   }
   return (
-    <main className="content warehouse">
-      <div className="page-title">
+    <main className={"content warehouse" + (inventory ? " warehouse-inventory" : standalone ? " warehouse-" + tab : "")}>
+      {!standalone && <div className="page-title">
         <div>
           <h1>Склад и отгрузки</h1>
           <p className="muted">
             Короба поставок, запас на складе и подготовка отгрузок.
           </p>
         </div>
-      </div>
-      {tab !== "stock" && <div className="warehouse-stats">
+      </div>}
+      {!standalone && <div className="warehouse-stats">
         <div>
           <strong>{number(ready.length)}</strong>
           <span>Готовы к отгрузке</span>
@@ -136,7 +160,7 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
         </div>
         <div>
           <strong>
-            {number(state.dispatches.filter((d) => d.state === "draft").length)}
+            {number(draftCount)}
           </strong>
           <span>Подготовлено отгрузок</span>
         </div>
@@ -146,6 +170,7 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
           ["ready", "Готовы к отгрузке"],
           ["stock", "Запас на складе"],
           ["draft", "Подготовленные"],
+          ["ozon", "Отгрузки Ozon"],
           ["history", "История"],
         ].map(([key, label]) => (
           <button
@@ -153,18 +178,36 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
             key={key}
             className="tab"
             aria-pressed={tab === key}
-            onClick={() => {
-              setTab(key);
-              setPage(0);
-            }}
+            onClick={() => selectTab(key)}
           >
             {label}
           </button>
         ))}
       </div>
-      {tab === "stock" ? <WarehouseStock workspace={w} manager /> : tab === "ready" ? (
+      {tab === "ozon" ? (
+        <Suspense fallback={<p role="status">Загружаем отгрузки Ozon…</p>}>
+          <OzonShipments workspace={w} />
+        </Suspense>
+      ) : tab === "history" ? (
+        <Suspense fallback={<p role="status">Загружаем историю отгрузок…</p>}>
+          <DispatchHistory onExport={setExporting} revision={state.dispatches
+            .filter((dispatch) => dispatch.state !== "draft")
+            .map((dispatch) => [dispatch.id, dispatch.state, dispatch.sentAt].join("|")).join(";")} />
+        </Suspense>
+      ) : tab === "stock" ? <WarehouseStock workspace={w} manager /> : tab === "ready" ? (
         <>
-          <div className="tools">
+          <WarehouseOverview title="Готовы к отгрузке" metrics={[
+            { label: "Коробов к отгрузке", value: ready.length },
+            { label: "Изделий в коробах", value: ready.reduce((total, box) => total + box.qty, 0) },
+            { label: "Подготовлено отгрузок", value: draftCount },
+          ]} actions={
+            <Button disabled={downloading || w.busy || !filtered.length} onClick={() => void downloadStock(filtered)}>
+              <Download size={17} />
+              {downloading ? "Готовим Excel…" : city ? "Скачать Excel по городу"
+                : market || shop || query ? "Скачать короба по фильтру" : "Скачать все короба"}
+            </Button>
+          } />
+          <div className="tools warehouse-filters">
             <Search
               label="Короб, артикул, магазин или склад"
               value={query}
@@ -197,49 +240,20 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
               {shops.map(s => <option key={s} value={s}>{s}</option>)}
             </NativeSelect>
           </div>
-          <div className="actions">
-            <Button disabled={downloading || w.busy || !filtered.length} onClick={() => void downloadStock(filtered)}>
-              <Download size={16}/>{downloading ? "Готовим Excel…" : `${city ? "Скачать Excel по городу" : market||shop||query ? "Скачать короба по фильтру" : "Скачать все короба"} · ${countLabel(filtered.length, ["короб", "короба", "коробов"])}`}
-            </Button>
-            <span className="muted">{city ? `По фильтрам: ${countLabel(filtered.length, ["короб", "короба", "коробов"])} · ${number(filtered.reduce((n,b)=>n+b.qty,0))} шт.` : "Выберите город или отметьте нужные короба. В Excel будут номера, состав и сводка."}</span>
-          </div>
+          {(city || market || shop || query) && <p className="warehouse-filter-result" role="status">
+            {countLabel(filtered.length, ["короб", "короба", "коробов"])} · {number(filtered.reduce((total, box) => total + box.qty, 0))} шт.
+          </p>}
           {error ? <p className="field-error" role="alert">{error}</p> : null}
           {rows.length ? (
-            <div className="table-scroll">
+            <div className="table-scroll" tabIndex={0} role="region" aria-label="Короба, готовые к отгрузке">
               <table className="warehouse-table">
                 <thead>
                   <tr>
                     <th>
-                      <input
-                        type="checkbox"
-                        aria-label="Выбрать все короба на этой странице"
-                        checked={
-                          !!rows.length && rows.every((b) => selected.has(b.id))
-                        }
-                        onChange={(e) => {
-                          if (!e.target.checked) {
-                            setSelected(
-                              (s) =>
-                                new Set(
-                                  [...s].filter(
-                                    (id) => !rows.some((b) => b.id === id),
-                                  ),
-                                ),
-                            );
-                            return;
-                          }
-                          setSelected(
-                            (s) =>
-                              new Set([
-                                ...s,
-                                ...rows.map((b) => b.id),
-                              ]),
-                          );
-                        }}
-                      />
+                      <WarehousePageCheck rows={rows} selected={selected} onChange={setSelected} />
                     </th>
                     <th>Короб</th>
-                    <th>Магазин / назначение</th>
+                    <th>Направление</th>
                     <th>Состав</th>
                     <th>Изделий</th>
                     <th>Закрыт, МСК</th>
@@ -268,19 +282,7 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
                         <small>Магазин {b.store} · {b.destination}</small>
                       </td>
                       <td>
-                        <div className="composition-thumbs">{b.items.slice(0,2).map(i=><ProductPhoto key={i.id} importId={i.catalogImportId || ''} id={i.photoId || null} sourceUrl={i.photoUrl} sku={i.sku}/>)}{b.items.length>2 && <span>+{b.items.length-2}</span>}</div>
-                        {countLabel(b.items.length, [
-                          "вложение",
-                          "вложения",
-                          "вложений",
-                        ])}
-                        <small>
-                          {b.items
-                            .slice(0, 2)
-                            .map((i) => i.sku)
-                            .join(", ")}
-                          {b.items.length > 2 ? "…" : ""}
-                        </small>
+                        <WarehouseCompositionPreview items={b.items} />
                       </td>
                       <td className="numeric"><strong>{number(b.qty)}</strong></td>
                       <td>{b.closedAt ? dateTime(b.closedAt) : "—"}</td>
@@ -305,6 +307,7 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
                     setQuery("");
                     setMarket("");
                     setCity(""); setShop(""); setSelected(new Set());
+                    setPage(0);
                   }}
                 >
                   Сбросить фильтры
@@ -316,24 +319,25 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
           )}
           {selection.length ? (
             <div className="selection-bar">
-              <span>
-                <strong>
-                  Выбрано{" "}
-                  {countLabel(selection.length, ["короб", "короба", "коробов"])}{" "}
-                  · {number(selection.reduce((n, b) => n + b.qty, 0))} шт.
-                </strong>
-                <small>
-                  {first && selection.some(b=>!sameScope(first,b)) ? "Выбранные короба можно скачать вместе. Для одной отгрузки выберите один магазин и направление." : "Скачивание Excel не меняет статус коробов."}
-                </small>
-              </span>
+              <div className="warehouse-selected">
+                <strong>Выбрано {countLabel(selection.length, ["короб", "короба", "коробов"])}</strong>
+                <span>
+                  {number(selection.reduce((total, box) => total + box.qty, 0))} шт.
+                  {compatible && first && <> · {warehouseCity(first).label} · Магазин {first.store}</>}
+                  {!compatible && <small>Для отгрузки выберите один маркетплейс, магазин и направление.</small>}
+                  {selection.length > 100 && <small>До 100 коробов в одной отгрузке.</small>}
+                </span>
+              </div>
               <div className="actions">
-                <Button disabled={downloading || w.busy} onClick={() => void downloadStock(selection)}>Скачать Excel выбранных</Button>
-                <Button onClick={() => setSelected(new Set())}>
+                <Button disabled={downloading || w.busy} onClick={() => void downloadStock(selection)}>
+                  <Download size={17} />Скачать выбранные
+                </Button>
+                <Button className="warehouse-clear-selection" onClick={() => setSelected(new Set())}>
                   Снять выбор
                 </Button>
                 <Button
                   primary
-                  disabled={!first||selection.length>100||selection.some(b=>!sameScope(first,b))}
+                  disabled={w.busy || !compatible || selection.length > 100}
                   onClick={() => {
                     setReview(true);
                     setError("");
@@ -356,86 +360,23 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
           </p>
         </>
       ) : (
-        <>
-          {dispatches.length ? (
-            <div className="dispatch-list">
-              {dispatches.map((d) => (
-                <article className="dispatch-row" key={d.id}>
-                  <div>
-                    <h2>
-                      {d.label}{" "}
-                      <span
-                        className={`badge ${d.state === "sent" ? "success" : d.state === "canceled" ? "neutral" : "warning"}`}
-                      >
-                        {d.state === "sent"
-                          ? "Отправлена"
-                          : d.state === "canceled"
-                            ? "Отменена"
-                            : "Подготовлена"}
-                      </span>
-                    </h2>
-                    <p>
-                      {d.market} · {d.store} · {d.destination}
-                    </p>
-                    <p className="muted">
-                      {countLabel(d.cartonIds.length, [
-                        "короб",
-                        "короба",
-                        "коробов",
-                      ])}{" "}
-                      · {number(d.qty)} шт. ·{" "}
-                      {dateTime(d.sentAt ?? d.createdAt)} МСК
-                    </p>
-                  </div>
-                  <div className="actions">
-                    {d.state !== "canceled" ? (
-                      <Button onClick={() => setExporting(d)}>
-                        Excel и состав
-                      </Button>
-                    ) : null}
-                    {d.state === "draft" ? (
-                      <>
-                        <Button
-                          onClick={() => {
-                            setCancel(d);
-                            setError("");
-                          }}
-                        >
-                          Отменить подготовку
-                        </Button>
-                        <Button
-                          primary
-                          onClick={() => {
-                            setSend(d);
-                            setError("");
-                          }}
-                        >
-                          Подтвердить выезд
-                        </Button>
-                      </>
-                    ) : null}
-                  </div>
-                </article>
-              ))}
-            </div>
-          ) : (
-            <Empty
-              title={
-                tab === "draft"
-                  ? "Подготовленных отгрузок нет"
-                  : "История пока пуста"
-              }
-            >
-              Сначала выберите закрытые короба на вкладке «Готовы к отгрузке».
-            </Empty>
-          )}
-        </>
+        <PreparedDispatches
+          revision={state.revision + ":" + draftRefresh}
+          busy={w.busy}
+          onExport={setExporting}
+          onCancel={(dispatch) => { setCancel(dispatch); setError(""); }}
+          onSend={(review) => { setSend(review); setError(""); }}
+        />
       )}
       {details ? (
         <CartonDetails
           box={details}
           workspace={w}
           onClose={() => setDetails(null)}
+          onReopened={(id) => {
+            setDetails(null);
+            setSelected((ids) => new Set([...ids].filter((selectedId) => selectedId !== id)));
+          }}
         />
       ) : null}
       {review ? (
@@ -477,34 +418,35 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
       ) : null}
       {send ? (
         <Dialog
-          title={`Подтвердить выезд ${send.label}`}
-          onClose={() => setSend(null)}
+          title={`Подтвердить выезд · ${send.city}`}
+          onClose={() => { if (!w.busy) setSend(null); }}
         >
           <div className="stack">
             <p>
               <strong>
-                {countLabel(send.cartonIds.length, [
+                {countLabel(departingCartons.length, [
                   "короб",
                   "короба",
                   "коробов",
                 ])}{" "}
-                · {number(send.qty)} шт.
+                · {number(departingCartons.reduce((qty, box) => qty + box.qty, 0))} шт.
               </strong>
             </p>
-            <p>
-              {send.market} · {send.store} · {send.destination}
-            </p>
-            <p>
-              Подтвердите, что эти короба действительно уехали со склада. Они
-              исчезнут из списка неотправленных. История и Excel сохранятся.
-            </p>
+            <ul className="prepared-departure-list">
+              {send.drafts.map((draft) => (
+                <li key={draft.dispatchId}>
+                  {send.market} · Магазин {draft.store} · {draft.cartons.map((box) => box.label).join(", ")}
+                </li>
+              ))}
+            </ul>
+            {send.waiting > 0 && <p className="muted">В подготовке останется {countLabel(send.waiting, ["короб", "короба", "коробов"])}.</p>}
             {error ? (
               <p className="field-error" role="alert">
                 {error}
               </p>
             ) : null}
             <div className="actions">
-              <Button onClick={() => setSend(null)}>Ещё на складе</Button>
+              <Button disabled={w.busy} onClick={() => setSend(null)}>Вернуться к выбору</Button>
               <Button
                 primary
                 disabled={w.busy}
@@ -545,6 +487,7 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
           <ExportDialog
             dispatch={exporting}
             workspace={w}
+            title={tab === "history" ? "Excel · " + warehouseCity(exporting).label : undefined}
             onClose={() => setExporting(null)}
           />
         </Suspense>

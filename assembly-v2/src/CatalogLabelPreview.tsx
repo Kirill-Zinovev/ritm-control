@@ -21,11 +21,12 @@ type Props = {
   onUpload(): void;
   onPrint(): void;
   onRetry(): void;
+  onFill?(): void;
 };
 
 export function CatalogLabelPreview({
   lookup, draftUrl, draftOutdated, compact, busy, generating, market,
-  missingFields, barcodeField, onGenerate, onUpload, onPrint, onRetry,
+  missingFields, barcodeField, onGenerate, onUpload, onPrint, onRetry, onFill,
 }: Props) {
   const [imageResult, setImageResult] = useState<{ url: string; loaded: boolean }>();
   const saved = lookup.state === 'ready' ? lookup.label : undefined;
@@ -77,6 +78,7 @@ export function CatalogLabelPreview({
     </p>}
     {barcodeField}
     <div className="actions catalog-label-actions">
+      {onFill && missingFields.length>0 && <Button disabled={busy} onClick={onFill}>Перейти к заполнению</Button>}
       {loaded && !draftUrl && <Button disabled={busy} onClick={onPrint}><Printer size={16}/>Печать и скачивание</Button>}
       <Button disabled={busy || missingFields.length > 0} onClick={onGenerate}>{generating ? 'Генерируем…' : `Сгенерировать для ${market}`}</Button>
       <Button disabled={busy} onClick={onUpload}>Загрузить файл</Button>

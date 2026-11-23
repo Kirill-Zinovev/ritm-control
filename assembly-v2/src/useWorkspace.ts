@@ -29,6 +29,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 export function useWorkspace(view = "all") {
   const role = useAccess();
+  const operational = view !== "learning";
   const cartonScope =
     role === "collector" || view === "assembly" ? "supply" : ["catalog","setup","work"].includes(view) ? "directory" : "all";
   const pollInterval = role === "collector" || view === "assembly" ? 5000 : 30000;
@@ -89,12 +90,14 @@ export function useWorkspace(view = "all") {
     }
   }, []);
   useEffect(() => {
+    if (!operational) return;
     const abort = new AbortController();
     setLoading(true);
     void refresh(abort.signal);
     return () => abort.abort();
-  }, [supplyId, cartonScope, refresh]);
+  }, [operational, supplyId, cartonScope, refresh]);
   useEffect(() => {
+    if (!operational) return;
     const abort = new AbortController();
     let checking = false;
     const check = async () => {
@@ -125,7 +128,7 @@ export function useWorkspace(view = "all") {
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("online", onVisible);
     };
-  }, [refresh, pollInterval]);
+  }, [operational, refresh, pollInterval]);
   const command = useCallback(
     async (
       action: string,
@@ -237,6 +240,7 @@ export function useWorkspace(view = "all") {
     [refresh],
   );
   useEffect(() => {
+    if (!operational) return;
     let cancelled = false;
     void request<RitmStatus>("/api/ritm/status")
       .then((value) => {
@@ -257,7 +261,7 @@ export function useWorkspace(view = "all") {
       clearInterval(timer);
       document.removeEventListener("visibilitychange", visible);
     };
-  }, [syncFromRitm, pollInterval]);
+  }, [operational, syncFromRitm, pollInterval]);
   const selectSupply = (id: string) => {
     if (busyRef.current || id === supplyRef.current) return;
     setLoading(true);

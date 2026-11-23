@@ -87,6 +87,28 @@ function fixture() {
     documents,
   };
 }
+test("confirmed RITM deadlines follow shipment identity and publish deadline-only revisions", () => {
+  const c = fixture();
+  const readyAt = new Date(now + 86400000).toISOString();
+  const packingAt = new Date(now + 172800000).toISOString();
+  const shipAt = new Date(now + 259200000).toISOString();
+  c.values.get("productionSupplies")[0].planning = { readyAt, packingAt, shipAt };
+  c.values.get("productionSupplies")[0].name += " 🔥";
+  c.snapshot.value.supplies[1].cutProgress = 25;
+  const before = buildAssemblyV2Feed(c);
+  assert.deepEqual(before.supplies[0].schedule, {
+    readyAt, packingAt, shipAt, urgent: true, printed: true, cut: false,
+  });
+  c.values.set("productionPlanning", [{
+    updatedAt: new Date(now + 50).toISOString(),
+    deadlines: { [`shipment:${id}`]: { readyAt: null, packingAt, shipAt } },
+  }]);
+  const after = buildAssemblyV2Feed({ ...c, now: now + 50 });
+  assert.equal(after.sourceRevision, now + 50);
+  assert.equal(after.supplies[0].schedule.readyAt, null);
+  assert.deepEqual(after.supplies[0].positions, before.supplies[0].positions);
+});
+
 test("feed service signature is scoped, fresh and required on the public RITM Site", () => {
   const secret = "ab".repeat(32),
     at = String(now),
@@ -329,20 +351,22 @@ test("the actual source handler only reads existing snapshots and scope", async 
     RITM_GOOGLE_BOX_PRINTING_ID: documents["box-printing"],
   };
   const before = JSON.stringify([...f.values]);
-  const r = await assemblyV2Feed(
-    new Request("https://ritm.test" + path, {
+  const request = new Request("https://ritm.test" + path, {
       headers: {
         "x-assembly-v2-at": at,
         "x-assembly-v2-nonce": nonce,
         "x-assembly-v2-signature": feedSignature(secret, { path, at, nonce }),
       },
-    }),
-    b,
-    store,
-  );
+    });
+  const r = await assemblyV2Feed(request,b,store);
   assert.equal(r.status, 200);
   assert.equal((await r.json()).supplies.length, 1);
   assert.equal(reads, 2);
+  request.headers.set("if-none-match",r.headers.get("etag"));
+  const unchanged = await assemblyV2Feed(request,b,store);
+  assert.equal(unchanged.status,304);
+  assert.equal(await unchanged.text(),"");
+  assert.equal(reads,4);
   assert.equal(JSON.stringify([...f.values]), before);
 });
 

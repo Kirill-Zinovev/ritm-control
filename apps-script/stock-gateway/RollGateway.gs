@@ -15,6 +15,26 @@ function doPost(e) {
 }
 function stockGatewayHealth_(){return withDocumentLock_(function(){var book=SpreadsheetApp.openById('1vzLLRe7oi4IlvzIaWZd08dte7byCkqeXVAL4iSFqhOg');SpreadsheetApp.setActiveSpreadsheet(book);['Запасы склад','Срочные 2 этаж'].forEach(function(name){var sheet=book.getSheetByName(name);if(!sheet||!r2IsTargetSheet_(sheet))throw new Error('Лист запасов не подтверждён.');r2HeaderMap_(sheet);});return {ok:true,status:'ready',panelCheck:r2StockPanelHealth_()};});}
 function stockGatewayHash_(data){return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,JSON.stringify(data),Utilities.Charset.UTF_8).map(function(b){return ('0'+((b+256)%256).toString(16)).slice(-2);}).join('');}
+function stockCatalogInsert_(sh,row,item,write){
+  if(item.assemblyCatalog!==true)return;
+  var machine=String(item.machine||'').trim(),store=String(item.store||'');
+  var validNumber=function(value){return value==null||Number.isSafeInteger(value)&&value>0;};
+  if(!/^(?:2-GO|УФ|УФ\s+БЕЛ\.|УФ\.\s+БЕЛ|УФ\s+БЕЛЫЙ|УФ\s+ДВУСТОРОННИЙ)$/i.test(machine)||!/^(?:[0-9]{1,3})?$/.test(store)||
+     !validNumber(item.sheetsPerUnit)||!validNumber(item.stockMultiplicity))
+    throw new Error('Не подтверждены параметры новой строки из справочника Assembly.');
+  if(!write){
+    [[4,'станок'],[7,'кол-во листов'],[14,'кратность'],[27,'магазин']].forEach(function(pair){
+      if(String(sh.getRange(4,pair[0]).getValue()).trim().toLowerCase()!==pair[1])throw new Error('Изменились заголовки печати.');
+    });
+    if(sh.getRange(row,27).getValue()!==''&&!sh.getRange(row,27).getFormula())throw new Error('Магазин новой строки уже заполнен.');
+    return;
+  }
+  var assigned=function(value){return '=IF(E'+row+'="";"";'+JSON.stringify(value==null?'':value)+')';};
+  sh.getRange(row,4).setFormula(assigned(machine));
+  sh.getRange(row,7).setFormula(assigned(item.sheetsPerUnit));
+  sh.getRange(row,14).setFormula(assigned(item.stockMultiplicity));
+  sh.getRange(row,27).setFormula(assigned(store));
+}
 function stockGatewayApply_(input,props){
   if(!/^[-a-f0-9]{36}$/i.test(String(input.operationId||''))||!Array.isArray(input.entries)||!input.entries.length||input.entries.length>500)throw new Error('Неверные параметры операции.');
   var hash=stockGatewayHash_([input.sheetId,input.entries]),key='STOCK_OP_'+input.operationId;
@@ -31,6 +51,7 @@ function stockGatewayApply_(input,props){
         if(sku!==item.article||values[15]!==before||after<=before||!values[29])throw new Error('План или идентификатор изменился.');
         var order=r2GetOrder_(String(values[29]),sh.getName(),row);if(order.article!==sku)throw new Error('Артикул рулона не подтверждён.');
       }else if(item.action==='insert'){
+        stockCatalogInsert_(sh,row,item,false);
         if(sku||values[15]!==''||!/^ritm-[-a-f0-9]{36}-\d+$/i.test(String(item.uid||''))||typeof item.layoutPresent!=='boolean')throw new Error('Строка занята или данные позиции не подтверждены.');
         [4,7,8,10,11].forEach(function(col){if(!sh.getRange(row,col).getFormula())throw new Error('В строке не подтверждены формулы.');});
         [3,5,6,9,16,30].forEach(function(col){if(sh.getRange(row,col).getValue()!==''||sh.getRange(row,col).getFormula())throw new Error('Строка содержит данные.');});
@@ -41,6 +62,7 @@ function stockGatewayApply_(input,props){
     input.entries.forEach(function(item){var row=Number(item.row),qty=Number(item.newQuantity);
       if(item.action==='insert'){
         sh.getRange(row,5).setValue(item.article);sh.getRange(row,6).setValue(item.extension||'');sh.getRange(row,30).setValue(item.uid);
+        stockCatalogInsert_(sh,row,item,true);
         var sku=String(item.article).trim().toUpperCase().replace(/"/g,'""');
         sh.getRange(row,3).setFormula('=IF(E'+row+'="";"";IF(UPPER(TRIM(E'+row+'))="'+sku+'";"'+(item.layoutPresent?'Есть':'Не в таблице макетов')+'";"Проверить макет"))');
         sh.getRange(row,9).setFormula('=IF($E'+row+'="";"";IFERROR(--SUBSTITUTE(REGEXEXTRACT(SUBSTITUTE(SUBSTITUTE(LOWER(TRIM($H'+row+'));"х";"x");"×";"x");"^[0-9]+[,.]?[0-9]*");",";".")/100;""))');

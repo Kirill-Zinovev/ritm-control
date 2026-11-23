@@ -1,5 +1,5 @@
 import { CatalogEditor } from "./CatalogEditor";
-import type { ManagedDetail } from "../shared/catalog-editor";
+import type { ManagedDetail, ManagedProduct } from "../shared/catalog-editor";
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import type {
   CatalogBundle,
@@ -62,7 +62,9 @@ export function Catalog({ workspace: w }: { workspace: Workspace }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [detail, setDetail] = useState<CatalogListItem | null>(null);
-  const [editor,setEditor]=useState<ManagedDetail | "new" | null>(null);
+  const [editor,setEditor]=useState<ManagedDetail | {draft:ManagedProduct} | "new" | null>(null);
+  const activeCard = editor && editor!=="new" && !("draft" in editor) ? editor : null;
+  const initialDraft = editor && editor!=="new" && "draft" in editor ? editor.draft : undefined;
   const [importing, setImporting] = useState(false);
   const [version, setVersion] = useState(0);
   const [notice, setNotice] = useState("");
@@ -260,7 +262,7 @@ export function Catalog({ workspace: w }: { workspace: Workspace }) {
                   {data.items.map((e) => (
                     <tr
                       key={e.id}
-                      className={`${canOpenEditor ? "is-clickable" : ""} ${editor && editor !== "new" && editor.id === e.id ? "is-selected" : ""}`}
+                      className={`${canOpenEditor ? "is-clickable" : ""} ${activeCard?.id === e.id ? "is-selected" : ""}`}
                       onClick={canOpenEditor ? () => safely(() => void openEditor(e)) : undefined}
                     >
                       <td>
@@ -351,8 +353,15 @@ export function Catalog({ workspace: w }: { workspace: Workspace }) {
         ) : null}
       </div>
       </div>
-      {editor && data?.active ? <CatalogEditor key={editor==='new'?'new':editor.id} inline item={editor === "new" ? null : editor} importId={data.active.id} workspace={w}
-        onClose={()=>{editorRequest.current?.abort();setOpening(false);setEditor(null)}} onSaved={()=>{setEditor(null);setVersion(v=>v+1);setNotice("Карточка сохранена. Данные сборки обновлены; выработка сохранена.");void w.refresh()}}/> : null}
+      {editor && data?.active ? <CatalogEditor key={activeCard?.id ?? (initialDraft ? "wb-draft" : "new")} inline item={activeCard}
+        initialDraft={initialDraft} importId={data.active.id} workspace={w}
+        onOpenExisting={setEditor} onClose={()=>{editorRequest.current?.abort();setOpening(false);setEditor(null)}}
+        onSaved={nextDraft=>{
+          setEditor(nextDraft ? {draft:nextDraft} : null);
+          setVersion(v=>v+1);
+          setNotice(nextDraft ? "Карточка Ozon сохранена. Введите штрихкод WB." : "Карточка сохранена. Данные сборки обновлены; выработка сохранена.");
+          void w.refresh();
+        }}/>:null}
       </div>
       {opening && <p role="status">Открываем карточку…</p>}
       {data?.active ? (
@@ -671,7 +680,7 @@ function CatalogImport({
       className="catalog-dialog"
     >
       <p className="muted">
-        Загрузка в новую Assembly. Исходные Excel сохранятся отдельными копиями;
+        Загрузка в справочник RITM Сборка. Исходные Excel сохранятся отдельными копиями;
         рабочие таблицы не меняются.
       </p>
       <Field
@@ -718,7 +727,7 @@ function CatalogImport({
         </Button>
         {bundle ? (
           <Button primary disabled={busy} onClick={() => void apply()}>
-            Перенести в новую Assembly
+            Загрузить в справочник
           </Button>
         ) : (
           <Button

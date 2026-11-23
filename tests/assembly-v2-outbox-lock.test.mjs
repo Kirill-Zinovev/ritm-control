@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {CloudStore} from '../worker/cloud/store.js';
-import {drainOutbox} from '../worker/cloud/runtime.js';
+import {maintenance} from '../worker/cloud/runtime.js';
 import {assemblyV2Feed,feedSignature} from '../worker/cloud/assemblyV2Feed.js';
 import {LocalD1} from './helpers/d1-sqlite.mjs';
 import {cloudSchemaStatements} from './helpers/cloud-schema.mjs';
@@ -25,33 +25,16 @@ async function fixture() {
   return {db,store,env,request};
 }
 
-test('new Assembly can read a committed snapshot during legacy network delivery without releasing the writer lease',async()=>{
-  const {db,store,env,request}=await fixture(),eventId=crypto.randomUUID();
-  let enter,release;
-  const entered=new Promise(resolve=>{enter=resolve;}),network=new Promise(resolve=>{release=resolve;});
-  let delivery;
+test('cloud maintenance never sends a pending legacy supply delivery',async()=>{
+  const {db,store,env,request}=await fixture(), eventId=crypto.randomUUID();
   try{
     await store.withScope(async scope=>scope.saveSyncEvent({id:eventId,action:'create',created_at:Date.now(),next_attempt_at:0,attempts:0}));
-    delivery=drainOutbox(env,store,async(_url,init)=>{
-      assert.equal(init.method,'POST');enter();await network;
-      return Response.json({ok:true,eventId,status:'synced'});
-    });
-    await entered;
-    assert.equal(await store.leaseIsActive('production'),true);
-    assert.equal(await store.productionSnapshotReadAllowed(),true);
-    const response=await assemblyV2Feed(request(),env,store);
-    assert.equal(response.status,200);
-    assert.equal((await response.json()).format,'ritm-assembly-v2');
-    await assert.rejects(store.acquire(),{code:'cloud_operation_busy'});
-    release();
-    assert.equal((await delivery).pending,0);
+    const before=db.db.prepare('SELECT * FROM cloud_sync_events WHERE id=?').get(eventId);
+    await maintenance(env,store,{refresh:false,fetcher:async()=>assert.fail("Unexpected network delivery")});
+    assert.deepEqual(db.db.prepare('SELECT * FROM cloud_sync_events WHERE id=?').get(eventId),before);
     assert.equal(await store.leaseIsActive('production'),false);
-    const writer=await store.acquire();
-    try{
-      assert.equal(await store.productionSnapshotReadAllowed(),false,'a previous delivery context never authorizes a new writer');
-      await assert.rejects(assemblyV2Feed(request(),env,store),{code:'assembly_v2_source_busy'});
-    }finally{await store.release(writer);}
-  }finally{release();await delivery?.catch(()=>{});db.close();}
+    assert.equal((await assemblyV2Feed(request(),env,store)).status,200);
+  }finally{db.close();}
 });
 
 test('missing, mismatched and malformed delivery contexts never authorize an active writer snapshot',async()=>{

@@ -24,6 +24,19 @@ for(const department of ['box','roll'])test(`${department} stock gateway seriali
  const other={...input,operationId:'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb'};assert.throws(()=>f.ctx.stockGatewayApply_(other,f.props),/изменился|изменились/);assert.equal(f.cells[15],30);
 });
 
+for(const department of ['box','roll'])test(`${department} gateway pins the confirmed catalog values in new rows`,()=>{
+ const {ctx}=fixture(department), formulas=new Map(),machine=department==='box'?'XEROX':'2-GO';
+ const headers={4:'Станок',7:'Кол-во листов',14:'Кратность',27:'Магазин'};
+ const sheet={getRange:(row,column)=>({getFormula:()=>'',getValue:()=>row===4?headers[column]:'',
+  setFormula:formula=>formulas.set(column,formula)})};
+ const item={assemblyCatalog:true,machine,store:'1',sheetsPerUnit:2,stockMultiplicity:4,newQuantity:8};
+ ctx.stockCatalogInsert_(sheet,5,item,false);
+ assert.equal(formulas.size,0);
+ ctx.stockCatalogInsert_(sheet,5,item,true);
+ assert.deepEqual([...formulas],[[4,`=IF(E5="";"";"${machine}")`],[7,'=IF(E5="";"";2)'],[14,'=IF(E5="";"";4)'],[27,'=IF(E5="";"";"1")']]);
+ assert.throws(()=>ctx.stockCatalogInsert_(sheet,5,{...item,machine:'=HYPERLINK(...)'},false),/справочника Assembly/);
+});
+
 test('empty roll stock template locates its explicitly labelled UID column',()=>{
  const headers=['Дата скидывания','Фото','Наличие макета','Станок','Артикул','расширения','Кол-во листов','Размер','Ширина','Высота','Объем','','','Кратность','','Кол-во','','Кол-во осталось','Печать','Порезка','Прогресс печати','Прогресс порезки','Дата готовности печати','Дата готовности порезки','остаток по печати:','','','Рулоны','',''];
  const sheet={getSheetId:()=>42,getName:()=> 'Запасы склад',getParent:()=>({getId:()=> '1vzLLRe7oi4IlvzIaWZd08dte7byCkqeXVAL4iSFqhOg'}),getLastColumn:()=>30,getLastRow:()=>4,getRange:(row,col)=>({getDisplayValues:()=>[headers],getDisplayValue:()=>row===1&&col===30?'UID':''})};

@@ -1,10 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { planStockAddition, recalculateStockReadiness } from '../agent/stockPlanning.js';
+import { applyStockRounding, planStockAddition, recalculateStockReadiness } from '../agent/stockPlanning.js';
 
 const catalog={OZON:[['Артикул','Артикул OZ','Станок'],['A','A','XEROX'],['B','B','2-GO']],WB:[['Артикул','Вид станка по умолчанию']],extensions:[['Артикул','Расширение печати'],['B','UF']]};
 const existing={box:[{row:5,article:'A',quantity:20}],roll:[]};
 const plan=lines=>planStockAddition({destination:'warehouse',lines,catalog,existing});
+test('new Xerox stock is rounded from the Assembly catalog and images do not invalidate confirmation',()=>{
+ const lines=[{article:'A',quantity:7},{article:'B',quantity:3}];
+ const entries=[
+  {article:'A',primary:true,store:'1',machine:'XEROX',printExtension:'X',sheetsPerUnit:'1',xeroxMultiplicity:'4',photoUrl:'photo'},
+  {article:'B',primary:true,store:'2',machine:'2-GO',printExtension:'CBI',sheetsPerUnit:'6',rollMultiplicity:'5'},
+ ];
+ const preview=catalog=>planStockAddition({destination:'warehouse',lines,catalog,existing:{box:[],roll:[]}});
+ const p=preview(entries);
+ assert.equal(p.changes[0].photoUrl,'photo');
+ assert.equal(p.fingerprint,preview([{...entries[0],photoUrl:'other'},entries[1]]).fingerprint);
+ assert.deepEqual(p.changes[0].rounding.choices.map(x=>x.newQuantity),[4,8]);
+ assert.equal(applyStockRounding(p.changes,[{article:'A',direction:'up'}])[0].newQuantity,8);
+ assert.equal(p.changes[1].stockMultiplicity,5);
+ const conflict=planStockAddition({destination:'urgent',lines:[lines[0]],catalog:entries,
+   existing:{roll:[],box:[{row:5,article:'A',quantity:8,xerox:{factor:1,multiplicity:2}}]}});
+ assert.equal(conflict.changes[0].action,'skip');
+ assert.match(conflict.changes[0].issue,/отличаются/);
+});
 test('existing stock increments; duplicates in input are combined and new work is routed',()=>{
  const p=plan([{article:'A',quantity:5},{article:'a(OZ)',quantity:3},{article:'B',quantity:7}]);
  assert.equal(p.changes[0].action,'increase');assert.equal(p.changes[0].newQuantity,28);

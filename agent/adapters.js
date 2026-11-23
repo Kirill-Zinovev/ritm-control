@@ -4,6 +4,7 @@ import {
   loadPrinting,
   loadStockRollPrinting,
   loadStockBoxOrders,
+  assignCatalogStores,
   assignWorkloadDetails,
   parseCsv,
   CATALOG_ID,
@@ -220,19 +221,14 @@ export async function loadSource(
       : fetcher;
     let shopCatalogRows = null;
     let photoCatalogRows = null;
-    if (options.googleReader && !options.supplyTarget) {
-      try {
-        shopCatalogRows = await readProductionShopCatalog(
-          options.googleReader,
-          options.signal,
-        );
-      } catch (error) {
-        if (options.signal?.aborted) throw error;
-      }
-      if (options.photoSourceId) {
-        try { photoCatalogRows = await readWorkloadPhotos(options.googleReader, options.photoSourceId, options.signal); }
-        catch (error) { if (options.signal?.aborted) throw error; }
-      }
+    if (options.googleReader && !options.supplyTarget && !options.workloadCatalog) {
+      const [shops, photos] = await Promise.allSettled([
+        readProductionShopCatalog(options.googleReader, options.signal),
+        options.photoSourceId ? readWorkloadPhotos(options.googleReader, options.photoSourceId, options.signal) : null,
+      ]);
+      options.signal?.throwIfAborted();
+      if (shops.status === "fulfilled") shopCatalogRows = shops.value;
+      if (photos.status === "fulfilled") photoCatalogRows = photos.value;
     }
     let printing = await loadPrinting(authenticatedFetcher, {
       additionalSheets: options.printingAdditionalSheets || [],
@@ -271,9 +267,16 @@ export async function loadSource(
       const stock=await stockSheets(options.stockBoxPrintingId,false);
       printing=await loadStockBoxOrders(authenticatedFetcher,printing,{spreadsheetId:options.stockBoxPrintingId,...stock});
     }catch(error){if(options.signal?.aborted)throw error;printing={...printing,stockBox:{status:'unavailable',orders:[],reason:'Не удалось подтвердить таблицу запасов бокса.'}};}
-    assignStockPlanningMachines(printing, shopCatalogRows, photoCatalogRows);
+    const stockOrders = [printing.stockRoll, printing.stockBox].flatMap(source => (source?.orders || []).filter(order => !order.archived));
+    const workloadCatalog = options.workloadCatalog?.(printing.supplies, stockOrders);
     printing = await loadBoxPrinting(options.googleReader, printing, {journalId: options.boxJournalId || source.boxJournalId || (typeof process !== "undefined" ? process.env.RITM_BOX_JOURNAL_ID : ""), signal: options.signal});
     if (!options.supplyTarget) printing = await loadStockBoxPrinting(options.googleReader, printing, {journalId: options.stockBoxJournalId, sourceId: options.stockBoxPrintingId, signal: options.signal});
+    if (workloadCatalog) {
+      shopCatalogRows = await workloadCatalog;
+      printing.shopCatalog = assignCatalogStores(printing.supplies, shopCatalogRows);
+      assignWorkloadDetails(printing.supplies, shopCatalogRows, null, {preferCatalog: true});
+    }
+    assignStockPlanningMachines(printing, shopCatalogRows, photoCatalogRows);
     const checkedAt = now instanceof Date ? now.toISOString() : new Date().toISOString();
     return options.googleReader
       ? loadAssemblyPacking(options.googleReader, printing, {

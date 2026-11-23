@@ -12,7 +12,7 @@ function ritmBridgeNumber_(v) {
         );
   return Number.isFinite(n) ? n : 0;
 }
-function ritmBridgeEmployee_(v, operation, sourceId) {
+export function ritmBridgeEmployee_(v, operation, sourceId) {
   var s = String(v || "")
     .trim()
     .toLowerCase();
@@ -974,7 +974,7 @@ function photoUrlFromSourceRow(row) {
 // The selected marketplace catalog is authoritative for the workload machine.
 // Supply columns can contain a broad print process rather than equipment.
 // Never infer equipment from that broad label or modify source production rows.
-export function assignWorkloadDetails(orders, catalog, photos = null) {
+export function assignWorkloadDetails(orders, catalog, photos = null, {preferCatalog = false} = {}) {
   const indices = new Map();
   const photoIndex = new Map();
   for (const row of Array.isArray(photos) ? photos : []) {
@@ -1023,11 +1023,11 @@ export function assignWorkloadDetails(orders, catalog, photos = null) {
         if (capacities.length && capacities.every(n => Number.isSafeInteger(n) && n > 0 && n === capacities[0])) order.catalogUnitsPerBox = capacities[0];
       }
       for (const field of ["machine", "productName"]) {
-        if (field !== "machine" && order[field] && !String(order[field]).trim().startsWith("#")) continue;
+        if (field === "productName" && !preferCatalog && order[field] && !String(order[field]).trim().startsWith("#")) continue;
         const values = new Set(entries.map(entry => entry[field]));
         if (values.size === 1) {
           const value = [...values][0];
-          if (field !== "machine" || value) order[field] = value;
+          if (value || (field === "productName" && !preferCatalog)) order[field] = value;
           if (field === "machine" && value) {
             order.machineSource = "catalog";
             order.machineIssue = ["бокс", "рулонная печать", "не найдено в базе"].includes(normal(value))
@@ -1045,12 +1045,13 @@ export function assignWorkloadDetails(orders, catalog, photos = null) {
     // a store, and missing marketplace catalog rows must not suppress a photo.
     const sourcePhoto = (photoIndex.get(articleKey) || []).map(photoUrlFromSourceRow).find(Boolean) || "";
     const catalogPhoto = entries?.map(entry => entry.photoUrl).find(Boolean) || "";
-    if (sourcePhoto) order.photoUrl = sourcePhoto;
+    if (preferCatalog && catalogPhoto) order.photoUrl = catalogPhoto;
+    else if (sourcePhoto) order.photoUrl = sourcePhoto;
     else if (!order.photoUrl) order.photoUrl = catalogPhoto;
   }
 }
 
-function normalizeCatalogArticle(value) {
+export function normalizeCatalogArticle(value) {
   return String(value || "")
     .trim()
     .toLocaleUpperCase("ru-RU")
@@ -1058,7 +1059,7 @@ function normalizeCatalogArticle(value) {
     .replace(/\(OZ\)$/i, "");
 }
 
-function marketplaceForSupply(name) {
+export function marketplaceForSupply(name) {
   const value = String(name || "").toLocaleUpperCase("ru-RU");
   const ozon = /(^|[^\p{L}\p{N}])(?:OZON|ОЗОН)([^\p{L}\p{N}]|$)/u.test(value);
   const wb = /(^|[^\p{L}\p{N}])(?:WB|ВБ|WILDBERRIES)([^\p{L}\p{N}]|$)/u.test(value);

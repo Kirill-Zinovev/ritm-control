@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { Box, Printer, RefreshCw } from "lucide-react";
+import { ArrowDownUp, Box, Printer, RefreshCw } from "lucide-react";
 import { number, type Position } from "../shared/model";
 import { isFinished, positionStatus, readiness } from "../shared/assembly";
 import { Button, Empty, Status } from "./ui";
@@ -12,6 +12,8 @@ import { LabelDialog } from "./LabelDialog";
 import { labelBatchLimit } from "../shared/labels";
 import { matchesPositionQuery } from "../shared/position-search";
 import { AssemblySearch, type SearchDestination } from "./AssemblySearch";
+import { compareDeadlines, compareShippingDates, deadlineCaption, supplyDeadlines } from "../shared/supply-deadlines";
+import { deadlineTone, shipmentDate, ShipmentSchedule, UpcomingDeadlines } from "./AssemblyDeadlines";
 import "./legacy.css";
 import "./legacy-adapter.css";
 
@@ -21,7 +23,7 @@ const tabs = [
   ["all", "Все"],
 ] as const;
 const noActivePositions: Position[] = [];
-export function CollectorLoading({ workspace: w }: { workspace: Workspace }) {
+export function CollectorLoading({ workspace: w, onLearning }: { workspace: Workspace; onLearning?: () => void }) {
   return (
     <div className="legacy-assembly">
       <div className="app-shell">
@@ -29,18 +31,19 @@ export function CollectorLoading({ workspace: w }: { workspace: Workspace }) {
           <div className="brand">
             <span className="brand-mark">R</span>
             <span className="brand-word">
-              RITM <span>ASSEMBLY</span>
+              RITM <span>Сборка</span>
             </span>
           </div>
           <p className="readonly-note">
             {w.loading ? "Загрузка поставок…" : "Поставки не загружены"}
           </p>
+          {onLearning && <Button onClick={onLearning}>Обучение с Аркадием</Button>}
         </aside>
         <main className="legacy-main">
           <h1>
             {w.loading
               ? "Загружаем поставки…"
-              : "Не удалось загрузить Assembly"}
+              : "Не удалось загрузить RITM Сборка"}
           </h1>
           <Status error={w.error} notice="" retry={() => void w.refresh()} />
         </main>
@@ -51,9 +54,11 @@ export function CollectorLoading({ workspace: w }: { workspace: Workspace }) {
 export function Collector({
   workspace: w,
   navigate,
+  onLearning,
 }: {
   workspace: Workspace;
   navigate(view: string): void;
+  onLearning?: () => void;
 }) {
   const role = useAccess();
   const state = w.state!;
@@ -73,12 +78,34 @@ export function Collector({
   const [labelIds, setLabelIds] = useState<string[] | null>(null);
   const [searchTarget, setSearchTarget] = useState<SearchDestination | null>(null);
   const [jumpUnavailable, setJumpUnavailable] = useState(false);
+  const [now, setNow] = useState(Date.now);
   const previousJump = useRef<SearchDestination | null>(null);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    const check = () => setNow(Date.now());
+    window.addEventListener("focus", check);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", check);
+    };
+  }, []);
   useEffect(() => {
     const available = new Set(state.positions.map(p => p.id));
     setLabelSelection(old => [...old].every(id => available.has(id)) ? old : new Set([...old].filter(id => available.has(id))));
   }, [state.positions]);
   const supply = state.supplies.find((s) => s.id === state.selectedSupplyId);
+  const selectedSource = supply?.sources?.find(source => source.id === state.selectedSupplyId) ?? supply;
+  const directions = useMemo(() => state.supplies.filter(s => s.sourceActive !== false).map(direction => {
+    const sources = (direction.sources ?? [direction])
+      .filter(s => s.sourceActive !== false)
+      .map(supply => ({ supply, deadlines: supplyDeadlines(supply, now), title: direction.title }));
+    sources.sort((first, second) => compareDeadlines(first.deadlines, second.deadlines));
+    return { direction, sources, priority: sources[0] ?? { supply: direction, deadlines: supplyDeadlines(direction, now), title: direction.title } };
+  }).sort((first, second) => compareDeadlines(first.priority.deadlines, second.priority.deadlines)), [state.supplies, now]);
+  const upcoming = useMemo(() => directions.flatMap(d => d.sources)
+    .filter(({deadlines}) => deadlines.next || deadlines.urgent)
+    .sort((first, second) => compareShippingDates(first.deadlines, second.deadlines))
+    .slice(0, 3), [directions]);
   const completed = state.positions.filter(isFinished).length;
   const counts = {
     active: state.positions.length - completed,
@@ -112,9 +139,8 @@ export function Collector({
     row.scrollIntoView({ block: "center", inline: "nearest" });
     row.querySelector<HTMLButtonElement>(".article-main")?.focus({ preventScroll: true });
   }, [searchTarget, supply?.sourceActive, targetIndex, w.loading, w.selectionPending]);
-  const supplies = state.supplies.filter(
-    (s) =>
-      s.sourceActive !== false &&
+  const supplies = directions.filter(
+    ({direction: s}) =>
       `${s.title} ${s.destination} ${s.store}`
         .toLocaleLowerCase("ru")
         .includes(supplyQuery.toLocaleLowerCase("ru")),
@@ -156,7 +182,7 @@ export function Collector({
     setExpanded(new Set());
   }
   function selectSupply(id: string) {
-    if (w.busy || id === state.selectedSupplyId) return;
+    if (w.busy || w.selectionPending || id === state.selectedSupplyId) return;
     safely(() => {
       resetPositionActions();
       changeFilters("", "active", "", "", "");
@@ -194,7 +220,7 @@ export function Collector({
           <a
             className="brand"
             href="?view=assembly"
-            aria-label="RITM Assembly"
+            aria-label="RITM Сборка"
             onClick={(e) => {
               e.preventDefault();
               navigate("assembly");
@@ -202,14 +228,14 @@ export function Collector({
           >
             <span className="brand-mark">R</span>
             <span className="brand-word">
-              RITM <span>ASSEMBLY</span>
+              RITM <span>Сборка</span>
             </span>
           </a>
           <nav className="shipments-navigation" aria-label="Выбор поставки">
             <div className="nav-heading">
               Направления{" "}
               <span>
-                {state.supplies.filter((s) => s.sourceActive !== false).length}
+                {directions.length}
               </span>
             </div>
             <input
@@ -220,17 +246,19 @@ export function Collector({
               placeholder="Найти город или магазин"
               aria-label="Поиск направления"
             />
+            <div className="assembly-deadline-order"><ArrowDownUp size={13} aria-hidden="true" />Сначала срочные</div>
             <div className="shipment-list">
-              {supplies.map((s) => (
+              {supplies.map(({direction: s, priority}) => (
                 <button
-                  className="shipment-button direction-button"
+                  className="shipment-button direction-button assembly-deadline-direction"
+                  data-tone={deadlineTone(priority.deadlines)}
                   type="button"
                   key={s.id}
                   aria-current={
                     s.id === state.selectedSupplyId ? "true" : undefined
                   }
-                  disabled={w.busy || w.loading}
-                  onClick={() => selectSupply(s.id)}
+                  disabled={w.busy || w.loading || w.selectionPending}
+                  onClick={() => selectSupply(priority.supply.id)}
                 >
                   <span
                     className={`shipment-icon supplier-logo supplier-logo-${s.market.toLowerCase()}`}
@@ -238,8 +266,7 @@ export function Collector({
                     {s.market}
                   </span>
                   <span className="shipment-copy">
-                    <strong className="shipment-name">{s.title}</strong>
-                    <span className="direction-store">{s.store}</span>
+                    <strong className="shipment-name">{s.title.replace(/^(?:OZON|ОЗОН|WB|ВБ|WILDBERRIES)\s+/iu, "")}</strong>
                     {s.sourceLocked ? (
                       <span className="shipment-meta">Закрыта в РИТМ</span>
                     ) : null}
@@ -248,18 +275,17 @@ export function Collector({
                         Источник РИТМ приостановлен
                       </span>
                     ) : null}
-                    <span className="shipment-meta">
-                      {s.id === state.selectedSupplyId
-                        ? `${counts.active} в работе · ${counts.ready} готово`
-                        : s.destination}
-                    </span>
+                    {priority.deadlines.rank < 2 && <span className="assembly-deadline-badge" data-tone={deadlineTone(priority.deadlines)}>
+                      {deadlineCaption(priority.deadlines)}
+                    </span>}
+                    <span className="shipment-meta">{shipmentDate(priority.deadlines)}</span>
                     {s.id === state.selectedSupplyId ? (
-                      <span className="shipment-readiness-track">
+                      <><span className="shipment-meta">{counts.active} в работе · {counts.ready} готово</span><span className="shipment-readiness-track">
                         <span
                           className="shipment-readiness-fill"
                           style={{ width: `${Math.min(100, percent)}%` }}
                         />
-                      </span>
+                      </span></>
                     ) : null}
                   </span>
                 </button>
@@ -297,13 +323,18 @@ export function Collector({
                 Выработка
               </Button>
             )}
+            {onLearning && <Button onClick={onLearning} disabled={w.busy}>
+              Обучение с Аркадием
+            </Button>}
             <div className="sidebar-foot">
               <span className="test-dot" />
-              Assembly · рабочая версия
+              RITM Сборка · рабочая версия
             </div>
           </div>
         </aside>
         <main className="legacy-main" aria-busy={w.loading}>
+          <UpcomingDeadlines now={now} items={upcoming} selected={state.selectedSupplyId}
+            disabled={w.busy || w.loading || w.selectionPending} onSelect={selectSupply} />
           <div className="page-head">
             <div className="shipment-title-block">
               <div className="eyebrow">Сборка по направлениям</div>
@@ -341,7 +372,10 @@ export function Collector({
                     <div className="legacy-source-description">
                       {(supply.sources || [supply]).map((source) => (
                         <div key={source.id}>
-                          <strong>{source.title}</strong>
+                          {source.id === state.selectedSupplyId || source.sourceActive === false
+                            ? <strong>{source.title}</strong>
+                            : <button type="button" className="assembly-schedule-source-link" onClick={() => selectSupply(source.id)}
+                                disabled={w.busy || w.loading || w.selectionPending}>{source.title}</button>}
                           <span>
                             {source.sourceLocked
                               ? "Закрыта в РИТМ"
@@ -398,6 +432,8 @@ export function Collector({
               </Button>
             </div>
           </div>
+          {selectedSource && <ShipmentSchedule deadlines={supplyDeadlines(selectedSource, now)}
+            title={(supply?.sources?.length ?? 0) > 1 ? selectedSource.title : undefined} />}
           {jumpUnavailable && <p className="direction-read-status" role="status">Позиция больше недоступна. Повторите поиск по артикулу.</p>}
           {supply ? (
             <>

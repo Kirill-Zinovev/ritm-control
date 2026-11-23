@@ -1,54 +1,405 @@
-import { useState } from 'react';
-import type { Page } from './model';
-import { Truck, Package, ChartBar, Bot, Plus, CaretRight, CheckCircle, MagnifyingGlass } from './icons';
-import './HelpWorkspace.css';
+import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { BookOpen, CirclePlay, GraduationCap, Play } from "lucide-react";
+import GuidedLesson from "./GuidedLesson";
+import { ArrowRight, CheckCircle, MagnifyingGlass, X } from "./icons";
+import {
+  lessons,
+  lessonTopics,
+  type Lesson,
+  type LessonTopic,
+} from "./learningContent";
+import type { Page } from "./model";
+import "./HelpWorkspace.css";
 
-type Lesson = { title:string; description:string; page:Page; steps:string[]; owner?:boolean };
-const lessons:Lesson[] = [
-  {title:'Создать поставку',description:'Название, состав и распределение по участкам.',page:'supplies',steps:['Откройте «Поставки» и нажмите «Новая поставка».','Введите название поставки в поле «Название поставки».','Вставьте артикулы с количеством или нажмите «Загрузить Excel».','Нажмите «Проверить распределение».','Проверьте участки и нажмите «Подтвердить и создать поставку».']},
-  {title:'Добавить товары в поставку',description:'Дополните состав существующей поставки.',page:'supplies',steps:['Откройте «Поставки» и выберите нужную поставку в списке слева.','Нажмите «Добавить товары» в карточке поставки.','Введите артикулы с количеством или загрузите Excel и нажмите «Проверить распределение».','Проверьте участки и нажмите «Подтвердить и добавить товары».']},
-  {title:'Задание для запасов',description:'Направьте товары на склад или срочный второй этаж.',page:'reserves',steps:['Откройте «Запасы» и в поле «Назначение» выберите, куда направить товары.','Введите артикулы и количество или загрузите Excel.','Нажмите «Проверить и распределить».','Проверьте список и нажмите «Добавить в запасы».']},
-  {title:'Готовность поставок',description:'Посмотрите печать, порезку и сборку.',page:'supplies',steps:['Откройте «Поставки» и выберите поставку.','Посмотрите блок готовности участков.','Прокрутите вниз до таблицы товаров и изучите отдельные позиции.']},
-  {title:'Выработка сотрудников',description:'Печать и порезка за выбранный период.',page:'printing',steps:['Откройте «Печать» и выберите период.','Выберите рулонную печать или бокс.','Нажмите на сотрудника, чтобы увидеть подробности.']},
-  {title:'Настройки Аркадия',description:'Управление уведомлениями для владельца.',page:'arkady',owner:true,steps:['Откройте раздел «Аркадий».','Проверьте состояние подключения и настройки уведомлений.','Измените доступные настройки при необходимости.']},
-];
-export function FirstVisitWelcome({identity,onOpen}:{identity:string;onOpen:()=>void}) {
-  const key = `ritm-welcome-v1:${identity}`;
-  const [open,setOpen]=useState(()=>{try{return localStorage.getItem(key)!=='done'}catch{return false}});
-  const close=()=>{try{localStorage.setItem(key,'done')}catch{}setOpen(false)};
-  if(!open)return null;
-  return <div className="help-overlay welcome-overlay"><div className="welcome-dialog" role="dialog" aria-modal="true" aria-labelledby="welcome-title" aria-describedby="welcome-description"><div className="welcome-content"><div className="welcome-brand">RITM<span>/</span></div><h2 id="welcome-title">Добро пожаловать<br/>в RITM</h2><p id="welcome-description">Всё, что нужно для работы с поставками и производством, собрано в одном месте.</p><div className="welcome-features"><div><Truck size={19}/><span>Создавайте поставки и задания</span></div><div><ChartBar size={19}/><span>Следите за готовностью участков</span></div><div><CheckCircle size={19}/><span>Находите ответы в инструкциях</span></div></div><div className="welcome-actions"><button type="button" className="help-primary" onClick={()=>{close();onOpen()}}>Открыть инструкции <CaretRight size={17}/></button><button type="button" className="help-skip" onClick={close}>Позже</button></div><small className="welcome-hint">К инструкциям можно вернуться в любое время.</small></div><div className="welcome-visual" aria-hidden="true"><img src="/images/welcome-ritm.png" alt=""/></div></div></div>;
+type Progress = Partial<Record<string, { step: number; completed: boolean }>>;
+type ActiveLesson = { lesson: Lesson; step: number };
+
+function readProgress(key: string): Progress {
+  try {
+    const saved = JSON.parse(localStorage.getItem(key) || "{}") as Progress;
+    const progress: Progress = {};
+    for (const { id, steps } of lessons) {
+      const entry = saved?.[id];
+      if (
+        entry &&
+        Number.isInteger(entry.step) &&
+        typeof entry.completed === "boolean"
+      ) {
+        progress[id] = {
+          step: Math.min(steps.length, Math.max(0, entry.step)),
+          completed: entry.completed,
+        };
+      }
+    }
+    return progress;
+  } catch {
+    return {};
+  }
 }
-export default function HelpWorkspace({isOwner,go}:{isOwner:boolean;go:(page:Page)=>void}) {
-  const [selected,setSelected]=useState<Lesson|null>(null);
-  const [step,setStep]=useState(0);
-  const [query,setQuery]=useState('');
-  const [filter,setFilter]=useState('Все');
-  const openLesson=(lesson:Lesson)=>{setStep(0);setSelected(lesson)};
-  const annotated:Record<string,Array<{src:string;x:string;y:string}|null>>={
-    'Создать поставку':[{src:'/help/supplies.png',x:'95%',y:'21%'},{src:'/help/create.png',x:'53%',y:'29%'},{src:'/help/create.png',x:'54%',y:'58%'},{src:'/help/create.png',x:'77%',y:'95%'},null],
-    'Добавить товары в поставку':[{src:'/help/supplies.png',x:'11%',y:'43%'},{src:'/help/supplies.png',x:'94%',y:'39%'},null,null],
-    'Задание для запасов':[{src:'/help/reserves.png',x:'45%',y:'46%'},{src:'/help/reserves.png',x:'43%',y:'58%'},{src:'/help/reserves.png',x:'72%',y:'90%'},null],
-    'Готовность поставок':[{src:'/help/supplies.png',x:'11%',y:'43%'},{src:'/help/supplies.png',x:'30%',y:'96%'},null],
-    'Выработка сотрудников':[null,{src:'/help/printing.png',x:'31%',y:'13%'},{src:'/help/printing.png',x:'16%',y:'48%'}],
-  };
-  const stepTargets:Record<string,string[]>={
-    'Создать поставку':['Новая поставка','Название поставки','Артикулы и количество','Проверить распределение','Подтвердить и создать поставку'],
-    'Добавить товары в поставку':['Вкладки поставок','Добавить товары','Проверить распределение','Подтвердить и добавить товары'],
-    'Задание для запасов':['Назначение','Артикулы и количество','Проверить и распределить','Добавить в запасы'],
-    'Готовность поставок':['Вкладки поставок','Готовность участков','Таблица товаров'],
-    'Выработка сотрудников':['День / Неделя / Месяц','Бокс','Имя сотрудника'],
-    'Настройки Аркадия':['Аркадий','Подключение к Битрикс24','Автоматические уведомления'],
-  };
-  const currentPointer=selected?annotated[selected.title]?.[step]:null;
-  const currentPicture=currentPointer || undefined;
-  const icons=[Truck,Plus,Package,CheckCircle,ChartBar,Bot];
-  const visible=lessons.filter(lesson=>!lesson.owner||isOwner).filter(lesson=>{
-    const index=lessons.indexOf(lesson);
-    const category=filter==='Все'||(filter==='Поставки'&&lesson.page==='supplies')||(filter==='Запасы'&&lesson.page==='reserves')||(filter==='Печать'&&lesson.page==='printing')||(filter==='Для руководителя'&&index>=3);
-    const needle=query.trim().toLocaleLowerCase('ru');
-    return category&&(!needle||[lesson.title,lesson.description,...lesson.steps].join(' ').toLocaleLowerCase('ru').includes(needle));
+
+function normalizeSearch(value: string) {
+  return value.trim().toLocaleLowerCase("ru").replaceAll("ё", "е");
+}
+
+export default function HelpWorkspace({
+  identity,
+  isOwner,
+  go,
+}: {
+  identity: string;
+  isOwner: boolean;
+  go: (page: Page) => void;
+}) {
+  const storageKey = "ritm-learning-v1:" + identity;
+  const [progress, setProgress] = useState(() => readProgress(storageKey));
+  const [active, setActive] = useState<ActiveLesson | null>(null);
+  const [query, setQuery] = useState("");
+  const [topic, setTopic] = useState<LessonTopic | "Все">("Все");
+  const opener = useRef<HTMLButtonElement>(null);
+  const search = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const sync = (event: StorageEvent) => {
+      if (event.key === storageKey) setProgress(readProgress(storageKey));
+    };
+    window.addEventListener("storage", sync);
+    return () => window.removeEventListener("storage", sync);
+  }, [storageKey]);
+
+  const available = lessons.filter((lesson) => !lesson.ownerOnly || isOwner);
+  const topics = lessonTopics.filter((item) =>
+    available.some((lesson) => lesson.topic === item),
+  );
+  const completed = available.filter(
+    ({ id }) => progress[id]?.completed,
+  ).length;
+  const remaining = available.filter(({ id }) => !progress[id]?.completed);
+  const resume = remaining.find(({ id }) => progress[id]);
+  const suggested = resume || remaining[0] || available[0];
+  const featuredVideo = available.find((lesson) =>
+    lesson.steps.some((step) => step.video),
+  );
+  const startLabel = resume
+    ? "Продолжить урок"
+    : completed === 0
+      ? "Начать обучение"
+      : remaining.length
+        ? "Следующий урок"
+        : "Повторить урок";
+  const needle = normalizeSearch(query);
+  const filtered = available.filter((lesson) => {
+    const matchesTopic = topic === "Все" || lesson.topic === topic;
+    const searchable = [
+      lesson.title,
+      lesson.description,
+      lesson.section,
+      lesson.practice.question,
+      ...lesson.steps.flatMap((step) => [
+        step.title,
+        step.cue,
+        step.screen,
+        step.target,
+        step.nearby,
+      ]),
+    ].join(" ");
+    return matchesTopic && normalizeSearch(searchable).includes(needle);
   });
-  const card=(lesson:Lesson)=> {const Icon=icons[lessons.indexOf(lesson)];return <button type="button" className="help-task-row" key={lesson.title} onClick={()=>openLesson(lesson)}><span className="help-task-icon" aria-hidden="true"><Icon size={21}/></span><span className="help-task-copy"><strong>{lesson.title}</strong><span>{lesson.description}</span></span><CaretRight className="help-task-arrow" size={19}/></button>};
-  return <div className="help-workspace help-directory"><div className="help-search-wrap"><MagnifyingGlass size={20} aria-hidden="true"/><input aria-label="Поиск инструкций" placeholder="Что вы хотите сделать?" value={query} onChange={event=>setQuery(event.target.value)}/></div><div className="help-filters" aria-label="Темы инструкций">{['Все','Поставки','Запасы','Печать','Для руководителя'].map(item=><button type="button" key={item} aria-pressed={filter===item} className={filter===item?'is-active':''} onClick={()=>setFilter(item)}>{item}</button>)}</div>{!query.trim()&&filter==='Все'&&<section className="help-quick"><div><h2>Частые задачи</h2><div className="help-task-list">{[lessons[0],lessons[1],lessons[2],lessons[4]].map(card)}</div></div><aside className="help-feature"><div><h2>Начните с основ</h2><p>Пошаговая инструкция поможет создать первую поставку и проверить распределение товаров.</p><button type="button" onClick={()=>openLesson(lessons[0])}>Открыть инструкцию <CaretRight size={16}/></button></div></aside></section>}<section className="help-all"><h2>{query.trim()||filter!=='Все'?'Результаты':'Все инструкции'}</h2>{visible.length===0?<div className="help-empty" role="status">Ничего не найдено. Попробуйте изменить запрос или выбрать другую тему.</div>:<div className="help-directory-grid">{[false,true].map(leader=>{const group=visible.filter(lesson=>(lessons.indexOf(lesson)>=3)===leader);return group.length>0?<div className="help-directory-group" key={String(leader)}><h3>{leader?'Руководителю':'Менеджеру'}</h3><div className="help-task-list">{group.map(card)}</div></div>:null})}</div>}</section>{selected&&<div className="help-overlay" onClick={()=>setSelected(null)}><div className="help-dialog" role="dialog" aria-modal="true" aria-labelledby="help-title" onClick={event=>event.stopPropagation()}><button className="help-close" type="button" aria-label="Закрыть" onClick={()=>setSelected(null)}>×</button><span className="help-kicker">ИНСТРУКЦИЯ</span><h2 id="help-title">{selected.title}</h2><p>{selected.description}</p><div className="help-step"><strong>Шаг {step+1} из {selected.steps.length}</strong><p>{selected.steps[step]}</p></div>{!currentPicture&&<div className="help-target-diagram"><span>Раздел: {selected.page === "arkady" ? "Аркадий" : selected.page === "printing" ? "Печать" : selected.page === "reserves" ? "Запасы" : "Поставки"}</span><div><CaretRight size={23} aria-hidden="true"/><strong>{stepTargets[selected.title][step]}</strong></div><small>Схема элемента интерфейса</small></div>}{currentPicture&&<figure className="help-example"><div className="help-example-image"><img src={currentPicture.src} alt={`Пример экрана: ${selected.title}`}/>{currentPointer&&<span className="help-marker" style={{left:currentPicture.x,top:currentPicture.y}} aria-hidden="true">↓</span>}</div><figcaption>Пример интерфейса RITM. Внешний вид может отличаться.</figcaption></figure>}<div className="help-step-actions"><button type="button" className="help-skip" disabled={step===0} onClick={()=>setStep(step-1)}>Назад</button>{step<selected.steps.length-1?<button type="button" className="help-primary" onClick={()=>setStep(step+1)}>Следующий шаг →</button>:<button type="button" className="help-primary" onClick={()=>{go(selected.page);setSelected(null)}}>Открыть раздел →</button>}</div></div></div>}</div>;
+
+  const remember = (lesson: Lesson, step: number) => {
+    const stored = readProgress(storageKey);
+    const next: Progress = {
+      ...progress,
+      ...stored,
+      [lesson.id]: {
+        step: Math.min(step, lesson.steps.length),
+        completed: Boolean(
+          stored[lesson.id]?.completed ||
+          progress[lesson.id]?.completed ||
+          step > lesson.steps.length,
+        ),
+      },
+    };
+    setProgress(next);
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(next));
+    } catch {}
+  };
+  const openLesson = (
+    lesson: Lesson,
+    event?: MouseEvent<HTMLButtonElement>,
+    initialStep?: number,
+  ) => {
+    if (event) opener.current = event.currentTarget;
+    const saved = progress[lesson.id];
+    const step = initialStep ?? (saved?.completed ? 0 : (saved?.step ?? 0));
+    setActive({ lesson, step });
+    if (!saved || initialStep !== undefined) remember(lesson, step);
+  };
+  const recordStep = (lesson: Lesson, step: number) => {
+    setActive({ lesson, step });
+    remember(lesson, step);
+  };
+  const nextLesson = active
+    ? remaining.find((lesson) => lesson.id !== active.lesson.id)
+    : undefined;
+
+  return (
+    <div className="learning">
+      <section className="learning-hero" aria-labelledby="learning-heading">
+        <div className="learning-hero-copy">
+          <span className="learning-eyebrow">
+            <GraduationCap size={18} aria-hidden="true" /> Интерактивное
+            обучение
+          </span>
+          <h2 id="learning-heading">
+            Освойте RITM
+            <br />
+            <span>вместе с Аркадием</span>
+          </h2>
+          <p>
+            Покажу, как оформить поставку, сверить сроки и проверить выработку.
+            Попробуем на учебных примерах.
+          </p>
+          <div className="learning-hero-actions">
+            <button
+              type="button"
+              className="learning-primary"
+              onClick={(event) => openLesson(suggested, event)}
+            >
+              <Play size={17} aria-hidden="true" /> {startLabel}
+            </button>
+            {featuredVideo && (
+              <button
+                type="button"
+                className="learning-secondary"
+                onClick={(event) =>
+                  openLesson(
+                    featuredVideo,
+                    event,
+                    featuredVideo.steps.findIndex((step) => step.video),
+                  )
+                }
+              >
+                <CirclePlay size={18} aria-hidden="true" /> Видео про поставку
+              </button>
+            )}
+            <a className="learning-text-link" href="#learning-lessons">
+              Все уроки <ArrowRight size={17} aria-hidden="true" />
+            </a>
+          </div>
+          <div className="learning-suggested">{suggested.title}</div>
+        </div>
+        <div className="learning-hero-art" aria-hidden="true">
+          <div className="learning-grid-lines" />
+          <div className="learning-orbit learning-orbit--outer" />
+          <div className="learning-orbit learning-orbit--inner" />
+          <div className="learning-portrait">
+            <img src="/help/arkady.webp" alt="" width={720} height={720} />
+          </div>
+          <div className="learning-greeting">
+            <span />
+            Привет! Я Аркадий
+          </div>
+        </div>
+      </section>
+
+      <div className="learning-directory">
+        <section
+          className="learning-library"
+          id="learning-lessons"
+          aria-labelledby="learning-library-title"
+        >
+          <div className="learning-library-heading">
+            <h2 id="learning-library-title">Уроки по задачам</h2>
+            <div className="learning-search">
+              <MagnifyingGlass size={18} aria-hidden="true" />
+              <input
+                ref={search}
+                type="search"
+                aria-label="Найти урок"
+                placeholder="Найти урок"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+              />
+              {query && (
+                <button
+                  type="button"
+                  aria-label="Очистить поиск"
+                  onClick={() => {
+                    setQuery("");
+                    search.current?.focus();
+                  }}
+                >
+                  <X size={17} />
+                </button>
+              )}
+            </div>
+          </div>
+          <div
+            className="learning-topics"
+            aria-label="Темы уроков"
+            role="group"
+          >
+            {(["Все", ...topics] as const).map((item) => (
+              <button
+                key={item}
+                type="button"
+                aria-pressed={item === topic}
+                onClick={() => setTopic(item)}
+              >
+                {item}
+              </button>
+            ))}
+          </div>
+          {filtered.length ? (
+            <ul className="learning-lessons">
+              {filtered.map((lesson) => {
+                const Icon = lesson.icon;
+                const saved = progress[lesson.id];
+                const videoStep = lesson.steps.findIndex((step) => step.video);
+                return (
+                  <li
+                    key={lesson.id}
+                    className={
+                      videoStep >= 0 ? "learning-lesson-with-video" : undefined
+                    }
+                  >
+                    <button
+                      type="button"
+                      data-topic={lesson.topic}
+                      className="learning-lesson"
+                      onClick={(event) => openLesson(lesson, event)}
+                    >
+                      <span className="learning-lesson-top">
+                        <span className="learning-lesson-icon">
+                          <Icon size={21} aria-hidden="true" />
+                        </span>
+                        <ArrowRight
+                          className="learning-lesson-arrow"
+                          size={18}
+                          aria-hidden="true"
+                        />
+                      </span>
+                      <strong>{lesson.title}</strong>
+                      <span className="learning-lesson-description">
+                        {lesson.description}
+                      </span>
+                      <span className="learning-lesson-meta">
+                        {lesson.steps.length}{" "}
+                        {lesson.steps.length < 5 ? "шага" : "шагов"} · практика
+                        {saved?.completed ? (
+                          <span className="learning-pill is-done">
+                            <CheckCircle size={14} aria-hidden="true" />{" "}
+                            Пройдено
+                          </span>
+                        ) : (
+                          saved && (
+                            <span className="learning-pill">В процессе</span>
+                          )
+                        )}
+                      </span>
+                    </button>
+                    {videoStep >= 0 && (
+                      <button
+                        type="button"
+                        className="learning-secondary learning-lesson-video"
+                        onClick={(event) =>
+                          openLesson(lesson, event, videoStep)
+                        }
+                      >
+                        <CirclePlay size={17} aria-hidden="true" /> Смотреть
+                        видео
+                      </button>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <div className="learning-empty" role="status">
+              <MagnifyingGlass size={23} aria-hidden="true" />
+              <strong>Уроков не найдено</strong>
+              <p>Попробуйте другой запрос или покажите все уроки.</p>
+              <button
+                className="learning-secondary"
+                type="button"
+                onClick={() => {
+                  setQuery("");
+                  setTopic("Все");
+                }}
+              >
+                Показать все уроки
+              </button>
+            </div>
+          )}
+        </section>
+
+        <aside
+          className="learning-progress"
+          aria-labelledby="learning-progress-title"
+        >
+          <div className="learning-progress-heading">
+            <span className="learning-progress-icon">
+              <BookOpen size={20} aria-hidden="true" />
+            </span>
+            <h2 id="learning-progress-title">Мой прогресс</h2>
+          </div>
+          <div className="learning-progress-total">
+            <strong>
+              {completed}
+              <span> / {available.length}</span>
+            </strong>{" "}
+            уроков пройдено
+          </div>
+          <div
+            className="learning-progress-track"
+            role="progressbar"
+            aria-label="Пройдено уроков"
+            aria-valuenow={completed}
+            aria-valuemax={available.length}
+          >
+            {available.map((lesson, index) => (
+              <span
+                key={lesson.id}
+                className={index < completed ? "is-done" : undefined}
+              />
+            ))}
+          </div>
+          <ul className="learning-progress-topics">
+            {topics.map((item) => {
+              const matching = available.filter(
+                (lesson) => lesson.topic === item,
+              );
+              const done = matching.filter(
+                ({ id }) => progress[id]?.completed,
+              ).length;
+              return (
+                <li key={item}>
+                  <span>{item}</span>
+                  <strong>
+                    {done} из {matching.length}
+                  </strong>
+                </li>
+              );
+            })}
+          </ul>
+        </aside>
+      </div>
+
+      {active && (
+        <GuidedLesson
+          lesson={active.lesson}
+          step={active.step}
+          onStepChange={(step) => recordStep(active.lesson, step)}
+          onClose={() => setActive(null)}
+          onReturnFocus={() => opener.current?.focus()}
+          onOpenSection={() => {
+            setActive(null);
+            go(active.lesson.page);
+          }}
+          onNextLesson={nextLesson ? () => openLesson(nextLesson) : undefined}
+        />
+      )}
+    </div>
+  );
 }

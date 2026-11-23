@@ -204,6 +204,13 @@
       "when": 1795005456010,
       "tag": "0028_puzzling_rick_jones",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1795177024617,
+      "tag": "0029_fat_nick_fury",
+      "breakpoints": true
     }
   ]
 }

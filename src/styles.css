@@ -5679,11 +5679,11 @@ td small {
 .supply-write-confirmation strong {
   color: var(--text);
 }
-.supply-xerox-rounding {
+.supply-quantity-rounding {
   display: grid;
   gap: 4px;
 }
-.supply-xerox-rounding select {
+.supply-quantity-rounding select {
   width: 100%;
   min-width: 12rem;
   padding: 6px;
@@ -5693,7 +5693,7 @@ td small {
   color: var(--text);
   font: inherit;
 }
-.supply-xerox-detail {
+.supply-quantity-detail {
   display: block;
   margin-top: 3px;
 }

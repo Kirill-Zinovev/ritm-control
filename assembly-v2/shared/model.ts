@@ -1,3 +1,5 @@
+import type { RitmSchedule } from "./ritm";
+
 export type Operation = "cut" | "assembly" | "packing";
 export type Market = "WB" | "OZON";
 export interface Scope {
@@ -7,6 +9,8 @@ export interface Scope {
 }
 export interface Supply extends Scope {
   sources?: Supply[];
+  schedule?: RitmSchedule | null;
+  packingComplete?: boolean;
   sourceLocked?: boolean;
   originShipmentId?: string | null;
   sourceActive?: boolean;
@@ -116,6 +120,9 @@ export interface Dispatch extends Scope {
   sentAt: string | null;
   cartonIds: string[];
   qty: number;
+}
+export interface PreparedDispatch extends Dispatch {
+  cartons: Pick<Carton, "id" | "label" | "qty">[];
 }
 export interface ExportSnapshot {
   id: string;

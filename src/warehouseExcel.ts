@@ -120,7 +120,7 @@ function format(sheet: ExcelJS.Worksheet) {
 }
 export function accountWorkbook(snapshot: ExportSnapshot): ExcelJS.Workbook {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = "Assembly";
+  workbook.creator = "RITM Сборка";
   workbook.created = new Date(snapshot.createdAt);
   const boxes = workbook.addWorksheet("Короба");
   boxes.columns = [
@@ -189,7 +189,7 @@ export function accountWorkbook(snapshot: ExportSnapshot): ExcelJS.Workbook {
 }
 export type Mapping = Partial<Record<keyof ExportRow, number>>;
 export const mappingLabels: Record<keyof ExportRow, string> = {
-  carton: "Номер короба в Assembly",
+  carton: "Номер короба в «RITM Сборка»",
   market: "Маркетплейс",
   store: "Магазин",
   destination: "Склад назначения",

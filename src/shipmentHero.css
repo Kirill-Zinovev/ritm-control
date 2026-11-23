@@ -210,6 +210,10 @@
   box-shadow: 0 3px 9px rgba(16, 33, 58, 0.09);
 }
 
+.shipment-hero-actions .button.secondary {
+  color: var(--text, #10213a);
+}
+
 .shipment-hero-actions .button:disabled {
   opacity: 1;
   color: #4f6279;

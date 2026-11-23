@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { currentShipmentLockSnapshot, recoverPendingShipmentLock } from "../worker/cloud/runtime.js";
-import { deliverShipmentLockEvent, setShipmentLocks, shipmentLock } from "../worker/cloud/shipmentLocks.js";
+import { setShipmentLocks, shipmentLock } from "../worker/cloud/shipmentLocks.js";
 
 const id = "RITM-ROLL-123";
 const request1 = "11111111-1111-4111-8111-111111111111";
@@ -14,68 +14,33 @@ function scopeFixture() {
   };
 }
 
-test("lock and unlock become visible only after Assembly confirms", async () => {
+test("RITM stores the canonical lock and unlock with increasing import revisions", async () => {
   const scope = scopeFixture();
-  const delivered = [];
-  const deliver = async event => { delivered.push(event); return true; };
-  const closed = await setShipmentLocks(scope, {shipmentIds:[id], locked:true, requestId:request1, deliver});
-  assert.equal(closed.confirmed, true);
-  assert.equal(shipmentLock(scope,id).status, "locked");
-  const opened = await setShipmentLocks(scope, {shipmentIds:[id], locked:false, requestId:request2, deliver});
-  assert.equal(opened.confirmed, true);
-  assert.equal(shipmentLock(scope,id).status, "unlocked");
-  assert.deepEqual(delivered.map(event => event.locked), [true, false]);
-});
-
-test("unconfirmed delivery remains pending and retries the same event", async () => {
-  const scope = scopeFixture();
-  const pending = await setShipmentLocks(scope, {shipmentIds:[id], locked:true, requestId:request1, deliver:async()=>false});
-  assert.equal(pending.confirmed, false);
-  assert.equal(shipmentLock(scope,id).status, "locking");
+  const now = () => Date.parse("2026-11-19T10:00:00Z");
+  const locked = await setShipmentLocks(scope, {shipmentIds:[id], locked:true, requestId:request1, now});
+  assert.equal(locked.confirmed, true);
   assert.equal(shipmentLock(scope,id).locked, true);
-  let retried;
-  const confirmed = await setShipmentLocks(scope, {shipmentIds:[id], locked:true, requestId:request1, deliver:async event=>{retried=event; return true;}});
-  assert.equal(retried.eventId, request1);
-  assert.equal(confirmed.confirmed, true);
-  assert.equal(shipmentLock(scope,id).status, "locked");
+  const reopened = await setShipmentLocks(scope, {shipmentIds:[id], locked:false, requestId:request2, now});
+  assert.equal(reopened.confirmed, true);
+  assert.equal(shipmentLock(scope,id).locked, false);
+  assert.ok(Date.parse(reopened.locks[0].changedAt) > Date.parse(locked.locks[0].changedAt));
+  assert.equal(scope.checkpoints, 2);
 });
 
-test("Assembly receipt works with Workers redirect rules", async () => {
-  const bindings = {RITM_ASSEMBLY_WEB_APP_URL:`https://script.google.com/macros/s/${"a".repeat(30)}/exec`, RITM_ASSEMBLY_SYNC_SECRET:"a".repeat(64)};
-  const event = {v:1,eventId:request1,action:"shipment-lock",issuedAt:Date.now(),shipmentIds:[id],locked:true};
-  const calls = [];
-  const fetcher = async (url, init) => {
-    calls.push({url,method:init.method,redirect:init.redirect});
-    if (init.redirect === "error") throw new TypeError("unsupported redirect mode");
-    if (calls.length === 1) return new Response(null,{status:302,headers:{location:"https://script.googleusercontent.com/receipt"}});
-    return Response.json({ok:true,status:"synced",eventId:request1});
-  };
-  assert.equal(await deliverShipmentLockEvent(bindings,event,fetcher),true);
-  assert.deepEqual(calls.map(call=>[call.method,call.redirect]),[["POST","manual"],["GET","manual"]]);
-});
-
-test("Assembly receipt refuses an unexpected second redirect", async () => {
-  const bindings = {RITM_ASSEMBLY_WEB_APP_URL:`https://script.google.com/macros/s/${"a".repeat(30)}/exec`, RITM_ASSEMBLY_SYNC_SECRET:"a".repeat(64)};
-  const event = {v:1,eventId:request1,action:"shipment-lock",issuedAt:Date.now(),shipmentIds:[id],locked:true};
-  let calls=0;
-  const fetcher=async()=>++calls===1 ? new Response(null,{status:302,headers:{location:"https://script.googleusercontent.com/receipt"}}) : new Response(null,{status:302,headers:{location:"https://untrusted.example/"}});
-  assert.equal(await deliverShipmentLockEvent(bindings,event,fetcher),false);
-  assert.equal(calls,2);
-});
-
-test("maintenance resumes the recorded pending operation using the same event", async () => {
-  const scope=scopeFixture();
-  await setShipmentLocks(scope,{shipmentIds:[id],locked:true,requestId:request1,deliver:async()=>false});
-  const bindings = {RITM_ASSEMBLY_WEB_APP_URL:`https://script.google.com/macros/s/${"a".repeat(30)}/exec`, RITM_ASSEMBLY_SYNC_SECRET:"a".repeat(64)};
-  let event, calls=0;
-  const fetcher=async(url,init)=>{
-    calls++;
-    if(calls===1){event=JSON.parse(init.body).event;return new Response(null,{status:302,headers:{location:"https://script.googleusercontent.com/receipt"}});}
-    return Response.json({ok:true,status:"synced",eventId:request1});
-  };
-  const result=await recoverPendingShipmentLock(bindings,{withScope:async fn=>fn(scope)},fetcher);
+test("maintenance completes the already saved intent with its original event identity", async () => {
+  const scope = scopeFixture();
+  scope.putOperation("production-shipment-lock",{id,shipmentId:id,shipmentIds:[id],status:"locking",targetLocked:true,eventId:request1});
+  const result=await recoverPendingShipmentLock({}, {withScope:async fn=>fn(scope)});
   assert.equal(result.confirmed,true); assert.equal(result.remaining,0);
-  assert.equal(event.eventId,request1); assert.equal(shipmentLock(scope,id).status,"locked");
+  assert.equal(shipmentLock(scope,id).eventId,request1); assert.equal(shipmentLock(scope,id).status,"locked");
+});
+
+test("an existing physical lock is inherited until the canonical supply is explicitly opened", async () => {
+  const scope=scopeFixture(), shipmentId="RITM-SUPPLY-"+request1;
+  scope.putOperation("production-shipment-lock",{id,shipmentId:id,sourceOperationId:request1,status:"locked"});
+  assert.equal(shipmentLock(scope,shipmentId).locked,true);
+  await setShipmentLocks(scope,{shipmentIds:[shipmentId],locked:false,requestId:request2});
+  assert.equal(shipmentLock(scope,shipmentId).locked,false);
 });
 
 test("maintenance does not deliver when no lock is pending", async () => {

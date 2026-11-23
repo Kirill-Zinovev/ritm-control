@@ -504,22 +504,27 @@ test("acknowledged card receipt survives a store reload without resending or con
     scope: async () => scope,
     withScope: async (callback) => callback(scope),
   };
-  let requests = 0;
-  const fetcher = async () => {
-    requests++;
+  const recipients = [];
+  const fetcher = async (url, init) => {
+    if (url.endsWith('Chat.Message.update')) return Response.json({result:true});
+    const {dialogId} = JSON.parse(init.body);
+    recipients.push(dialogId);
     return Response.json({
-      result: { messageId: 100, file: { id: 200 }, dialogId: "chat2" },
+      result: { messageId: 100, file: { id: 200 }, dialogId },
     });
   };
   await drainBitrixNotifications(bindings, store, fetcher);
   values = new Map(JSON.parse(JSON.stringify([...values])));
   operations = new Map(JSON.parse(JSON.stringify([...operations])));
   await drainBitrixNotifications(bindings, store, fetcher);
-  assert.equal(requests, 2);
+  assert.deepEqual(recipients, ['1698', '2374']);
   const receipt = operations.get("bitrix-notification:batch").value;
-  assert.equal(receipt.format, "card-image-v1");
-  assert.equal(receipt.messageId, 100);
-  assert.equal(receipt.fileId, 200);
+  assert.equal(receipt.status, 'sent');
+  for (const dialog of recipients) {
+    assert.equal(receipt.deliveries[dialog].format, 'card-image-v1');
+    assert.equal(receipt.deliveries[dialog].messageId, 100);
+    assert.equal(receipt.deliveries[dialog].fileId, 200);
+  }
   assert.equal(scope.meta("bitrixCompletionPraiseSequenceV2"), "101");
 });
 

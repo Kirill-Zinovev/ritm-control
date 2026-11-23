@@ -1,7 +1,4 @@
 import { CloudError } from "./access.js";
-import { createHmac } from "node:crypto";
-import { assemblyUrl } from "./config.js";
-import { cloudFetch } from "./fetch.js";
 
 const KIND = "production-shipment-lock";
 const SHIPMENT_ID = /^RITM-(?:ROLL-\d+|BOX-\d+|SUPPLY-[a-f0-9-]{36})$/i;
@@ -41,44 +38,17 @@ function isLocked(record) {
   return !!record && record.status !== "unlocked";
 }
 
-export async function deliverShipmentLockEvent(bindings, event, fetcher = fetch) {
-  const failed = (reason) => { console.warn("shipment_lock_delivery_failed", reason); return false; };
-  const endpoint = assemblyUrl(bindings);
-  const secret = bindings.RITM_ASSEMBLY_SYNC_SECRET;
-  if (!endpoint || !/^[a-f0-9]{64}$/i.test(secret || "")) return failed("configuration");
-  const body = JSON.stringify({
-    event,
-    signature: createHmac("sha256", secret).update(JSON.stringify(event)).digest("hex"),
-  });
-  const signal = AbortSignal.timeout(30000);
-  let response;
-  try {
-    response = await cloudFetch(fetcher, endpoint, {
-      method: "POST",
-      redirect: "manual",
-      signal,
-      headers: { "content-type": "application/json" },
-      body,
-    });
-    if ([302, 303].includes(response.status)) {
-      const location = new URL(response.headers.get("location") || "", endpoint);
-      if (location.protocol !== "https:" || location.hostname !== "script.googleusercontent.com" || location.username || location.password)
-        return failed("redirect_host");
-      response = await cloudFetch(fetcher, location.href, { method: "GET", redirect: "error", signal });
-    }
-    if (!response.ok) return failed(`http_${response.status}`);
-    const raw = await response.text();
-    if (raw.length > 8192) return failed("receipt_too_large");
-    const receipt = JSON.parse(raw);
-    if (receipt?.ok === true && receipt.status === "synced" && receipt.eventId === event.eventId) return true;
-    return failed(receipt?.status === "rejected" ? "rejected" : receipt?.status === "pending" ? "pending" : "unconfirmed_receipt");
-  } catch (error) {
-    return failed(error?.code === "unexpected_redirect" ? "unexpected_redirect" : error?.name === "TimeoutError" ? "timeout" : error?.name === "SyntaxError" ? "invalid_receipt" : "transport");
-  }
-}
+const supplyPrefix = "RITM-SUPPLY-";
 
 export function shipmentLock(scope, shipmentId) {
-  const record = recordFor(scope, shipmentId);
+  const canonical = recordFor(scope, shipmentId);
+  const operationId = shipmentId.startsWith(supplyPrefix) ? shipmentId.slice(supplyPrefix.length) : null;
+  // Earlier creations stored the lock on each physical sheet.
+  const inherited = !canonical && operationId ? [...scope.operations.values()]
+    .filter(row => row.kind === KIND && row.value?.sourceOperationId === operationId && isLocked(row.value))
+    .map(row => row.value)
+    .sort((a, b) => String(b.changedAt).localeCompare(String(a.changedAt)))[0] : null;
+  const record = canonical || inherited;
   const status = record?.status || "unlocked";
   return {
     shipmentId,
@@ -97,11 +67,13 @@ export function listShipmentLocks(scope, shipmentIds = []) {
   if (ids.length > 20) fail("shipment_lock_ids_invalid", "Слишком много выбранных поставок.");
   const clean = [...new Set(ids.map((value) => text(value, 120)))];
   if (clean.some((id) => !SHIPMENT_ID.test(id))) fail("shipment_lock_ids_invalid", "Не удалось подтвердить выбранную поставку.");
-  const selected = clean.length
-    ? clean.map((id) => shipmentLock(scope, id))
-    : [...scope.operations.values()]
-      .filter((row) => row.kind === KIND && row.value)
-      .map((row) => shipmentLock(scope, row.value.shipmentId));
+  const recorded = [...scope.operations.values()].filter(row => row.kind === KIND && row.value);
+  const activeSupplies = new Set((scope.meta?.("productionSupplies") || []).map(row => row.id));
+  const recordedIds = recorded.flatMap(({value}) => {
+    const canonicalId = supplyPrefix + value.sourceOperationId;
+    return value.sourceOperationId && activeSupplies.has(canonicalId) ? [value.shipmentId, canonicalId] : [value.shipmentId];
+  });
+  const selected = (clean.length ? clean : [...new Set(recordedIds)]).map(id => shipmentLock(scope, id));
   return selected.sort((a, b) => a.shipmentId.localeCompare(b.shipmentId));
 }
 
@@ -112,7 +84,6 @@ export async function setShipmentLocks(scope, {
   name = "",
   changedBy = "RITM",
   sourceOperationId = null,
-  deliver,
   now = Date.now,
 }) {
   if (!scope?.lease) fail("shipment_lock_lease_required", "Не удалось подтвердить изменение замка. Повторите попытку.", 409);
@@ -120,7 +91,6 @@ export async function setShipmentLocks(scope, {
   const ids = normalizeShipmentIds(shipmentIds);
   const cleanRequestId = text(requestId, 36);
   if (cleanRequestId && !UUID.test(cleanRequestId)) fail("shipment_lock_request_invalid", "Обновите страницу и повторите изменение замка.");
-  if (typeof deliver !== "function") fail("shipment_lock_delivery_unavailable", "Не настроено подтверждение замка в Assembly.", 503);
 
   const current = ids.map((shipmentId) => recordFor(scope, shipmentId));
   const pending = current.filter((row) => row && ["locking", "unlocking"].includes(row.status));
@@ -134,7 +104,7 @@ export async function setShipmentLocks(scope, {
   }
 
   const eventId = pending[0]?.eventId || cleanRequestId || crypto.randomUUID();
-  const nowValue = now();
+  const nowValue = Math.max(now(), ...ids.map(id => (Date.parse(shipmentLock(scope, id).changedAt) || 0) + 1));
   const shipmentName = text(name, 100) || current.find(Boolean)?.name || "";
   const actor = text(changedBy, 100) || "RITM";
   const priorRequest = cleanRequestId
@@ -150,46 +120,18 @@ export async function setShipmentLocks(scope, {
       shipmentId,
       shipmentIds: ids,
       name: shipmentName || previous?.name || "",
-      status: locked ? "locking" : "unlocking",
+      status: locked ? "locked" : "unlocked",
       targetLocked: locked,
       eventId,
       requestId: cleanRequestId || previous?.requestId || eventId,
       sourceOperationId: sourceOperationId || previous?.sourceOperationId || null,
+      deferDelivery: Boolean(sourceOperationId),
       changedAt: new Date(nowValue).toISOString(),
+      confirmedAt: new Date(nowValue).toISOString(),
       changedBy: actor,
     });
   }
   await scope.checkpoint();
 
-  let acknowledged = false;
-  try {
-    acknowledged = await deliver({
-      v: 1,
-      eventId,
-      action: "shipment-lock",
-      issuedAt: nowValue,
-      shipmentIds: ids,
-      locked,
-    });
-  } catch {
-    acknowledged = false;
-  }
-  if (!acknowledged) {
-    return { confirmed: false, unchanged: false, shipmentIds: ids, locks: ids.map((id) => shipmentLock(scope, id)) };
-  }
-
-  const confirmedAt = new Date(now()).toISOString();
-  for (const shipmentId of ids) {
-    const previous = recordFor(scope, shipmentId);
-    scope.putOperation(KIND, {
-      ...previous,
-      status: locked ? "locked" : "unlocked",
-      targetLocked: locked,
-      changedAt: confirmedAt,
-      confirmedAt,
-      changedBy: actor,
-    });
-  }
-  await scope.checkpoint();
   return { confirmed: true, unchanged: false, shipmentIds: ids, locks: ids.map((id) => shipmentLock(scope, id)) };
 }

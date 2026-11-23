@@ -48,7 +48,7 @@ export function ProcessStage({
         </small>
       )}
       {notApplicable ? (
-        <small>Не передаётся в Assembly</small>
+        <small>Не передаётся в «RITM Сборка»</small>
       ) : (
         <>
           <div className="production-process-values">

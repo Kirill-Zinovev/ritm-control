@@ -18,6 +18,29 @@ function stockGatewayHealth_(props){return boxLocked_(function(){var book=Spread
 
 function stockMultiplicityFormula_(row){return '=IF(E'+row+'=\"\";\"\";IFERROR(VLOOKUP(E'+row+';Cache!B:Q;16;0);VLOOKUP(E'+row+';\'Cache FBO\'!B:R;17;0)))';}
 
+function stockCatalogInsert_(sh,row,item,write){
+  if(item.assemblyCatalog!==true)return;
+  var machine=String(item.machine||'').trim(),store=String(item.store||'');
+  var validNumber=function(value){return value==null||Number.isSafeInteger(value)&&value>0;};
+  if(!/^(?:XEROX|DTF|УФ\s+ПЛАНШЕТ)$/i.test(machine)||!/^(?:[0-9]{1,3})?$/.test(store)||
+     !validNumber(item.sheetsPerUnit)||!validNumber(item.stockMultiplicity)||
+     (/^XEROX$/i.test(machine)&&(!item.sheetsPerUnit||!item.stockMultiplicity||
+       !Number.isSafeInteger(item.newQuantity*item.sheetsPerUnit/item.stockMultiplicity))))
+    throw new Error('Не подтверждены параметры новой строки из справочника Assembly.');
+  if(!write){
+    [[4,'станок'],[7,'кол-во листов'],[14,'кратность'],[27,'магазин']].forEach(function(pair){
+      if(String(sh.getRange(4,pair[0]).getValue()).trim().toLowerCase()!==pair[1])throw new Error('Изменились заголовки печати.');
+    });
+    if(sh.getRange(row,27).getValue()!==''&&!sh.getRange(row,27).getFormula())throw new Error('Магазин новой строки уже заполнен.');
+    return;
+  }
+  var assigned=function(value){return '=IF(E'+row+'="";"";'+JSON.stringify(value==null?'':value)+')';};
+  sh.getRange(row,4).setFormula(assigned(machine));
+  sh.getRange(row,7).setFormula(assigned(item.sheetsPerUnit));
+  sh.getRange(row,14).setFormula(assigned(item.stockMultiplicity));
+  sh.getRange(row,27).setFormula(assigned(store));
+}
+
 function stockGatewayApply_(input,props) {
   if(!/^[-a-f0-9]{36}$/i.test(String(input.operationId||''))||!Array.isArray(input.entries)||!input.entries.length||input.entries.length>500)throw new Error('Неверные параметры операции.');
   var hash=boxHash_([input.sheetId,input.entries]), key='STOCK_OP_'+input.operationId;
@@ -37,9 +60,11 @@ function stockGatewayApply_(input,props) {
         var machine=String(values[3]||'').trim().toLowerCase(),xerox=/^(xerox|ксерокс|x|х)$/.test(machine),plan=xerox?after/Number(values[13])*Number(values[6]):after;
         if(!machine||!Number.isSafeInteger(plan)||plan<=0||!Number.isFinite(values[27])||!Number.isFinite(values[28])||values[28]>values[27]||values[27]>plan)throw new Error('Не подтверждена готовность позиции.');
       }else if(item.action==='insert'){
+        stockCatalogInsert_(sh,row,item,false);
         if(sku||values[15]!==''||!/^ritm-[-a-f0-9]{36}-\d+$/i.test(String(item.uid||''))||typeof item.layoutPresent!=='boolean')throw new Error('Строка занята или данные позиции не подтверждены.');
         [4,7,8,10,11].forEach(function(col){if(!sh.getRange(row,col).getFormula())throw new Error('В строке не подтверждены формулы.');});
-        var existingMultiplicity=sh.getRange(row,14).getFormula();if(existingMultiplicity!=='=VLOOKUP(E:E;Cache!B:Q;16;0)'&&existingMultiplicity!==stockMultiplicityFormula_(row))throw new Error('Формула кратности изменена; требуется сверка.');
+        var existingMultiplicity=sh.getRange(row,14).getFormula();
+        if(item.assemblyCatalog!==true && existingMultiplicity!=='=VLOOKUP(E:E;Cache!B:Q;16;0)'&&existingMultiplicity!==stockMultiplicityFormula_(row))throw new Error('Формула кратности изменена; требуется сверка.');
         [3,5,6,16,30].forEach(function(col){if(sh.getRange(row,col).getValue()!==''||sh.getRange(row,col).getFormula())throw new Error('Строка содержит данные.');});
       }else throw new Error('Неизвестное действие.');
     });
@@ -50,7 +75,8 @@ function stockGatewayApply_(input,props) {
         sh.getRange(row,5).setValue(item.article);sh.getRange(row,6).setValue(item.extension||'');sh.getRange(row,30).setValue(item.uid);
         var sku=String(item.article).trim().toUpperCase().replace(/"/g,'""');
         sh.getRange(row,3).setFormula('=IF(E'+row+'="";"";IF(UPPER(TRIM(E'+row+'))="'+sku+'";"'+(item.layoutPresent?'Есть':'Не в таблице макетов')+'";"Проверить макет"))');
-        sh.getRange(row,14).setFormula(stockMultiplicityFormula_(row));
+        if(item.assemblyCatalog===true)stockCatalogInsert_(sh,row,item,true);
+        else sh.getRange(row,14).setFormula(stockMultiplicityFormula_(row));
         sh.getRange(row,19,1,2).setValues([[false,false]]);sh.getRange(row,25,1,2).setValues([[0,0]]);sh.getRange(row,28,1,2).setValues([[0,0]]);sh.getRange(row,24).setFormula(boxProgressFormula_(row));
       }else{
         var values=sh.getRange(row,1,1,30).getValues()[0],machine=String(values[3]).trim().toLowerCase(),plan=/^(xerox|ксерокс|x|х)$/.test(machine)?qty/Number(values[13])*Number(values[6]):qty;

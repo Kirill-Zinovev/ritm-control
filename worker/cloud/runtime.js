@@ -1,30 +1,32 @@
 import {readPlanning, savePlanning} from './productionPlanning.js';
 import { assemblyV2Feed } from './assemblyV2Feed.js';
 import { refreshAssemblyV2Source } from './assemblyV2Refresh.js';
-import {receiveAssemblyV2Events,readAssemblyV2Events,overlayAssemblyV2,overlayPrintingV2} from './assemblyV2Events.js';
+import {receiveAssemblyV2Events,readAssemblyV2Events,overlayPrintingV2} from './assemblyV2Events.js';
+import {readAssemblyV2Report} from './assemblyV2Report.js';
 import {drainAssemblyV2,queueSnapshotDelivery,supplyDeliveryStatus} from './assemblyV2Delivery.js';
 import {readAssemblyV2Warehouse,mergeAssemblyWarehouses,reconcileArchivedWarehouse,warehouseForSelection,dispatchAssemblyV2} from './assemblyV2Warehouse.js';
 import {prepareWarehouseExport,readWarehouseExports} from './warehouseExports.js';
-import { readAssemblyStocks } from './assemblyStock.js';
+import { forecastStocks, readAssemblyStocks } from './assemblyStock.js';
 import {executeProductionMove,cancelProductionMove,lookupProductionMove,productionMoveSummary,finalizeConfirmedProductionMove} from './productionMove.js';
 import {advanceMoveBatch,cancelMoveBatch,lookupMoveBatch} from './productionMoveBatch.js';
 import {boxRemovalKind, boxRemovalStatus, boxRemovalOverlaps, currentBoxLinks, pendingBoxRemoval, removeBoxPosition} from './boxPositionRemoval.js';
 import {createStockGateway} from './stockGateway.js';
 import {validateWarehouseBatch} from './warehouseBatch.js';
 import {deliverAssemblyOnlyRemoval} from "./assemblyOnlyDelivery.js";
-import {findAssemblyCatalog,findProductPhotos} from "./assemblyOnlyCatalog.js";
 import {createAssemblyOnlyItem, listAssemblyOnlyItems, removeAssemblyOnlyItem} from "./assemblyOnlyItems.js";
-import { loadSource, todayMoscow, validateApi } from "../../agent/adapters.js";
-import { selectAssemblyPeriod } from "../assembly.js";
+import { loadSource, validateApi } from "../../agent/adapters.js";
 import { cloudConfig, sourceId } from "./config.js";
 import { CloudSheetsReader } from "./googleSheets.js";
+import { printingWorkspaceFeed, printingWorkspaceWrite } from "./printing-workspace/feed.mjs";
+import { printingReadModel } from "./printing-workspace/read-model.mjs";
+import { isPrintingWorkMonth, readD1PrintingWork } from "./printingD1Work.js";
 import { CloudStore } from "./store.js";
 import { CloudError, json, readJson, requireOwner, requireMaintenance } from "./access.js";
 import { assertSameOrigin, changeManagerPin, createManagerUser, listManagerUsers, loginWithPin, logoutManager, resetManagerPin, resolvePrincipal, setManagerStatus } from "./auth.js";
 import { createServices } from "./services.js";
 import { AssemblyTransferService } from "../../agent/assemblyTransfer.js";
 import { importMigration } from "./migration.js";
-import { verifyAssemblyControlApp, verifyBridge } from "./bridge.js";
+import { verifyAssemblyControlApp, verifyBridge, verifyPrintingWorkspaceBridge } from "./bridge.js";
 import { cancelProductionControl, cancelProductionControlBatch, completeAssemblyControl, createProductionControl, createProductionControlBatch, listAssemblyControls, listProductionControls } from "./productionControls.js";
 import { externalLease } from "./externalLease.js";
 import { recordCutover } from "./cutover.js";
@@ -32,20 +34,20 @@ import { exportCloud } from "./export.js";
 import { activeWarehouseShipmentIds, activeWarehouseShipmentInfo, readWarehouseSnapshot, readWarehouseForDispatch } from "./warehouse.js";
 import { warehouseCartonFingerprint } from '../../src/warehouseFingerprint.js';
 import { listWarehouseCartonDispatch, listWarehouseDispatchSnapshots, setWarehouseCartonDispatch } from "./warehouseDispatch.js";
-import { activeShipmentIds as activePrintingShipmentIds, deliverShipmentLockEvent, listShipmentLocks, normalizeShipmentIds, setShipmentLocks } from "./shipmentLocks.js";
+import { activeShipmentIds as activePrintingShipmentIds, listShipmentLocks, normalizeShipmentIds, setShipmentLocks } from "./shipmentLocks.js";
+import { assemblyV2Configured } from "./assemblyV2Transport.js";
 import { evaluateArkadyWatch } from './arkadyWatch.js';
 import { evaluateStockWatch, formatStockCompletion } from './arkadyStockWatch.js';
 import { assignmentPresentation, stockCompletionPresentation, supplyWatchPresentation } from './arkadyCards.js';
-import { readArkadyStarts } from './arkadyStarts.js';
 import { loadStockHistory, stockHistoryEntries, stockNotificationBatches } from './stockHistory.js';
 import { pendingStockDetails,inspectStockReceipts } from './stockDiagnostics.js';
-import { readStockRows, readStockSnapshot } from "../../agent/stockSheets.js";
+import { readStockSnapshot } from "../../agent/stockSheets.js";
 import { boxStockReadiness, readRollStockHistory, rollStockReadiness } from '../../agent/stockReadiness.js';
 import { closeStockTask } from '../../agent/stockCloseOperations.js';
 import { verifyArchivedStockClose } from './stockCloseRecovery.js';
 import { productionTabVisibility, reconcileProductionTabs } from "./productionTabs.js";
-import { planStockAddition } from "../../agent/stockPlanning.js";
-import { bitrixConfigured, decryptBitrixConfig, drainBitrixNotifications, encryptBitrixConfig, sendBitrixNotification, reminderJoke, completionPraise, retireObsoleteBitrixNotifications } from './bitrixNotifications.js';
+import { importAssemblyProductionExtensions, readAssemblyItemCatalog, readWorkloadCatalog } from "./assemblyProductionCatalog.js";
+import { ARKADY_COMPLETION_RECIPIENTS, bitrixConfigured, decryptBitrixConfig, drainBitrixNotifications, encryptBitrixConfig, sendBitrixNotification, completionPraise, retireObsoleteBitrixNotifications } from './bitrixNotifications.js';
 import { saveBitrixPreference, saveBitrixConfiguration } from './bitrixSettings.js';
 
 const signIn = "/?page=supplies";
@@ -93,27 +95,7 @@ function appendAudit(scope, principal, path, operation) {
   scope.log("manager_supply_write", `${principal.id} ${path} ${operationId}`);
 }
 
-export async function drainOutbox(bindings, store, fetcher = fetch) {
-  const due = await store.db.prepare("SELECT 1 AS due FROM cloud_sync_events WHERE delivered_at IS NULL AND next_attempt_at<=? UNION ALL SELECT 1 FROM cloud_operations o WHERE kind IN ('production','roll') AND NOT EXISTS(SELECT 1 FROM cloud_sync_events e WHERE e.id=o.id) AND (json_extract(o.payload,'$.status') IN ('verified','verified_with_calculation_errors') OR json_extract(o.payload,'$.encoding')='ritm:gzip-json:v1') LIMIT 1").bind(store.now()).first();
-  if (!due) {
-    const state = await store.db.prepare("SELECT count(*) AS pending FROM cloud_sync_events WHERE delivered_at IS NULL").first();
-    const last = await store.db.prepare("SELECT id,delivered_at FROM cloud_sync_events WHERE delivered_at IS NOT NULL ORDER BY delivered_at DESC,created_at DESC,id DESC LIMIT 1").first();
-    return {configured:!!bindings.RITM_ASSEMBLY_SYNC_SECRET,pending:state.pending,lastDeliveredAt:last?.delivered_at||null,lastDeliveredEventId:last?.id||null};
-  }
-  return store.withScope(async (scope) => {
-    const services = await createServices(bindings, scope, { fetcher, deliveryOnly: true });
-    await services.guard();
-    // This scope sends an existing legacy outbox and cannot call source
-    // writers. Let NEW Assembly read committed snapshots during its network
-    // wait without releasing or weakening the production writer lock.
-    scope.meta("assemblyOutboxReadLease", {version:1, owner:scope.lease.owner, fence:scope.lease.fence, sourceWrites:false});
-    services.queue.recoverConfirmed();
-    await services.queue.flush();
-    return services.queue.state();
-  });
-}
-
-export async function recoverPendingShipmentLock(bindings, store, fetcher = fetch) {
+export async function recoverPendingShipmentLock(bindings, store) {
   return store.withScope(async (scope) => {
     const pending = [...scope.operations.values()].filter((row) => row.kind === "production-shipment-lock" && ["locking", "unlocking"].includes(row.value?.status));
     if (!pending.length) return { attempted: 0, confirmed: true, remaining: 0 };
@@ -126,7 +108,7 @@ export async function recoverPendingShipmentLock(bindings, store, fetcher = fetc
       requestId: record.eventId,
       name: record.name,
       changedBy: record.changedBy,
-      deliver: (event) => deliverShipmentLockEvent(bindings, event, fetcher),
+      sourceOperationId: record.sourceOperationId,
     });
     const remaining = [...scope.operations.values()].filter((row) => row.kind === "production-shipment-lock" && ["locking", "unlocking"].includes(row.value?.status));
     return { attempted: 1, confirmed: result.confirmed === true, remaining: new Set(remaining.map((row) => row.value.eventId)).size, eventId: record.eventId, shipmentIds: record.shipmentIds, targetLocked: record.targetLocked };
@@ -203,24 +185,24 @@ export async function maintenance(bindings, store, { fetcher = fetch, refresh = 
   if (!result.deliverySkipped)
     result.rollRemovalsRecovered = await recoverPendingRollRemovals(bindings, store, fetcher).catch(() => 0);
   result.pendingSupplyOperations = await pendingSupplyOperations(store);
-  if (!result.deliverySkipped) result.assemblySync = await drainOutbox(bindings, store, fetcher);
   if (!result.deliverySkipped) await drainBitrixNotifications(bindings, store, fetcher).catch(() => {});
   if (!result.deliverySkipped) {
-    try { result.lockRecovery = await recoverPendingShipmentLock(bindings, store, fetcher); }
+    try { result.lockRecovery = await recoverPendingShipmentLock(bindings, store); }
     catch (error) { result.lockRecovery = { attempted: 0, confirmed: false, error: error.code || "lock_recovery_failed" }; }
     result.ok = result.lockRecovery.confirmed === true;
   }
   if (refresh) {
     result.refreshed = [];
-    for (const kind of ["printing", "assembly"]) {
-      try { const value = await refreshSnapshot(kind, bindings, store, { fetcher }); result.refreshed.push({ kind, ok: value.refreshFailed !== true, snapshotAt: value.snapshotAt, failure: value.refreshFailure });
-        if (kind === 'printing' && !result.deliverySkipped && value.refreshFailed !== true) {
-          result.productionTabs = await reconcileProductionTabs(bindings, store, value, fetcher).catch(() => ({ pending: true }));
-          try { result.arkadyWatch = await runArkadyWatch(bindings, store, value, {fetcher}); if (result.arkadyWatch.queued) await drainBitrixNotifications(bindings,store,fetcher); }
-          catch (error) { result.arkadyWatch={ok:false,reason:error?.code || 'watch_failed',queued:0}; }
-        }
+    try {
+      const value = await refreshSnapshot("printing", bindings, store, { fetcher });
+      result.refreshed.push({ kind: "printing", ok: value.refreshFailed !== true, snapshotAt: value.snapshotAt, failure: value.refreshFailure });
+      if (!result.deliverySkipped && value.refreshFailed !== true) {
+        result.productionTabs = await reconcileProductionTabs(bindings, store, value, fetcher).catch(() => ({ pending: true }));
+        try { result.arkadyWatch = await runArkadyWatch(bindings, store, value, {fetcher}); if (result.arkadyWatch.queued) await drainBitrixNotifications(bindings,store,fetcher); }
+        catch (error) { result.arkadyWatch={ok:false,reason:error?.code || 'watch_failed',queued:0}; }
       }
-      catch (error) { result.refreshed.push({ kind, ok: false, error: error.code || "refresh_failed" }); }
+    } catch (error) {
+      result.refreshed.push({ kind: "printing", ok: false, error: error.code || "refresh_failed" });
     }
     result.ok = result.ok && result.refreshed.every(row => row.ok);
   }
@@ -264,24 +246,21 @@ export async function runArkadyStockWatch(bindings,store,{fetcher=fetch}={}) {
 }
 // Called only from the protected maintenance task after a fresh source read.
 // Build decisions inside the same lease that records notification IDs.
-export async function runArkadyWatch(bindings, store, printing, {fetcher = fetch} = {}) {
+export async function runArkadyWatch(_bindings, store, printing) {
   if (!printing || printing.stale === true || printing.refreshFailed === true || !['valid','partial'].includes(printing.quality?.status) || (printing.quality?.status === 'partial' && (!Array.isArray(printing.issues) || printing.issues.some(issue => !issue?.source)))) return {ok:false,reason:'source_unconfirmed',queued:0};
   const current=await store.scope();
   if (current.meta('bitrixNotificationsEnabled') === false || !current.meta('bitrixNotificationConfig')) return {ok:true,reason:'disabled',queued:0};
-  const supplies=current.meta('productionSupplies') || [], watches=current.meta('arkadyWatchConfigs') || {};
-  const reader=new CloudSheetsReader(bindings,{fetcher});
-  const starts=await readArkadyStarts({reader,printing,supplies,watches,now:store.now()});
   return store.withScope(scope=>{
     if (scope.meta('bitrixNotificationsEnabled') === false || !scope.meta('bitrixNotificationConfig')) return {ok:true,reason:'disabled',queued:0};
-    const evaluated=evaluateArkadyWatch({printing,supplies:scope.meta('productionSupplies') || [],watches:scope.meta('arkadyWatchConfigs') || {},previous:scope.meta('arkadyWatchStates') || {},starts,now:store.now()});
+    const evaluated=evaluateArkadyWatch({printing,supplies:scope.meta('productionSupplies') || [],watches:scope.meta('arkadyWatchConfigs') || {},previous:scope.meta('arkadyWatchStates') || {},now:store.now()});
     let queued=0;
     for(const event of evaluated.events){
-      if(scope.operations.has(`bitrix-notification:${event.id}`))continue;
+      if(event.kind!=='completion'||scope.operations.has(`bitrix-notification:${event.id}`))continue;
       const department=event.department==='roll'?'Рулонная печать':'Бокс';
       const name=String(event.name||'').replace(/[\r\n\[\]]/g,' ').trim().slice(0,180);
-      const heading=event.kind==='reminder' ? '⏰ [B]Срочное задание ещё не взято в работу[/B]' : '✅ [B]Печать и порезка завершены[/B]';
+      const heading='✅ [B]Печать и порезка завершены[/B]';
       const link=/^https:\/\/docs\.google\.com\/spreadsheets\/d\/[A-Za-z0-9_-]+\/edit#gid=\d+$/.test(event.url) ? `\n[URL=${event.url}]Открыть таблицу участка[/URL]` : '';
-      const joke = event.kind === 'reminder' ? reminderJoke(scope,event.id) : event.kind === 'completion' ? completionPraise(scope,event.id) : '';
+      const joke = completionPraise(scope,event.id);
       scope.putOperation('bitrix-notification',{id:event.id,status:'pending',department:'roll',message:`🦎 [B]Аркадий на связи![/B]\n\n${heading}\n📍 Поставка: [B]${name}[/B]\n${event.department==='roll'?'🖨️':'📦'} Участок: [B]${department}[/B]\nКоличество: ${event.quantity} шт.${link}${joke ? `\n\n[I]${joke}[/I]` : ''}`,presentation:supplyWatchPresentation(event,joke),createdAt:new Date(store.now()).toISOString()});queued++;
     }
     scope.meta('arkadyWatchStates',evaluated.states);
@@ -289,26 +268,30 @@ export async function runArkadyWatch(bindings, store, printing, {fetcher = fetch
   });
 }
 
-async function readCurrentSource(kind, bindings, current, reader, supplyTarget = null) {
+async function readCurrentPrinting(bindings, current, reader, supplyTarget = null, fetcher = fetch) {
   if (!current.meta("migrationReady")) throw new CloudError("migration_not_imported", "Реестр поставок ещё не перенесён и не сверен. Неполная сводка не показана.");
   const transfer = new AssemblyTransferService(current, { backfill: false });
   const retired = new Set(current.meta("retiredProductionTabs") || []);
-  const source = { adapter: kind, documentId: sourceId(bindings, kind === "printing" ? "seasonalPrintingId" : "fboSourceId") };
+  const source = { adapter: "printing", documentId: sourceId(bindings, "seasonalPrintingId") };
   const value = await loadSource(source, (url, init) => reader.authenticatedFetch(url, init), new Date(), {
     googleReader: reader, boxJournalId: sourceId(bindings, "boxJournalId"), stockBoxJournalId: sourceId(bindings, "stockBoxJournalId"), stockBoxPrintingId: sourceId(bindings, "stockBoxPrintingId"), stockRollPrintingId: sourceId(bindings, "stockRollPrintingId"), photoSourceId: sourceId(bindings, "photosId"), printingAdditionalSheets: current.meta("rollPrintingAdditionalSheets") || [],
     productionSupplies: current.meta("productionSupplies") || [], assemblyBoxLinks: transfer.links().filter(link => !retired.has(`box:${link.boxSheetId}`)), supplyTarget,
+    workloadCatalog: !supplyTarget && assemblyV2Configured(bindings)
+      ? (orders, stock) => readWorkloadCatalog(bindings, orders, stock, fetcher)
+      : null,
   });
-  validateApi(value, kind);
+  validateApi(value, "printing");
   if (value.stale === true) throw new CloudError("source_incomplete", "Источник не подтвердил свежую полную сводку.");
   return value;
 }
 
 async function readSupplyForWrite(bindings, store, scope, reader, target) {
-  const source = await readCurrentSource("printing", bindings, scope, reader, target);
+  const source = await readCurrentPrinting(bindings, scope, reader, target);
   return overlayPrintingV2(source, await readAssemblyV2Events(store));
 }
 
 export async function refreshSnapshot(kind, bindings, store, { scope = null, fetcher = fetch, assemblyOnly = false } = {}) {
+  if (kind !== "printing") throw new CloudError("snapshot_kind_invalid", "Неизвестный источник рабочего снимка.", 400);
   const previous = await store.snapshot(kind);
   // Source reads are short. A canceled browser request must not block refreshes
   // for the full production-write lease window.
@@ -351,7 +334,7 @@ export async function refreshSnapshot(kind, bindings, store, { scope = null, fet
         }
       }
     }
-    const value = await readCurrentSource(kind, bindings, current, new CloudSheetsReader(bindings, { fetcher }));
+    const value = await readCurrentPrinting(bindings, current, new CloudSheetsReader(bindings, { fetcher }), null, fetcher);
     if(kind==='printing'){
       if((await store.readMeta?.('printingMoveRevision')||null)!==moveRevision)throw new CloudError('printing_changed_during_refresh','Во время обновления завершился перенос. Повторяем чтение актуального состава.',409);
       value.productionMoveRevision=moveRevision;
@@ -381,13 +364,21 @@ export async function refreshSnapshot(kind, bindings, store, { scope = null, fet
 }
 
 export async function readSnapshot(kind, url, bindings, store, options) {
-  const snapshot = await store.snapshot(kind);
-  const moveRevision=kind==='printing'?await store.readMeta?.('printingMoveRevision')||null:null;
-  const moveChanged=kind==='printing'&&(snapshot?.value.productionMoveRevision||null)!==moveRevision;
-  const supplyRevision=kind==='printing'?await store.readMeta?.('productionSupplyRevision')||null:null;
-  const supplyChanged=kind==='printing'&&(snapshot?.value.productionSupplyRevision||null)!==supplyRevision;
+  const [snapshot, moveRevision, supplyRevision] = await Promise.all([
+    store.snapshot(kind),
+    kind === "printing" ? store.readMeta?.("printingMoveRevision") : null,
+    kind === "printing" ? store.readMeta?.("productionSupplyRevision") : null,
+  ]);
+  const moveChanged=kind==='printing'&&(snapshot?.value.productionMoveRevision||null)!==(moveRevision||null);
+  const supplyChanged=kind==='printing'&&(snapshot?.value.productionSupplyRevision||null)!==(supplyRevision||null);
   let payload;
-  if (!snapshot || moveChanged || supplyChanged || url.searchParams.get("refresh") === "1" || store.now() - snapshot.at >= cloudConfig(bindings).snapshotMaxAgeMs) {
+  const expired = snapshot && store.now() - snapshot.at >= cloudConfig(bindings).snapshotMaxAgeMs;
+  if (snapshot && kind === "printing" && url.searchParams.get("view") === "last-confirmed" &&
+      !url.searchParams.has("refresh") && (expired || moveChanged || supplyChanged)) {
+    payload = { ...snapshot.value, stale: true, refreshOnOpen: true, refreshFailed: false,
+      snapshotAt: new Date(snapshot.at).toISOString(), refreshInProgress: true,
+      staleReason: "Обновляем данные. Пока показан последний подтверждённый состав." };
+  } else if (!snapshot || moveChanged || supplyChanged || url.searchParams.get("refresh") === "1" || expired) {
     try {
       payload = await refreshSnapshot(kind, bindings, store, options);
       if (kind === "printing") options.onFreshPrinting?.(payload);
@@ -414,15 +405,7 @@ export async function readSnapshot(kind, url, bindings, store, options) {
       };
     }
   } else payload = { ...snapshot.value, stale: false, snapshotAt: new Date(snapshot.at).toISOString(), refreshFailed: false, refreshInProgress: false };
-  const v2=await readAssemblyV2Events(store);
-  if (kind !== "assembly") return kind==='printing'?overlayPrintingV2(payload,v2):payload;
-  payload=overlayAssemblyV2(payload,v2);
-  const selected = selectAssemblyPeriod(
-    payload,
-    url.searchParams.get("date") || todayMoscow(),
-    url.searchParams.get("period") || "day",
-  );
-  return selected.stale === true ? { ...selected, staleSnapshot: true } : selected;
+  return kind === "printing" ? overlayPrintingV2(payload, await readAssemblyV2Events(store)) : payload;
 }
 
 export async function currentShipmentLockSnapshot(bindings, store, { fetcher = fetch, refresh = refreshSnapshot, wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
@@ -449,9 +432,56 @@ export async function currentShipmentLockSnapshot(bindings, store, { fetcher = f
   return snapshot;
 }
 
+async function requirePrintingWorkspaceAccess(request,bindings,key) {
+  if (!request.headers.has('x-ritm-bridge-id')) return requireMaintenance(request,bindings,key);
+  if (typeof bindings[key] !== 'string' || bindings[key].length < 32) {
+    throw new CloudError('printing_access_disabled','Служебный доступ к печати не настроен.',403);
+  }
+  await verifyPrintingWorkspaceBridge(request,bindings);
+}
+
 export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {}) {
   const url = new URL(request.url), path = url.pathname;
   try {
+    if (path === '/api/printing-workspace-feed') {
+      methods(request,['GET']);
+      await requirePrintingWorkspaceAccess(request,bindings,'RITM_PRINTING_WORKSPACE_TOKEN');
+      const sourceUrl = new URL('/api/printing',url);
+      const store = new CloudStore(bindings.DB);
+      const firstScreen = url.searchParams.get('boot') === '1' && !url.searchParams.has('supply');
+      const supplyPreview = url.searchParams.get('preview') === '1' && url.searchParams.has('supply');
+      const fresh = url.searchParams.get('fresh') === '1' && !url.searchParams.has('supply');
+      if (fresh) sourceUrl.searchParams.set('refresh','1');
+      const load = () => readSnapshot('printing',sourceUrl,bindings,store,{fetcher});
+      return await printingWorkspaceFeed(url,bindings,fetcher,async () => {
+        if (supplyPreview || (firstScreen && ctx?.waitUntil)) {
+          const latest = await store.snapshot('printing');
+          if (latest) {
+            const stale = !!latest.value.stale || store.now()-latest.at >= cloudConfig(bindings).snapshotMaxAgeMs;
+            if (supplyPreview || fresh || stale) {
+              if (fresh && ctx?.waitUntil) ctx.waitUntil(load().catch(() => {}));
+              return {...latest.value,stale:fresh || stale,snapshotAt:new Date(latest.at).toISOString()};
+            }
+          }
+        }
+        return load();
+      },printingReadModel(store));
+    }
+    if (path === '/api/printing-workspace-write') {
+      methods(request,['POST']);
+      await requirePrintingWorkspaceAccess(request,bindings,'RITM_PRINTING_WORKSPACE_WRITE_TOKEN');
+      const sourceUrl = new URL('/api/printing',url);
+      const store = new CloudStore(bindings.DB);
+      return await printingWorkspaceWrite(request,bindings,fetcher,
+        () => readSnapshot('printing',sourceUrl,bindings,store,{fetcher}),
+        () => {
+          if (!ctx?.waitUntil) return;
+          const refreshUrl = new URL(sourceUrl);
+          refreshUrl.searchParams.set('refresh','1');
+          ctx.waitUntil(readSnapshot('printing',refreshUrl,bindings,store,{fetcher}).catch(() => {}));
+        },printingReadModel(store),
+      );
+    }
     if (path === '/api/assembly-v2/feed') return await assemblyV2Feed(request, bindings, new CloudStore(bindings.DB));
     if (path === '/api/assembly-v2/refresh') {
       const store = new CloudStore(bindings.DB);
@@ -529,24 +559,31 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
         if (request.method !== "GET") assertSameOrigin(request);
       } else requireOwner(request, bindings, { write: request.method !== "GET" });
     }
+    if (path === "/api/assembly") {
+      methods(request, ["GET"]);
+      return json(await readAssemblyV2Report(url, bindings, { fetcher }));
+    }
     const config = cloudConfig(bindings);
     if (!config.configured) throw new CloudError("cloud_not_configured", "Облачное подключение источников и хранилища ещё не настроено.");
     const store = new CloudStore(bindings.DB);
     if(path==='/api/printing/revision') {
       methods(request,['GET']);
-      const source=await store.snapshotInfo('printing'), revision=await store.readMeta('productionSupplyRevision')||0;
+      const [source, savedRevision] = await Promise.all([store.snapshotInfo('printing'), store.readMeta('productionSupplyRevision')]);
+      const revision = savedRevision || 0;
       const refreshNeeded=!source || source.at<revision;
       // A lightweight poll may retry durable deliveries, but never starts a
       // competing report scan while a supply write is running.
-      if(ctx?.waitUntil && !await store.leaseIsActive('production'))
+      if(ctx?.waitUntil && config.writesEnabled)
         ctx.waitUntil((async()=>{
+          // Coalesce background maintenance across all open RITM tabs.
+          const now = store.now();
+          const slot = await store.db.prepare("insert into cloud_state(key,value,updated_at) values('printingRecoveryPoll','true',?) on conflict(key) do update set updated_at=excluded.updated_at where cloud_state.updated_at<=?")
+            .bind(now,now-15000).run();
+          if (slot.meta?.changes !== 1 || await store.leaseIsActive("production")) return;
           await recoverPendingBoxRemoval(bindings,store,{fetcher}).catch(()=>{});
           await recoverPendingRollRemovals(bindings,store,fetcher).catch(()=>0);
           await updateAssemblyAfterSupplyWrite(bindings,store,fetcher);
-          if (!refreshNeeded) {
-            await drainOutbox(bindings,store,fetcher).catch(()=>{});
-          }
-        })());
+        })().catch(()=>{}));
       return json({ok:true,revision:`${revision}:${source?.at||0}`,refreshNeeded});
     }
     if(path==='/api/assembly-v2/delivery'){
@@ -656,23 +693,8 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
     if (path === '/api/bitrix-setup/greeting') {
       methods(request, ['POST']);
       if (principal?.role !== 'owner') throw new CloudError('owner_required','Отправка доступна владельцу RITM.',403);
-      const id = 'greeting-chat26688-20261106';
-      const claim = await store.withScope(async scope => {
-        const previous = scope.operations.get(`bitrix-greeting:${id}`)?.value;
-        if (previous) return { previous };
-        const saved = scope.meta('bitrixNotificationConfig');
-        if (!saved) throw new CloudError('bitrix_not_configured','Сначала сохраните подключение.',409);
-        const cfg = await decryptBitrixConfig(bindings,saved);
-        if (cfg.RITM_BITRIX_ROLL_CHAT !== 'chat26688') throw new CloudError('bitrix_wrong_chat','Выбран другой чат. Отправка остановлена.',409);
-        scope.putOperation('bitrix-greeting',{id,status:'sending',createdAt:new Date().toISOString()});
-        await scope.checkpoint();
-        return {cfg};
-      });
-      if (claim.previous) return json({ok:true,status:claim.previous.status});
-      const message = '🦎 [B]Всем привет! Я Аркадий.[/B]\n\nТеперь я буду помогать вам не пропускать новые задания из RITM.\n\nКогда менеджер создаст поставку или добавит товары в запасы, я напишу сюда:\n\n📦 название поставки или назначение задания;\n🖨️ сколько артикулов и штук направлено в рулонную печать;\n📦 сколько — в бокс;\n👤 кто добавил задание;\n🔗 ссылку, по которой можно открыть его в RITM.\n\nЕсли задание срочное, отмечу его отдельно, чтобы оно не затерялось среди остальных. 🔥\n\nЯ тут за порядком присматриваю. Если что — смотрю сразу в обе стороны, так что не спрячется даже самый маленький артикул! 😎';
-      const result = await sendBitrixNotification({...bindings,...claim.cfg},{department:'roll',message},fetcher);
-      await store.withScope(scope => scope.putOperation('bitrix-greeting',{id,status:result.status,createdAt:new Date().toISOString()}));
-      return json({ok:true,status:result.status});
+      const previous = (await store.scope()).operations.get('bitrix-greeting:greeting-chat26688-20261106')?.value;
+      return json({ok:true,status:previous?.status || 'superseded'});
     }
     if (path === '/api/bitrix-setup/test') {
       methods(request, ['POST']);
@@ -680,8 +702,8 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
       const saved = (await store.scope()).meta('bitrixNotificationConfig');
       if (!saved) throw new CloudError('bitrix_not_configured','Сначала сохраните подключение.',409);
       const cfg = await decryptBitrixConfig(bindings,saved);
-      const result = await sendBitrixNotification({...bindings,...cfg},{department:'roll',presentation:assignmentPresentation({kind:'production',title:'Тестовое сообщение · OZON МОСКВА 10_10',manager:principal?.displayName||'RITM',sections:[{department:'roll',articles:147,quantity:5020},{department:'box',articles:127,quantity:5325}],joke:'Тест оформления. Новая поставка не создавалась.'}),message:'🧪 [B]Тестовое сообщение — новая поставка не создавалась[/B]\nПример на основе существующей поставки.\n\n🦎 [B]Аркадий на связи![/B]\n\n📦 [B]Новое задание в производство[/B]\n📍 Поставка: [B]OZON МОСКВА 10_10[/B]\n\n🖨️ Рулонная печать: [B]147 арт. · 5020 шт.[/B]\n📦 Бокс: [B]127 арт. · 5325 шт.[/B]\n\n👤 Добавил(а): Кирилл\n\n[I]Задание приехало. Станки уже нервно улыбаются![/I]'},fetcher);
-      return json({ok:true,results:{shared:result.status}});
+      const result = await sendBitrixNotification({...bindings,...cfg},{department:'roll',presentation:assignmentPresentation({kind:'production',title:'Тестовое сообщение · OZON МОСКВА 10_10',manager:principal?.displayName||'RITM',sections:[{department:'roll',articles:147,quantity:5020},{department:'box',articles:127,quantity:5325}],joke:'Тест оформления. Новая поставка не создавалась.'})},fetcher,ARKADY_COMPLETION_RECIPIENTS[0]);
+      return json({ok:true,results:{private:result.status}});
     }
     if (path === '/api/arkady-reminder') {
       methods(request,['GET','POST']);
@@ -733,9 +755,7 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
       const scope=await store.scope(),services=await createServices(bindings,scope,{fetcher});
       if(!services.reader.configured||!services.writers?.roll)throw new CloudError('stock_reader_unavailable','Не удалось подключиться к базе и таблицам запасов.',503);
       try {
-        const [catalog,box,roll,photos]=await Promise.all([services.production.catalog(),readStockRows(services.reader,boxId,input.destination,undefined,'box'),readStockRows(services.reader,rollId,input.destination),findProductPhotos(services.reader,bindings,(input.lines||[]).map(line=>line.article)).catch(()=>new Map())]);
-        const preview=planStockAddition({destination:input.destination,lines:input.lines,catalog,existing:{box,roll}});
-        preview.changes=preview.changes.map(change=>({...change,photoUrl:photos.get(String(change.article).trim().toLocaleUpperCase('ru-RU'))||''}));
+        const preview=await services.stock().preview(input);
         return json({ok:true,preview});
       } catch(error) { if(error?.code)throw error;throw new CloudError('stock_preview_invalid',error instanceof Error?error.message:'Не удалось проверить список запасов.',409); }
     }
@@ -819,6 +839,8 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
       }
       const input = await readJson(request, 4096);
       if (!["lock", "unlock"].includes(input?.action)) throw new CloudError("shipment_lock_action_invalid", "Выберите, закрыть или открыть поставку.", 400);
+      if (!assemblyV2Configured(bindings) || !bindings.RITM_ASSEMBLY_V2_TARGET_TOKEN)
+        throw new CloudError("assembly_v2_unconfigured", "Связь с «RITM Сборка» не настроена. Замок не изменён.", 503);
       const shipmentIds = normalizeShipmentIds(input.shipmentIds);
       const currentSnapshot = await currentShipmentLockSnapshot(bindings, store, { fetcher });
       const active = activePrintingShipmentIds(currentSnapshot.value);
@@ -832,17 +854,21 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
           requestId: input.requestId,
           name: input.shipmentName,
           changedBy: principal?.displayName || principal?.username || "RITM",
-          deliver: (event) => deliverShipmentLockEvent(bindings, event, fetcher),
+          now: () => Math.max(store.now(), currentSnapshot.at + 1),
         });
         if (value.confirmed) appendAudit(scope, principal, path, { id: value.locks[0]?.eventId || "unchanged" });
         return value;
       });
+      if (ctx?.waitUntil) ctx.waitUntil(updateAssemblyAfterSupplyWrite(bindings, store, fetcher));
       return json({ ok: true, ...result }, result.confirmed ? 200 : 202);
     }
     if (path === "/api/assembly-stocks") {
       methods(request,["GET"]);
       const reader = new CloudSheetsReader(bindings,{fetcher});
-      return json(await readAssemblyStocks({reader,boxId:sourceId(bindings,'stockBoxPrintingId'),rollId:sourceId(bindings,'stockRollPrintingId')}));
+      const load = () => readAssemblyStocks({reader,boxId:sourceId(bindings,'stockBoxPrintingId'),rollId:sourceId(bindings,'stockRollPrintingId')});
+      return json(url.searchParams.get("view") === "forecast"
+        ? await forecastStocks(store,load,ctx?.waitUntil ? task=>ctx.waitUntil(task) : null,url.searchParams.get("refresh")==="1")
+        : await load());
     }
     if (path === "/api/assembly-only-catalog") {
       methods(request,["GET"]);
@@ -853,7 +879,7 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
       if(!source)throw new CloudError("catalog_supply_missing","Поставка недоступна.",409);
       const market=/^OZON/i.test(String(source.name||''))?'OZON':/^WB/i.test(String(source.name||''))?'WB':'';
       const articles=url.searchParams.getAll('article');
-      return json({ok:true,items:await findAssemblyCatalog(new CloudSheetsReader(bindings,{fetcher}),bindings,market,articles)});
+      return json({ok:true,items:await readAssemblyItemCatalog(bindings,market,articles,fetcher)});
     }
     if (path === "/api/assembly-only-items") {
       methods(request, ["GET", "POST"]);
@@ -900,9 +926,16 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
       if (input.explicitImportApproval !== true) throw new CloudError("import_confirmation_required", "Подтвердите импорт проверенного снимка.", 400);
       return json(await importMigration(input.envelope, bindings, store));
     }
-    if (path === "/api/printing" || path === "/api/assembly") {
+    if (path === "/api/printing") {
       methods(request, ["GET"]);
-      return json(await readSnapshot(path.endsWith("printing") ? "printing" : "assembly", url, bindings, store, {
+      if (url.searchParams.get("view") === "work") {
+        if (!["owner", "manager"].includes(principal?.role))
+          throw new CloudError("manager_required", "Журнал печати доступен в RITM владельцу и менеджеру.", 403);
+        const month = url.searchParams.get("month");
+        if (!isPrintingWorkMonth(month)) throw new CloudError("printing_work_month_invalid", "Укажите месяц журнала.", 400);
+        return json(await readD1PrintingWork(bindings, store, month, fetcher));
+      }
+      return json(await readSnapshot("printing", url, bindings, store, {
         fetcher, onFreshPrinting: ctx?.waitUntil && (principal?.role === "owner" || principal?.role === "manager")
           ? report => ctx.waitUntil(reconcileProductionTabs(bindings, store, report, fetcher).catch(() => {})) : null,
       }));
@@ -916,6 +949,15 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
         department: url.searchParams.get("department"), sheetId: Number(url.searchParams.get("sheetId")), name: url.searchParams.get("name"),
       };
       return json(await productionTabVisibility(input, { bindings, store, fetcher, change }));
+    }
+    if (path === "/api/cloud/production-extensions") {
+      methods(request, ["POST"]);
+      if (!bridgeId && principal?.role !== "owner")
+        throw new CloudError("owner_required", "Импорт доступен только владельцу.", 403);
+      const input = await readJson(request, 90000);
+      if (input.explicitWriteApproval !== true || !Array.isArray(input.rows) || input.rows.length > 500)
+        throw new CloudError("production_extensions_invalid", "Подтвердите пакет импорта расширений.", 400);
+      return json(await importAssemblyProductionExtensions(bindings, input.rows, fetcher));
     }
     if(path==='/api/warehouse/export'||path==='/api/warehouse/exports'){
       if(principal?.role!=='owner'&&principal?.role!=='manager')throw new CloudError('manager_required','Выгрузки доступны владельцу и менеджеру.',401);
@@ -936,7 +978,7 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
         });
       }catch(error){
         const cached=await store.snapshot('warehouse');
-        snapshot={...(cached?.value||{ok:true,schemaVersion:1,checkedAt:new Date(store.now()).toISOString(),cartons:[],stockCartons:[],cancelledCount:0,issues:[],catalogAvailable:true}),stale:true,staleReason:'Старый Assembly временно недоступен. Его свежий состав требует проверки.'};
+        snapshot={...(cached?.value||{ok:true,schemaVersion:1,checkedAt:new Date(store.now()).toISOString(),cartons:[],stockCartons:[],cancelledCount:0,issues:[],catalogAvailable:true}),stale:true,staleReason:'Архив сборки временно недоступен. Состав архивных коробов нужно проверить.'};
         delete snapshot.activeShipmentIds;delete snapshot.activeShipmentFingerprint;
       }
       const [dispatch, savedCartons] = await Promise.all([listWarehouseCartonDispatch(bindings.DB), listWarehouseDispatchSnapshots(bindings.DB)]);
@@ -1122,7 +1164,9 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
         ctx.waitUntil(updateAssemblyAfterSupplyWrite(bindings,store,fetcher));
       return json(result);
     }
-    const writePaths = ["/api/roll-supplies", "/api/roll-supplies/preview", "/api/assembly-transfers", "/api/assembly-transfers/preview"];
+    if (["/api/assembly-transfers", "/api/assembly-transfers/preview"].includes(path))
+      throw new CloudError("legacy_supply_delivery_disabled", "«RITM Сборка» получает поставки автоматически.", 410);
+    const writePaths = ["/api/roll-supplies", "/api/roll-supplies/preview"];
     if (writePaths.includes(path)) {
       methods(request, ["POST"]);
       const input = await readJson(request);
@@ -1150,7 +1194,6 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
         });
         let value;
         try {
-          if (path === "/api/assembly-transfers/preview") return { ok: true, preview: await services.transfer.preview(input) };
           await services.guard();
           if(reconcileMove){
             const op=await finalizeConfirmedProductionMove(input.operationId,{bindings,scope,services,fetcher});
@@ -1177,14 +1220,10 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
             if (!newSheets || !moveSupply || overlaps || moveSupply === (previous?.shipmentId || "RITM-SUPPLY-" + input.operationId))
               throw new CloudError("move_pending", "Сначала завершите сверку переноса артикула.", 409);
           }
-          if (path === "/api/assembly-transfers") value = await services.transfer.execute(input);
-          else {
-            if (!routedSupply && services.production.operations().some((op) => !["verified", "cancelled"].includes(op.status))) throw new CloudError("production_operation_pending", "Сначала завершите сверку общей поставки.", 409);
-            if (input?.action === "delete" && (scope.meta("productionSupplies") || []).some((supply) => supply.parts.some((part) => part.department === "roll" && part.sheetId === input.sheetId)))
-              throw new CloudError("linked_supply_delete_forbidden", "Это часть общей поставки. Удалите производственный участок через его действие.", 409);
-            value = routedSupply ? await services.production.execute(input) : await services.legacy.execute(input);
-            if (value.status !== "cancelled") services.queue.enqueue(value);
-          }
+          if (!routedSupply && services.production.operations().some((op) => !["verified", "cancelled"].includes(op.status))) throw new CloudError("production_operation_pending", "Сначала завершите сверку общей поставки.", 409);
+          if (input?.action === "delete" && (scope.meta("productionSupplies") || []).some((supply) => supply.parts.some((part) => part.department === "roll" && part.sheetId === input.sheetId)))
+            throw new CloudError("linked_supply_delete_forbidden", "Это часть общей поставки. Удалите производственный участок через его действие.", 409);
+          value = routedSupply ? await services.production.execute(input) : await services.legacy.execute(input);
           appendAudit(scope, principal, path, value);
           await scope.checkpoint();
           return { ok: true, operation: value };
@@ -1193,7 +1232,6 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
       if (result.operation && ctx?.waitUntil) ctx.waitUntil((async () => {
         await updateAssemblyAfterSupplyWrite(bindings,store,fetcher);
         if (!reconcileMove) {
-          await drainOutbox(bindings, store, fetcher).catch(() => {});
           await drainBitrixNotifications(bindings, store, fetcher).catch(() => {});
         }
       })().catch(() => {}));

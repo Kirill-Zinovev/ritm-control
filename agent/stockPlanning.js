@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { routeSupplyLines } from './productionSupplies.js';
+import { routeAssemblyCatalogLines, routeSupplyLines } from './productionSupplies.js';
 import { xeroxPlanRounding, xeroxSheetCount } from './xeroxQuantity.js';
 
 const keyOf = value => String(value || '').trim().toUpperCase().replace(/\(OZ\)$/u, '').trim();
@@ -92,7 +92,7 @@ export function planStockAddition({ destination, lines, catalog, existing }) {
     }
   }
   // Stocks are OZON-only: an absent OZON machine must not silently use WB.
-  const routed = routeSupplyLines([...combined.values()], 'OZON', {
+  const routed = Array.isArray(catalog) ? routeAssemblyCatalogLines([...combined.values()], catalog, 'OZON', {stock:true}) : routeSupplyLines([...combined.values()], 'OZON', {
     ...catalog, WB: [['Артикул', 'Вид станка по умолчанию']],
   });
   const changes = routed.map(line => {
@@ -100,15 +100,29 @@ export function planStockAddition({ destination, lines, catalog, existing }) {
     const key = keyOf(line.article), other = line.department === 'box' ? 'roll' : 'box';
     if (byDepartment[other].has(key)) return {...line, action:'skip', issue:'Артикул уже есть в другом участке; нужна сверка станка.'};
     const current = byDepartment[line.department].get(key);
-    if (!current) return {...line, action:'insert', previousQuantity:0, newQuantity:line.quantity};
-    const newQuantity = current.quantity + line.quantity;
+    const previousQuantity = current?.quantity ?? 0;
+    const newQuantity = previousQuantity + line.quantity;
     if (!Number.isSafeInteger(newQuantity)) throw new Error(`Сумма количества «${line.article}» слишком велика.`);
-    const rounding = xeroxRounding(current, newQuantity);
-    return {...line, action:'increase', row:current.row, previousQuantity:current.quantity, newQuantity, ...(rounding && {rounding})};
+    let format = current?.xerox;
+    if (line.assemblyCatalog && /^XEROX$/i.test(line.machine)) {
+      const fromCatalog = line.sheetsPerUnit && line.stockMultiplicity
+        ? {factor:line.sheetsPerUnit,multiplicity:line.stockMultiplicity}
+        : null;
+      if (!current && !fromCatalog)
+        return {...line,action:'skip',issue:'В справочнике Assembly не подтверждены листы на изделие и кратность Xerox.'};
+      if (current && (!format || (fromCatalog && (format.factor!==fromCatalog.factor || format.multiplicity!==fromCatalog.multiplicity))))
+        return {...line,action:'skip',issue:'Параметры Xerox в рабочей строке отличаются от справочника Assembly. Нужна сверка.'};
+      format = format || fromCatalog;
+    }
+    const rounding = format && xeroxRounding({quantity:previousQuantity,xerox:format}, newQuantity);
+    return {...line, action:current?'increase':'insert', ...(current && {row:current.row}), previousQuantity, newQuantity,
+      ...(rounding && {rounding})};
   });
   // Worksheet norms enter the fingerprint through the shown choices. Keep
   // signatures for unaffected lists compatible with the existing form.
   const sourcePlans = Object.fromEntries(Object.entries(existing).map(([department, rows]) =>
     [department, rows.map(({row, article, quantity}) => ({row, article, quantity}))]));
-  return { destination, marketplace:'OZON', changes, fingerprint:digest({destination, existing:sourcePlans, changes}) };
+  return { destination, marketplace:'OZON', changes, fingerprint:digest({
+    destination, existing:sourcePlans, changes:changes.map(({photoUrl,...change})=>change),
+  }) };
 }

@@ -83,7 +83,10 @@ export async function catalogSavePlan(store: SqlStore, payload: Record<string, u
       'Артикул, маркетплейс и уже указанный магазин определяют товар. Для другого товара создайте отдельную карточку.');
     check(shop === '1' || shop === '2', 'Выберите магазин 1 или 2.');
   }
-  const fields = Object.fromEntries(productFields.map(([key]) => [key, clean(input[key], 4000)]));
+  const fields = Object.fromEntries(productFields.map(([key]) => [
+    key, key === 'printExtension' ? clean(input[key] ?? before?.[key] ?? '', 32).toUpperCase() : clean(input[key], 4000),
+  ]));
+  check(/^[\p{L}\p{N}._-]*$/u.test(fields.printExtension), 'Проверьте расширение печати.');
   check(fields.name || assigningStore && !before?.name, 'Укажите название товара.');
   const units = input.unitsPerBox;
   check(units === null || Number.isSafeInteger(units) && units > 0 && units <= 10000000, 'Вместимость короба: целое число больше нуля.');

@@ -72,6 +72,13 @@ export function directionProgress(
     if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
       done += Math.min(value, order.quantity);
       known++;
+    } else if (
+      field === "packed" &&
+      typeof order.packedConfirmed === "number" &&
+      Number.isFinite(order.packedConfirmed) &&
+      order.packedConfirmed > 0
+    ) {
+      done += Math.min(order.packedConfirmed, order.quantity);
     }
   }
   const complete = orders.length > 0 && known === orders.length;
@@ -81,6 +88,7 @@ export function directionProgress(
     known,
     complete,
     percent: complete && plan > 0 ? Math.round((done / plan) * 100) : null,
+    lowerPercent: !complete && plan > 0 && done > 0 ? Math.floor((done / plan) * 100) : null,
   };
 }
 export function directionJobReady(job: DirectionJob) {

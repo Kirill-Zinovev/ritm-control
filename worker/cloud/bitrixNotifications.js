@@ -245,8 +245,11 @@ export function bitrixConfigured(bindings) {
   } catch { return false; }
 }
 
-export async function sendBitrixNotification(bindings, event, fetcher = fetch) {
-  if (!bitrixConfigured(bindings) || !departments.has(event.department)) return { status: 'not_configured' };
+export const ARKADY_COMPLETION_RECIPIENTS = Object.freeze(['1698', '2374']);
+
+export async function sendBitrixNotification(bindings, event, fetcher = fetch, dialogId = bindings.RITM_BITRIX_ROLL_CHAT) {
+  if (!bitrixConfigured(bindings) || !departments.has(event.department) ||
+      (dialogId !== bindings.RITM_BITRIX_ROLL_CHAT && !ARKADY_COMPLETION_RECIPIENTS.includes(dialogId))) return { status: 'not_configured' };
   let card=null;
   if(bindings.ASSETS&&event.presentation){
     // A preparation failure is safe to fall back from: no Bitrix request exists
@@ -257,9 +260,9 @@ export async function sendBitrixNotification(bindings, event, fetcher = fetch) {
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
     const payload=card?{
-      botId:Number(bindings.RITM_BITRIX_BOT_ID),botToken:bindings.RITM_BITRIX_BOT_TOKEN,dialogId:bindings.RITM_BITRIX_ROLL_CHAT,
+      botId:Number(bindings.RITM_BITRIX_BOT_ID),botToken:bindings.RITM_BITRIX_BOT_TOKEN,dialogId,
       fields:{name:`arkady-${event.presentation.type}.png`,content:pngBase64(card.png),message:card.caption},
-    }:{BOT_ID:Number(bindings.RITM_BITRIX_BOT_ID),CLIENT_ID:bindings.RITM_BITRIX_BOT_TOKEN,DIALOG_ID:bindings.RITM_BITRIX_ROLL_CHAT,...arkadyMessageFields(event),URL_PREVIEW:'N'};
+    }:{BOT_ID:Number(bindings.RITM_BITRIX_BOT_ID),CLIENT_ID:bindings.RITM_BITRIX_BOT_TOKEN,DIALOG_ID:dialogId,...arkadyMessageFields(event),URL_PREVIEW:'N'};
     const response = await fetcher(`${bindings.RITM_BITRIX_WEBHOOK_URL}${card?'imbot.v2.File.upload':'imbot.message.add'}`, {
       method: 'POST', redirect: 'manual', signal: controller.signal,
       headers: { 'content-type': 'application/json' },
@@ -269,7 +272,7 @@ export async function sendBitrixNotification(bindings, event, fetcher = fetch) {
     if (response.ok && body?.result) {
       if(card){
         const result=body.result;
-        if(!Number.isSafeInteger(Number(result.messageId))||Number(result.messageId)<1||String(result.dialogId)!==bindings.RITM_BITRIX_ROLL_CHAT||!Number.isSafeInteger(Number(result.file?.id))||Number(result.file.id)<1)return {status:'uncertain'};
+        if(!Number.isSafeInteger(Number(result.messageId))||Number(result.messageId)<1||String(result.dialogId)!==dialogId||!Number.isSafeInteger(Number(result.file?.id))||Number(result.file.id)<1)return {status:'uncertain'};
         // File.upload has no urlPreview option. Update only the acknowledged
         // message to remove the large Sheets unfurl, preserving image + caption.
         // A cosmetic update failure must never turn an accepted send into a retry.
@@ -290,10 +293,18 @@ export async function sendBitrixNotification(bindings, event, fetcher = fetch) {
   finally { clearTimeout(timer); }
 }
 
+function notificationAudience(event) {
+  const id = event.id || '';
+  if (/^(?:stock:.*:(?:print|cut|complete):\d+|watch:.*:(?:print|cut|reminder))$/.test(id)) return null;
+  if (event.presentation?.type === 'completion' || /^(?:stock-batch|watch):.+:complete$/.test(id)) return 'private';
+  if (event.presentation?.type === 'assignment' || (!event.presentation && /^(?:stock|production):[^:]+:(?:shared|roll|box)$/.test(id))) return 'group';
+  return null;
+}
+
 export async function retireObsoleteBitrixNotifications(scope) {
   let changed=0;
   for (const item of scope.operations.values()) {
-    if (item.kind === 'bitrix-notification' && item.value.status === 'pending' && /^(?:stock:.*:(?:print|cut|complete):\d+|watch:.*:(?:print|cut))$/.test(item.value.id || '')) {
+    if (item.kind === 'bitrix-notification' && item.value.status === 'pending' && !notificationAudience(item.value)) {
       scope.putOperation('bitrix-notification', {...item.value,status:'superseded'});
       if (++changed % 40 === 0) await scope.checkpoint();
     }
@@ -318,23 +329,44 @@ export async function drainBitrixNotifications(bindings, store, fetcher = fetch)
     }
   };
   for (let i = 0; i < 8; i++) {
-    const event = await scoped(async scope => {
+    const delivery = await scoped(async scope => {
       if (scope.meta('bitrixNotificationsEnabled') === false) return null;
-      // Preserve old records, but never send a pending per-article completion
-      // after switching to whole-upload notifications.
       await retireObsoleteBitrixNotifications(scope);
       const row = [...scope.operations.values()].find(item => item.kind === 'bitrix-notification' && item.value.status === 'pending');
       if (!row) return null;
-      const claimed = { ...row.value, status: 'sending' };
-      scope.putOperation('bitrix-notification', claimed);
+      const event = row.value;
+      const personal = notificationAudience(event) === 'private';
+      const dialogId = personal
+        ? ARKADY_COMPLETION_RECIPIENTS.find(id => !event.deliveries?.[id]) : bindings.RITM_BITRIX_ROLL_CHAT;
+      if (!dialogId) return null;
+      if (personal) {
+        // Reserve each recipient before the network call. A lost acknowledgement
+        // for one recipient cannot replay it or prevent the other delivery.
+        const deliveries = { ...event.deliveries, [dialogId]: { status: 'sending' } };
+        const status = ARKADY_COMPLETION_RECIPIENTS.every(id => deliveries[id]) ? 'sending' : 'pending';
+        scope.putOperation('bitrix-notification', { ...event, deliveries, status });
+      } else {
+        scope.putOperation('bitrix-notification', { ...event, status: 'sending' });
+      }
       await scope.checkpoint();
-      return claimed;
+      return { event, dialogId, personal };
     });
-    if (!event) return;
-    const result = await sendBitrixNotification(bindings, event, fetcher);
+    if (!delivery) return;
+    const { event, dialogId, personal } = delivery;
+    const result = await sendBitrixNotification(bindings, event, fetcher, dialogId);
     await scoped(scope => {
       const current = scope.operations.get(`bitrix-notification:${event.id}`)?.value;
-      if (current?.status === 'sending') scope.putOperation('bitrix-notification', { ...current, ...result, updatedAt: new Date().toISOString() });
+      const updatedAt = new Date().toISOString();
+      if (!personal) {
+        if (current?.status === 'sending') scope.putOperation('bitrix-notification', { ...current, ...result, updatedAt });
+        return;
+      }
+      if (current?.deliveries?.[dialogId]?.status !== 'sending') return;
+      const deliveries = { ...current.deliveries, [dialogId]: { ...result, updatedAt } };
+      const statuses = ARKADY_COMPLETION_RECIPIENTS.map(id => deliveries[id]?.status);
+      const status = statuses.includes(undefined) ? 'pending' : statuses.includes('sending') ? 'sending'
+        : statuses.every(state => state === 'sent') ? 'sent' : 'uncertain';
+      scope.putOperation('bitrix-notification', { ...current, deliveries, status, updatedAt });
     });
   }
 }

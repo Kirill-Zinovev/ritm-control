@@ -66,7 +66,7 @@ function format(sheet: ExcelJS.Worksheet) {
   });
 }
 export function warehouseWorkbook(cartons:WarehouseCarton[],createdAt:string):ExcelJS.Workbook {
-  const book=new ExcelJS.Workbook();book.creator="Assembly";book.created=new Date(createdAt);
+  const book=new ExcelJS.Workbook();book.creator="RITM Сборка";book.created=new Date(createdAt);
   const boxes=book.addWorksheet("Складские короба");
   boxes.columns=[{header:"Короб",key:"label",width:18},{header:"Маркетплейс",key:"market",width:16},{header:"Магазин",key:"store",width:16},{header:"Статус",key:"state",width:16},{header:"Количество, шт.",key:"qty",width:20},{header:"Вложений",key:"itemCount",width:14},{header:"Закрыт",key:"closedAt",width:26}];
   const items=book.addWorksheet("Состав");
@@ -81,9 +81,9 @@ export function warehouseWorkbook(cartons:WarehouseCarton[],createdAt:string):Ex
   info.addRows([["Сформирован",createdAt],["Коробов",cartons.length],["Изделий",cartons.reduce((n,b)=>n+b.qty,0)],["Учёт","Запас на складе. Скачивание не меняет остатки, выработку или статус коробов."]]);
   book.worksheets.forEach(format);return book;
 }
-export function accountWorkbook(snapshot: WorkbookSource): ExcelJS.Workbook {
+export function accountWorkbook(snapshot: WorkbookSource, ozonCodes?: ReadonlyMap<string, string>): ExcelJS.Workbook {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = "Assembly";
+  workbook.creator = "RITM Сборка";
   workbook.created = new Date(snapshot.createdAt);
   const boxes = workbook.addWorksheet("Короба");
   boxes.columns = [
@@ -97,11 +97,19 @@ export function accountWorkbook(snapshot: WorkbookSource): ExcelJS.Workbook {
     { header: "Закрыт", key: "closedAt", width: 26 },
     { header: "ID короба", key: "id", width: 40 },
   ];
+  if (ozonCodes) {
+    const column = boxes.getColumn(boxes.columns.length + 1);
+    column.header = "ШК грузоместа Ozon";
+    column.key = "ozonCode";
+    column.width = 28;
+    column.numFmt = "@";
+  }
   for (const box of snapshot.payload.cartons)
     boxes.addRow({
       ...box,
       lines: box.items.length,
       dispatch: snapshot.payload.dispatch?.label || "",
+      ozonCode: ozonCodes?.get(box.id),
     });
   const contents = workbook.addWorksheet("Состав");
   contents.columns = [
@@ -152,7 +160,7 @@ export function accountWorkbook(snapshot: WorkbookSource): ExcelJS.Workbook {
 }
 export type Mapping = Partial<Record<keyof ExportRow, number>>;
 export const mappingLabels: Record<keyof ExportRow, string> = {
-  carton: "Номер короба в Assembly",
+  carton: "Номер короба в RITM Сборка",
   market: "Маркетплейс",
   store: "Магазин",
   destination: "Склад назначения",

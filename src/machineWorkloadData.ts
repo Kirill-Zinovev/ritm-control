@@ -79,6 +79,7 @@ export type WorkloadSupply = {
   plan: number;
   printed: Fact;
   articleCount: number;
+  stock?: boolean;
 };
 export function remaining(machine: { plan: number; printed: Fact }) {
   return machine.printed.complete && machine.printed.value !== null
@@ -150,10 +151,117 @@ function sourceMismatch(
     MACHINES.find((item) => item.id === machineId)?.label || machineId;
   return `Задание в ${sources.join(", ")}. По базе: ${machine} · ${target === "box" ? "бокс" : "рулонная печать"}. Переноса не было.`;
 }
+type WorkloadGroup = Omit<WorkloadSupply, "machines"> & {
+  departments: { id: Department; orders: LiveOrder[] }[];
+};
+
+function stockOutput(order: LiveOrder, phase: "print" | "cut") {
+  const recorded =
+    phase === "print" ? order.planningPrinted : order.planningCut;
+  const fallback = phase === "print" ? rollPrinted(order) : rollCut(order);
+  if (recorded === undefined) return fallback;
+  if (
+    typeof recorded !== "number" ||
+    !Number.isFinite(recorded) ||
+    recorded < 0
+  )
+    return fallback === order.quantity ? fallback : null;
+  if (recorded === 0) return fallback === order.quantity ? null : 0;
+  if (
+    !order.planningPhysicalUnits ||
+    !/^(?:xerox|ксерокс|x|х)$/i.test(
+      (order.sourceMachine || order.machine || "").trim(),
+    )
+  )
+    return recorded;
+  const sheets = order.sheetsInProduct ?? 0;
+  const multiplicity = order.multiplicity ?? 0;
+  if (sheets <= 0 || multiplicity <= 0)
+    return fallback === order.quantity ? fallback : null;
+  const pieces = (recorded * multiplicity) / sheets;
+  // Older box marks may use a different physical sheet unit. A completed
+  // checkbox confirms the plan even when the historical counter is higher.
+  return pieces <= order.quantity + 1e-6
+    ? Math.min(order.quantity, pieces)
+    : fallback === order.quantity
+      ? fallback
+      : null;
+}
+
+function stockWorkloadGroups(live: LivePrinting): WorkloadGroup[] {
+  const groups = new Map<string, { id: Department; orders: LiveOrder[] }>();
+  for (const [id, stock] of [
+    ["roll", live.stockRoll],
+    ["box", live.stockBox],
+  ] as const) {
+    if (stock?.status !== "available") continue;
+    for (const order of stock.orders) {
+      if (
+        order.archived ||
+        !order.article?.trim() ||
+        !Number.isFinite(order.quantity) ||
+        order.quantity <= 0
+      )
+        continue;
+      const key = `stock:${order.spreadsheetId || id}:${order.sheetId}`;
+      const group = groups.get(key) || { id, orders: [] };
+      const candidates = [
+        order.planningMachine || order.machine,
+        order.sourceMachine || order.machine,
+      ];
+      const machine = candidates
+        .map(resolveMachine)
+        .find((candidate) => candidate?.department === id);
+      const machineName =
+        machine?.label ?? order.sourceMachine ?? order.machine;
+      group.orders.push({
+        ...order,
+        sourceId: `${id}-printing`,
+        machine: machineName,
+        machineSource: "supply",
+        ...(id === "box"
+          ? {
+              printProgress: stockOutput(order, "print"),
+              cutProgress: stockOutput(order, "cut"),
+              remainingPrint: null,
+            }
+          : {}),
+      });
+      groups.set(key, group);
+    }
+  }
+  return [...groups].map(([key, group]) => {
+    const first = group.orders[0];
+    const department = group.id === "roll" ? "Рулонная печать" : "Бокс";
+    return {
+      key,
+      stock: true,
+      name: `Запасы · ${first.sheetName} · ${department}`,
+      market: null,
+      sourceId: first.sourceId!,
+      sheetId: first.sheetId,
+      departments: [group],
+      plan: group.orders.reduce((total, order) => total + order.quantity, 0),
+      printed: productionFact(group.orders.map(rollPrinted)),
+      articleCount: new Set(
+        group.orders.map((order) =>
+          order.article.trim().toLocaleUpperCase("ru-RU"),
+        ),
+      ).size,
+    };
+  });
+}
+
 export function buildMachineWorkload(
   live: LivePrinting | null,
+  { includeStock = false } = {},
 ): WorkloadSupply[] {
-  return buildProductionGroups(live)
+  const groups: WorkloadGroup[] = buildProductionGroups(live).map((supply) => ({
+    ...supply,
+    articleCount: supply.rows.length,
+  }));
+  if (live && includeStock) groups.push(...stockWorkloadGroups(live));
+  return groups
     .map((supply) => {
       const machines: WorkloadMachine[] = [];
       // This is a display grouping only: preserve original sheet identity and
@@ -236,7 +344,8 @@ export function buildMachineWorkload(
         machines,
         plan: supply.plan,
         printed: supply.printed,
-        articleCount: supply.rows.length,
+        articleCount: supply.articleCount,
+        ...(supply.stock && { stock: true }),
       };
     })
     .filter((supply) => supply.machines.length > 0);

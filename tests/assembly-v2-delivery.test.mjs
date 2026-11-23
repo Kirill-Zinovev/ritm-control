@@ -484,25 +484,36 @@ test("a targeted deletion needs the exact Assembly roster, not a matching row co
   assert.deepEqual(JSON.parse(delivery().receipt).positionReceipt.positionIds, [position]);
 });
 
-test("deleting a whole shipment waits for its empty active roster in Assembly", async t => {
+test("confirmed removal delivers the exact shipment independently of the snapshot and busy delivery queue", async t => {
   const { db } = fixture();
   t.after(() => db.close());
-  const now = Date.now(), store = new CloudStore(db, { now: () => now });
-  await store.withScope(scope => scope.meta("migrationReady", true));
-  const job = supplyDeliveryJob("production", {id:"delete-shipment",action:"deleteSupply",status:"verified",shipmentId:root}, now);
-  assert.equal(job.shipmentId, root);
+  let now = Date.now();
+  const store = new CloudStore(db, { now: () => now });
+  const shipmentId = "RITM-SUPPLY-00000000-0000-4000-8000-000000000001";
+  const operation = {id:"00000000-0000-4000-8000-000000000002",action:"deleteSupply",status:"verified",shipmentId};
+  const job = supplyDeliveryJob("production", operation, now);
+  assert.equal(job.shipmentId, shipmentId);
+  assert.equal(supplyDeliveryJob("production", {...operation,status:"partial"}, now), null);
+  assert.equal(supplyDeliveryJob("production", {...operation,action:"deletePart",survivors:[{}]}, now).shipmentId, null);
+  assert.equal(supplyDeliveryJob("production", {...operation,action:"deletePart",survivors:[]}, now).id, job.id);
   await db.prepare("INSERT INTO assembly_v2_supply_deliveries(id,shipment_id,created_at) VALUES(?,?,?)")
-    .bind(job.id, root, now).run();
-  const lease = await store.acquire("refresh:printing");
-  await store.saveSnapshot("printing",{ok:true,quality:{status:"valid"},issues:[],supplies:[],sheets:[]},lease,now);
-  await store.release(lease);
+    .bind(job.id, shipmentId, now).run();
+  const lease = await store.acquire("assembly-v2-delivery");
   const env = { ...bindings, RITM_ASSEMBLY_V2_TARGET_URL:"https://assembly-v2.zinovevkirill234.chatgpt.site",
     RITM_ASSEMBLY_V2_TARGET_TOKEN:"test", RITM_ASSEMBLY_V2_FEED_SECRET:secret };
-  await drainAssemblyV2(env, store, {fetcher:async (url, request) => {
+  const deletion = {eventId:job.id, shipmentId};
+  const deliver = retired => drainAssemblyV2(env, store, {fetcher:async (url, request) => {
     if (new URL(url).pathname === "/api/ritm/deliver") return Response.json({ok:true});
-    assert.deepEqual(JSON.parse(request.body).expectedShipmentIds, [root]);
-    return Response.json({status:"synced",sourceRevision:now,receipts:[],
-      positionReceipts:[{shipmentId:root,sourceRevision:now,positionIds:[]}]});
-  }});
-  assert.equal(db.db.prepare("SELECT delivered_at FROM assembly_v2_supply_deliveries WHERE id=?").get(job.id).delivered_at, now);
+    assert.equal(new URL(url).pathname, "/api/ritm/retire-shipments");
+    assert.deepEqual(JSON.parse(request.body), {deletions:[deletion]});
+    return Response.json({ok:true,retired});
+  },refresh:()=>assert.fail("Confirmed deletion needs no printing refresh")});
+  const row = () => db.db.prepare("SELECT * FROM assembly_v2_supply_deliveries WHERE id=?").get(job.id);
+  await deliver([{...deletion,shipmentId:root}]);
+  assert.equal(row().delivered_at, null);
+  now = row().next_attempt_at;
+  await deliver([deletion]);
+  assert.equal(row().delivered_at, now);
+  assert.deepEqual(JSON.parse(row().receipt), deletion);
+  await store.release(lease);
 });

@@ -1,0 +1,279 @@
+.manager-app > .warehouse-ozon {
+  padding-top: 0;
+  background: var(--surface);
+}
+.manager-app .warehouse-ozon .warehouse-tabs {
+  margin: 0 0 clamp(22px, 3.2vw, 46px);
+  padding-bottom: 0;
+}
+.manager-app .warehouse-ozon .warehouse-tabs .tab {
+  min-height: 68px;
+  border: 0;
+  border-radius: 0;
+  font-size: 16px;
+}
+.manager-app .warehouse-ozon .warehouse-tabs .tab[aria-pressed="true"] {
+  color: #1748da;
+  background: transparent;
+  box-shadow: inset 0 -3px 0 #245aec;
+}
+.ozon-shipments {
+  color: #101f39;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: clamp(22px, 2.8vw, 40px);
+}
+.ozon-page-head, .ozon-actions, .ozon-cargo-actions, .ozon-step-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.ozon-page-head { justify-content: space-between; gap: 16px; }
+.manager-app .ozon-page-head h1 {
+  font-size: clamp(30px, 3.25vw, 48px);
+  font-weight: 760;
+  letter-spacing: -0.04em;
+}
+.ozon-actions { gap: 10px; }
+.manager-app .ozon-page-head .button { min-height: 54px; padding-inline: 18px; font-size: 15px; }
+.manager-app .ozon-page-head .ozon-refresh { width: 54px; padding: 0; }
+.manager-app .ozon-page-head .primary { background: #1747ec; border-color: #1747ec; }
+
+.ozon-overview {
+  display: grid;
+  grid-template-columns: minmax(218px, 1.9fr) repeat(3, minmax(95px, 0.8fr)) minmax(244px, 2.35fr);
+  align-items: stretch;
+  padding: 28px 26px;
+  color: #fff;
+  background: #112343;
+  border-radius: 14px;
+}
+.ozon-batch-select {
+  display: grid;
+  align-content: center;
+  gap: 10px;
+  padding-right: 24px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.ozon-batch-select select {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  color: #fff;
+  color-scheme: dark;
+  background: #192e50;
+  border: 1px solid #8695ad;
+  border-radius: 9px;
+  padding: 9px 11px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+}
+.ozon-metric {
+  min-width: 0;
+  padding: 0 clamp(14px, 2.2vw, 32px);
+  border-left: 1px solid #586981;
+}
+.ozon-metric > span { color: #edf2fc; font-weight: 600; }
+.ozon-metric strong {
+  display: block;
+  padding-top: 3px;
+  font-size: clamp(29px, 3.8vw, 55px);
+  line-height: 1.13;
+  letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums;
+}
+.ozon-metric-progress { padding-right: 0; }
+.ozon-metric-progress > div { display: flex; align-items: center; gap: 18px; }
+.ozon-metric-progress strong { font-size: clamp(26px, 3.25vw, 46px); white-space: nowrap; }
+.ozon-metric-progress progress {
+  appearance: none;
+  flex: 1;
+  min-width: 36px;
+  height: 14px;
+  border: 1px solid #aab9d0;
+  border-radius: 5px;
+  overflow: hidden;
+  background: #1c3254;
+}
+.ozon-metric-progress progress::-webkit-progress-bar { background: #1c3254; }
+.ozon-metric-progress progress::-webkit-progress-value { background: #7297ff; }
+.ozon-metric-progress progress::-moz-progress-bar { background: #7297ff; }
+
+.manager-app .ozon-table-wrap { min-width: 0; border-color: #cedaeb; border-radius: 13px; container-type: inline-size; }
+.manager-app .ozon-table { min-width: 910px; table-layout: fixed; font-size: 16px; color: #101f39; }
+.ozon-table > :is(thead, tbody) > tr > :is(th, td) {
+  padding: 18px clamp(15px, 1.65vw, 25px);
+  border-color: #d9e3f2;
+}
+.ozon-table > :is(thead, tbody) > tr > :is(th, td):not(:last-child) {
+  border-right: 1px solid #e2e9f3;
+}
+.manager-app .ozon-table > thead th {
+  background: #f5f8fc;
+  color: #101f39;
+  font-size: 17px;
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.ozon-table > thead th:nth-child(1) { width: 27%; }
+.ozon-table > thead th:nth-child(2) { width: 11%; }
+.ozon-table > thead th:nth-child(3) { width: 12%; }
+.ozon-table > thead th:nth-child(4) { width: 21%; }
+.ozon-step-title { gap: 8px; flex-wrap: nowrap; }
+.ozon-step-title svg, .ozon-table .button svg { flex-shrink: 0; }
+.ozon-table > :is(thead, tbody) > tr > th small {
+  display: block;
+  color: #536781;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+  margin-top: 4px;
+}
+.ozon-table > thead th small { margin-left: 26px; }
+.ozon-cluster-row { height: 120px; }
+.manager-app .ozon-table .ozon-cluster-row > th {
+  background: #fff;
+  font-size: clamp(16px, 1.37vw, 20px);
+  color: inherit;
+  line-height: 1.24;
+  overflow-wrap: anywhere;
+}
+.ozon-table > tbody > tr:last-child > th { border-bottom: 0; }
+.ozon-quantity {
+  font-size: clamp(18px, 1.75vw, 25px);
+  letter-spacing: -0.025em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.manager-app .ozon-table .button {
+  min-height: 39px;
+  padding: 8px 11px;
+  font-size: 15px;
+}
+.manager-app .ozon-table .ozon-excel-button { color: #1446da; background: #f4f7ff; }
+.manager-app .ozon-table .ozon-excel-button:hover:enabled { background: #e9f0ff; }
+.ozon-cargo-actions { gap: 12px; justify-content: space-between; }
+.ozon-cargo-download { margin-top: 9px; }
+.ozon-status { display: inline-flex; align-items: center; gap: 7px; font-size: 14px; color: #405572; }
+.ozon-status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #8092aa; }
+.ozon-status[data-tone="ready"]::before { background: #229760; }
+.ozon-status[data-tone="waiting"]::before { background: #da940e; }
+.ozon-product-status { display: flex; margin-top: 6px; }
+
+.ozon-prepare-dialog .dialog-body, .ozon-preview { display: grid; gap: 16px; }
+.ozon-prepare-dialog .dialog-body > .button { justify-self: start; }
+.ozon-field, .ozon-preview-group > div { display: grid; gap: 7px; }
+.ozon-field { min-width: 0; font-weight: 600; }
+.ozon-field textarea { resize: vertical; min-height: 76px; font-weight: 400; }
+.ozon-preview-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: center;
+  gap: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+.ozon-preview summary { cursor: pointer; }
+.ozon-preview details p { margin-top: 6px; overflow-wrap: anywhere; }
+.ozon-details-row { background: #f7fafe; }
+.ozon-label-input {
+  position: sticky;
+  left: 12px;
+  width: min(58rem, 100%);
+  width: min(58rem, 100%, calc(100cqw - 2rem));
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 8px 26px #11234312;
+}
+.ozon-label-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 20px;
+  background: #112343;
+  color: #f7faff;
+}
+.ozon-label-header > svg { color: #bcd2ff; }
+.ozon-label-header h3 { font-size: clamp(18px, 2vw, 24px); }
+.ozon-label-header p { color: #dbe6fb; font-size: 13px; overflow-wrap: anywhere; }
+.ozon-label-count {
+  display: grid;
+  gap: 2px;
+  padding-left: 17px;
+  border-left: 1px solid #6a7891;
+}
+.ozon-label-count strong { color: #fff; font-size: 20px; font-variant-numeric: tabular-nums; }
+.ozon-label-body { display: grid; gap: 16px; padding: clamp(12px, 2.25cqw, 20px); }
+.ozon-label-methods {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 12px;
+}
+.ozon-label-method {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--canvas);
+}
+.ozon-label-method :is(h4, label), .ozon-label-review h4 { font-size: 15px; font-weight: 700; }
+.ozon-label-method h4, .ozon-label-review h4 { margin: 0; }
+.ozon-label-method h4 { display: flex; align-items: center; gap: 7px; }
+.ozon-label-method h4 svg { color: var(--blue); }
+.ozon-label-method p { font-size: 13px; overflow-wrap: anywhere; }
+.ozon-label-method .button { justify-self: start; margin-top: 3px; }
+.ozon-label-file { min-height: 1.25em; color: var(--ink); }
+.ozon-label-method textarea {
+  min-height: 76px;
+  resize: vertical;
+  font-variant-numeric: tabular-nums;
+}
+.ozon-label-review > p { margin: 2px 0 8px; font-size: 13px; }
+.ozon-label-footer { display: flex; justify-content: flex-end; }
+.ozon-pairs { max-height: 300px; }
+.manager-app .ozon-pairs table { min-width: 0; width: 100%; background: var(--surface); }
+.manager-app .ozon-pairs thead th { color: #465c78; background: var(--canvas); font-size: 13px; }
+.manager-app .ozon-pairs :is(th, td) { padding: 10px clamp(8px, 1.5cqw, 16px); }
+.manager-app .ozon-pairs tbody th {
+  color: var(--ink);
+  background: var(--surface);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.ozon-pairs code { color: #1640a2; font: inherit; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.ozon-pairs :is(td, th):last-child { text-align: right; font-variant-numeric: tabular-nums; }
+
+@container (max-width: 570px) {
+  .ozon-label-header { gap: 9px; padding: 12px; }
+  .ozon-label-count { grid-column: 2 / -1; display: flex; align-items: baseline; gap: 8px; padding: 0; border: 0; }
+  .ozon-label-count strong { font-size: 16px; }
+  .ozon-label-methods { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 900px) {
+  .ozon-overview {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px 0;
+    padding: 18px;
+  }
+  .ozon-batch-select, .ozon-metric-progress { grid-column: 1 / -1; padding: 0; }
+  .ozon-metric:nth-child(2) { border-left: 0; padding-left: 0; }
+  .ozon-metric-progress { border-left: 0; border-top: 1px solid #586981; padding-top: 12px; }
+}
+@media (max-width: 600px) {
+  .manager-app .warehouse-ozon .warehouse-tabs .tab { min-height: 42px; font-size: 12px; }
+  .manager-app .ozon-page-head .button { min-height: 42px; padding-inline: 10px; font-size: 13px; }
+  .manager-app .ozon-page-head .ozon-refresh { width: 40px; }
+  .ozon-page-head .ozon-actions { gap: 6px; }
+  .ozon-preview-group { grid-template-columns: 1fr; }
+}

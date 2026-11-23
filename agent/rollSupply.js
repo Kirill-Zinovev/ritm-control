@@ -961,6 +961,25 @@ export class RollSupplySheetsWriter {
         ),
       );
     else formulaRepairs.push(...rollDimensionFormulaRepairs(DATA_START_ROW, lines.length));
+    const catalogColumn = label => {
+      for (let column = 1; column <= this.layout.maxColumn; column++)
+        if (fold(entered(gridCell(sourceGrid, HEADER_ROW, column))) === fold(label)) return column;
+      fail("production_catalog_template_header", `В шаблоне не найдена колонка «${label}».`);
+    };
+    lines.forEach((line, index) => {
+      if (!line.catalogMachine) return;
+      const row = DATA_START_ROW + index;
+      const add = (column, formula) => formulaRepairs.push({
+        row, column, cell: columnName(column) + row, sourceCell: "E" + row, formula,
+      });
+      const textFormula = value => `="${value.replace(/"/g, '""')}"`;
+      add(catalogColumn("Станок"), textFormula(line.catalogMachine));
+      if (!this.box && line.store) add(catalogColumn("Магазин"), textFormula(line.store));
+      if (this.box && line.xeroxFactor && line.xeroxMultiplicity) {
+        add(catalogColumn("Кол-во листов"), `=${line.xeroxFactor}`);
+        add(catalogColumn("Кратность"), `=${line.xeroxMultiplicity}`);
+      }
+    });
     const formulas = formulaSignature(
       this.box ? boxWorklogFormulaGrid(sourceGrid,lines,clearThrough) : sourceGrid,
       DATA_START_ROW,

@@ -51,13 +51,16 @@ import {
 import { demoDataset, sources as sourceSeed } from "./demo";
 import {
   useLivePrinting,
+  useD1PrintingWork,
   printingDataset,
+  printingPeople,
+  printingWorkView,
   PRINTING_URL,
   ROLL_PRINTING_URL,
   PRINTERS,
 } from "./livePrinting";
 import { importFields, importRows } from "./importer";
-import { FBO_URL, useLiveAssembly } from "./liveAssembly";
+import { ASSEMBLY_URL, useLiveAssembly, type AssemblyDateRange } from "./liveAssembly";
 import { AssemblyAnalytics } from "./AssemblyAnalytics";
 import { DesignPreview } from "./DesignPreview";
 import { ProductionDashboard } from "./ProductionDashboard";
@@ -84,7 +87,7 @@ const AICenter = lazy(() => import("./AICenter").then((module) => ({ default: mo
 const StockWorkspace = lazy(() => import("./StockWorkspace"));
 const ArkadySettings = lazy(() => import("./ArkadySettings"));
 const HelpWorkspace = lazy(() => import("./HelpWorkspace"));
-const FirstVisitWelcome = lazy(() => import("./HelpWorkspace").then(module => ({default:module.FirstVisitWelcome})));
+const FirstVisitWelcome = lazy(() => import("./FirstVisitWelcome"));
 import { PrinterProfilePage, type PrinterRecord } from "./EmployeeProfiles";
 import {
   Badge,
@@ -119,7 +122,7 @@ const TITLES: Record<Page, string> = {
   assembly: "Сборщики",
   printing: "Печать",
   production: "Производство",
-  machines: "Загруженность станков",
+  machines: "Загрузка станков",
   stock: "Склад",
   reserves: "Запасы",
   supplies: "Поставки",
@@ -173,6 +176,7 @@ function download(name: string, text: string, type = "text/csv;charset=utf-8") {
 }
 function AppShell() {
   const cloudAuth = useCloudAuth();
+  const learningIdentity = [cloudAuth.role || "local", cloudAuth.username || cloudAuth.displayName || ""].join(":");
   const [page, setPage] = useState<Page>(() => pageForRole(initialPage(), cloudAuth.role));
   const [date, setDate] = useState(() =>
     new Intl.DateTimeFormat("en-CA", {
@@ -193,14 +197,19 @@ function AppShell() {
   const [real, setReal] = useState<Dataset>(() =>
     readStorage("ritm-real-v1", emptyDataset()),
   );
-  const live = useLivePrinting(page !== "intelligence");
+  const live = useLivePrinting(page !== "intelligence" && page !== "help");
+  const d1PrintingWork = useD1PrintingWork(page === "printing" && mode === "imported", date, period);
+  const printingReport = useMemo(() => printingWorkView(live.value, d1PrintingWork), [live.value, d1PrintingWork]);
   const refreshLivePrinting = useCallback(() => live.reload(true), [live.reload]);
+  const assemblyOnly = cloudAuth.mode === "cloud";
+  const [assemblyRange, setAssemblyRange] = useState<AssemblyDateRange>();
   const assemblyLive = useLiveAssembly(
     date,
     period,
     page === "assembly" || page === "overview" || page === "sources",
+    { assemblyOnly, range: assemblyOnly && page === "assembly" ? assemblyRange : undefined },
   );
-  const data = useMemo(() => mode === "demo" ? demo : printingDataset(real, live.value), [mode, demo, real, live.value]);
+  const data = useMemo(() => mode === "demo" ? demo : printingDataset(real, printingReport), [mode, demo, real, printingReport]);
   const [supplyFilter, setSupplyFilter] = useState("all");
   const [sources, setSources] = useState<Source[]>(() =>
     readStorage("ritm-sources-v1", sourceSeed),
@@ -333,7 +342,7 @@ function AppShell() {
       );
     }, 450);
   };
-  const printingKnown = mode === "demo" || !!live.value;
+  const printingKnown = mode === "demo" || !!printingReport;
   const activeSourceLoading = page === "stock" && stockView !== "stock" ? warehouse.loading : live.loading || (page === "overview" && mode === "imported" && assemblyLive.loading);
   const contains = (value: string) =>
     value.toLocaleLowerCase("ru").includes(query.toLocaleLowerCase("ru"));
@@ -364,7 +373,7 @@ function AppShell() {
           ? `${r.sourceId}::${r.sheetId}` === supplyFilter
           : r.source === supplyFilter)),
   );
-  const cuttingEvents = (live.value?.cutEvents || []).filter(
+  const cuttingEvents = (printingReport?.cutEvents || []).filter(
     (event) =>
       inPeriod(event.date, date, period) &&
       (site === "Все участки" || event.site === site) &&
@@ -391,7 +400,7 @@ function AppShell() {
   const area = rolls.reduce((s, r) => s + r.area, 0);
   const printerPeople =
     (mode === "imported"
-      ? PRINTERS
+      ? printingPeople(printingReport)
       : data.employees.filter((e) => rolls.some((r) => r.employee === e.id)))
       .filter((employee) => employee.id !== "printer-pavel");
   const activePrinterProfile = printerProfileId
@@ -401,7 +410,7 @@ function AppShell() {
     : null;
   const printerProfileRecords: PrinterRecord[] = activePrinterProfile
     ? mode === "imported"
-      ? (live.value?.events || [])
+      ? (printingReport?.events || [])
           .filter((event) => event.employee === activePrinterProfile.name)
           .map((event) => ({
             id: event.id,
@@ -645,6 +654,12 @@ function AppShell() {
     }
   };
   const sourceLink = (kind: Kind) => {
+    if (kind === "assembly" && assemblyOnly) return (
+      <a className="button secondary" href={ASSEMBLY_URL} target="_blank" rel="noreferrer">
+        <ArrowSquareOut size={17} />
+        Открыть RITM Сборку
+      </a>
+    );
     if (kind === "printing") {
       const linkedSources = live.value?.sources?.length
         ? live.value.sources
@@ -952,7 +967,7 @@ function AppShell() {
         className={
           page === "printing" && printerProfileId
             ? "is-printer-profile"
-            : page === "machines" ? "machine-workload-page" : undefined
+            : page === "machines" ? "machine-workload-page" : page === "help" ? "learning-page" : undefined
         }
       >
         <header className="page-header">
@@ -969,7 +984,7 @@ function AppShell() {
                 <span>Меню</span>
               </button>
               <h1>{TITLES[page]}</h1>
-              {page !== "intelligence" && page !== "arkady" && (
+              {page !== "intelligence" && page !== "arkady" && page !== "help" && (
                 <Badge
                   tone={
                     page === "assembly"
@@ -993,8 +1008,8 @@ function AppShell() {
                     ? assemblyLive.error
                       ? "Ошибка загрузки"
                       : assemblyLive.value
-                        ? "FBO подключено"
-                        : "Подключаю FBO"
+                        ? "Сборка подключена"
+                        : "Подключаю RITM Сборку"
                     : page === "production" || page === "machines"
                       ? live.error
                         ? "Ошибка источника"
@@ -1009,9 +1024,9 @@ function AppShell() {
                 </Badge>
               )}
             </div>
-            <p>{page === "stock" && stockView !== "stock" ? "Короба Assembly и их состав по поставкам" : SUBTITLES[page]}</p>
+            {page !== "help" && <p>{page === "stock" && stockView !== "stock" ? "Короба «RITM Сборка» и их состав по поставкам" : SUBTITLES[page]}</p>}
           </div>
-          {page !== "intelligence" &&
+          {page !== "help" && page !== "intelligence" &&
             page !== "assembly" &&
             page !== "production" && page !== "machines" && page !== "stock" && page !== "arkady" && (
               <div className="header-controls">
@@ -1045,12 +1060,12 @@ function AppShell() {
               </div>
             )}
         </header>
-        {page !== "intelligence" && page !== "assembly" && page !== "machines" && page !== "arkady" && (
+        {page !== "help" && page !== "intelligence" && page !== "assembly" && page !== "machines" && page !== "arkady" && (
           <div className="context-bar">
             {page !== "sources" && (
               <span>
                 {page === "stock" && stockView !== "stock" ? (
-                  mode === "demo" ? "Для просмотра коробов выберите рабочие данные." : warehouse.loading ? "Обновляю данные коробов…" : warehouse.error ? "Не удалось обновить короба." : warehouse.value ? `Короба Assembly · обновлено ${new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" }).format(new Date(warehouse.value.checkedAt))} · автообновление 5 мин при открытой вкладке` : "Подключаю короба Assembly…"
+                  mode === "demo" ? "Для просмотра коробов выберите рабочие данные." : warehouse.loading ? "Обновляю данные коробов…" : warehouse.error ? "Не удалось обновить короба." : warehouse.value ? `Короба «RITM Сборка» · обновлено ${new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" }).format(new Date(warehouse.value.checkedAt))} · автообновление 5 мин при открытой вкладке` : "Подключаю короба «RITM Сборка»…"
                 ) : page === "production" ? (
                   live.loading ? (
                     "Обновляю данные поставок и выпуска…"
@@ -1087,7 +1102,14 @@ function AppShell() {
           </div>
         )}
         {page === "intelligence" && <Suspense fallback={<section className="panel"><Empty title="Открываю AI Center">Загружаю раздел.</Empty></section>}><AICenter /></Suspense>}
-        {page === "help" && <Suspense fallback={<section className="panel"><Busy label="Открываю инструкции…" /></section>}><HelpWorkspace isOwner={cloudAuth.role === "owner"} go={go} /></Suspense>}
+        {page === "help" && <Suspense fallback={<section className="panel"><Busy label="Открываю обучение…" /></section>}>
+          <HelpWorkspace
+            key={learningIdentity}
+            identity={learningIdentity}
+            isOwner={cloudAuth.role === "owner"}
+            go={go}
+          />
+        </Suspense>}
         {(cloudAuth.role === "owner" || cloudAuth.role === "manager") && <Suspense fallback={null}><FirstVisitWelcome key={`${cloudAuth.role}:${cloudAuth.username || cloudAuth.displayName || 'owner'}`} identity={`${cloudAuth.role}:${cloudAuth.username || cloudAuth.displayName || 'owner'}`} onOpen={()=>go('help')} /></Suspense>}
         {page === "arkady" && <Suspense fallback={<section className="panel"><Busy label="Открываю настройки…" /></section>}><ArkadySettings /></Suspense>}
         {page === "reserves" && <Suspense fallback={<section className="panel"><Busy label="Загружаю запасы…" /></section>}><StockWorkspace /></Suspense>}
@@ -1176,12 +1198,12 @@ function AppShell() {
                           <small>
                             {s.id === "assembly"
                               ? assemblyLive.value
-                                ? "FBO подключено · " +
+                                ? "Сборка подключена · " +
                                   assemblyLive.value.rows.length +
                                   " сборщиков"
                                 : assemblyLive.loading
-                                  ? "Читаю FBO…"
-                                  : "Таблица FBO недоступна"
+                                  ? "Загружаю данные сборки…"
+                                  : "Отчёт сборки недоступен"
                               : s.state === "imported"
                                 ? `Загружено ${s.rows} строк`
                                 : s.url
@@ -1204,6 +1226,8 @@ function AppShell() {
         {page === "assembly" && (
           <AssemblyAnalytics
             value={assemblyLive.value}
+            assemblyOnly={assemblyOnly}
+            onRangeChange={setAssemblyRange}
             loading={assemblyLive.loading}
             error={assemblyLive.error}
             onRefresh={() => void assemblyLive.reload(true)}
@@ -1222,6 +1246,21 @@ function AppShell() {
           />
         ) : page === "printing" ? (
           <>
+            {d1PrintingWork?.state === "stale" && (
+              <Notice tone="warning">Журнал «RITM Печать» временно недоступен. Показана последняя подтверждённая выработка.</Notice>
+            )}
+            {d1PrintingWork?.state === "syncing" && (
+              <Notice tone="warning">Журнал «RITM Печать» обновляется. Итоги пока частичные.</Notice>
+            )}
+            {d1PrintingWork?.checkedAt && !live.value && (
+              <Notice tone="warning">Пока показана выработка из «RITM Печать». Журналы таблиц загружаются.</Notice>
+            )}
+            {d1PrintingWork?.checkedAt && !!live.value && live.value.boxPrinting?.status !== "available" && (
+              <Notice tone="warning">Журнал Google Sheets по боксу недоступен. Показаны записи бокса из «RITM Печать».</Notice>
+            )}
+            {!!d1PrintingWork?.corrections && (
+              <Notice tone="warning">В журнале «RITM Печать» есть исправления прогресса без подтверждённого исполнителя.</Notice>
+            )}
             {mode === "imported" && live.value?.stale && (
               <Notice tone="warning">
                 {live.value.staleReason || "Данные печати устарели. Показан проверенный снимок."}{" "}
@@ -1242,7 +1281,7 @@ function AppShell() {
                 {live.value && "Показаны данные последнего успешного чтения."}
               </Notice>
             )}
-            {mode === "imported" && !live.value ? (
+            {mode === "imported" && !printingReport ? (
               <section className="panel">
                 <Empty
                   title={
@@ -1261,6 +1300,9 @@ function AppShell() {
                 {mode === "imported" && (
                   <div className="panel-heading">
                     <h2>Все поставки</h2>
+                    <a className="button secondary" href="https://assembly-v2.zinovevkirill234.chatgpt.site/?view=catalog" target="_blank" rel="noreferrer">
+                      Справочник товаров <ArrowSquareOut size={16} />
+                    </a>
                     <select
                       aria-label="Поставка печати"
                       value={supplyFilter}
@@ -1384,7 +1426,7 @@ function AppShell() {
                   </section>
                 </div>
                 </div>
-                {printingDepartment!=='roll'&&<BoxPrintingStats value={live.value} date={date} period={period} supplyFilter={supplyFilter} />}
+                {printingDepartment!=='roll'&&<BoxPrintingStats value={printingReport} date={date} period={period} supplyFilter={supplyFilter} />}
                 <div hidden={printingDepartment === "box"}>
                 {mode === "imported" && live.value && (
                   <section className="panel">
@@ -2060,7 +2102,7 @@ function AppShell() {
                             ? "Ошибка обновления"
                             : "Подключено"
                           : assemblyLive.loading
-                            ? "Читаю FBO…"
+                            ? "Загружаю данные сборки…"
                             : assemblyLive.error
                               ? "Нет связи"
                               : "Ожидает подключения"
@@ -2079,7 +2121,7 @@ function AppShell() {
                             : "Не подключено"}
                     </Badge>
                   </div>
-                  <h2>{s.name}</h2>
+                  <h2>{s.id === "assembly" && assemblyOnly ? "Сборщики · RITM Сборка" : s.name}</h2>
                   <p>
                     {s.id === "assembly"
                       ? "Операции, количества и нормы по сотрудникам."
@@ -2114,8 +2156,8 @@ function AppShell() {
                             ) +
                             " шт."
                           : assemblyLive.loading
-                            ? "Читаю FBO…"
-                            : "Ожидаю чтения FBO"}
+                            ? "Загружаю данные сборки…"
+                            : "Ожидаю данных сборки"}
                       </b>
                       {assemblyLive.value && (
                         <small>
@@ -2180,7 +2222,7 @@ function AppShell() {
                           disabled={assemblyLive.loading}
                           onClick={() => void assemblyLive.reload(true)}
                         >
-                          Обновить FBO
+                          Обновить отчёт сборки
                         </Button>
                       </>
                     ) : s.id === "printing" ? (
@@ -2296,11 +2338,11 @@ function AppShell() {
                 </div>
               </div>
             </section>
-            <Notice tone="warning">
+            {!assemblyOnly && <Notice tone="warning">
               Сводные KPI из «FBO итого» и подробные операции нельзя складывать
               между собой. В этой версии CSV сборщиков содержит только исходные
               операции.
-            </Notice>
+            </Notice>}
           </>
         )}
       </main>

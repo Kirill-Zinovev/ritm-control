@@ -106,13 +106,14 @@ function Stage({
   const available = availableOperations(p).includes(op);
   const plan = op === "packing" || op === "assembly" || p.cutOperation === op ? p.plan : 0;
   const ratio = plan > 0 ? p[op] / plan : 0;
+  const progress = plan > 0 ? `${number(p[op])} из ${number(plan)}` : `${number(p[op])} шт.`;
   return (
     <div
       className={`stage stage-${op} ${available ? "" : "stage-na"}`}
       data-stage={operationLabels[op]}
-      aria-label={`${operationLabels[op]}: ${available ? `${number(p[op])} из ${number(plan)}` : "не требуется"}`}
+      aria-label={`${operationLabels[op]}: ${available ? progress : "не требуется"}`}
     >
-      {available ? (
+      {available && plan > 0 ? (
         <>
           <div className="stage-top">
             <div className="stage-number">
@@ -132,6 +133,8 @@ function Stage({
             </div>
           ) : null}
         </>
+      ) : available ? (
+        <div className="stage-number">{number(p[op])} <span>шт.</span></div>
       ) : (
         "—"
       )}

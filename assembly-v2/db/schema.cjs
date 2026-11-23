@@ -277,6 +277,10 @@ const catalogAliases = sqliteTable(
     ),
   ],
 );
+const printExtensions = sqliteTable("av2_print_extensions", {
+  sku: text("sku").primaryKey(),
+  extension: text("extension").notNull(),
+});
 const catalogPhotos = sqliteTable(
   "av2_catalog_photos",
   {
@@ -560,6 +564,7 @@ module.exports = {
   catalogEntries,
   catalogAliases,
   catalogPhotos,
+  printExtensions,
   catalogFiles,
   photoCache,
   catalogReferences,

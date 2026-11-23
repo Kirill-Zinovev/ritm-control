@@ -2,6 +2,59 @@ import {warehouseWorkQty} from "./warehouse-splits";
 import type { SqlStore, Statement } from "./database";
 import type { Work } from "../shared/model";
 import { effectiveCatalogData, positionCatalogJoin } from "./catalog-store";
+const workRows = `
+  select w.id,w.position_id,w.employee_id,w.employee_name employee,w.operation,w.qty,w.norm,w.coefficient,w.created_at,p.sku,p.name,s.title supply,w.supply_id,s.is_demo,case when c.id is null then 0 else 1 end canceled,c.reason cancel_reason,'supply' scope,
+    (select json_extract(e.data,'$.kind') from av2_resolved_catalog_entries e where e.import_id=p.catalog_import_id and e.entry_id=p.catalog_entry_id limit 1) product_type,
+    p.external_id source_position_id,coalesce(s.origin_shipment_id,s.external_id) source_supply_id
+  from av2_work w join av2_positions p on p.id=w.position_id join av2_supplies s on s.id=w.supply_id left join av2_corrections c on c.work_id=w.id
+  union all
+  select w.id,'' position_id,r.employee_id,r.employee,'packing' operation,${warehouseWorkQty()} qty,w.norm,w.coefficient,w.created_at,r.sku,r.name,'На склад · '||c.market||' · Магазин '||c.store supply,'warehouse' supply_id,0 is_demo,case when w.canceled_at is null then 0 else 1 end canceled,w.cancel_reason,'warehouse' scope,w.product_type,'','warehouse'
+  from av2_warehouse_work w join av2_warehouse_receipts r on r.id=w.receipt_id join av2_warehouse_cartons c on c.id=r.carton_id
+  union all
+  select w.id,'' position_id,w.employee_id,w.employee,w.operation,w.qty,w.norm,w.coefficient,w.created_at,w.sku,w.name,'В запас · '||w.market||' · Магазин '||w.store supply,'warehouse' supply_id,0 is_demo,case when w.canceled_at is null then 0 else 1 end canceled,w.cancel_reason,'warehouse' scope,w.product_type,'','warehouse'
+  from av2_stock_cut_work w
+`;
+
+const endOfDayMs = 24 * 60 * 60 * 1000;
+const reportPageSize = 1500;
+function moscowMidnight(day: string | null) {
+  if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  const noon = new Date(day + "T12:00:00Z");
+  if (!Number.isFinite(noon.getTime()) || noon.toISOString().slice(0, 10) !== day) return null;
+  return Date.parse(day + "T00:00:00+03:00");
+}
+
+export async function readRitmWorkReport(store: SqlStore, url: URL) {
+  const from = moscowMidnight(url.searchParams.get("from"));
+  const through = moscowMidnight(url.searchParams.get("to"));
+  const after = url.searchParams.get("after");
+  const afterId = url.searchParams.get("id");
+  const hasCursor = after !== null || afterId !== null;
+  if (from === null || through === null || from > through ||
+      (hasCursor && (!after || !/^\d{4}-\d{2}-\d{2}T\d\d:\d\d:\d\d\.\d{3}Z$/.test(after)
+        || !Number.isFinite(Date.parse(after)) || !afterId || afterId.length > 300)))
+    return null;
+  const first = new Date(from).toISOString(), end = new Date(through + endOfDayMs).toISOString();
+  const [proof, rows] = await store.readBatch([
+    { sql: "select coalesce((select revision from av2_meta where id=1),0) revision", args: [] },
+    {
+      sql: `with work as (
+        select id,source_position_id position_id,employee_id,employee,operation,qty,norm,coefficient,sku,supply,source_supply_id supply_id,scope,product_type,
+          strftime('%Y-%m-%dT%H:%M:%fZ',created_at) created_at
+        from (${workRows}) where is_demo=0 and canceled=0
+      )
+      select * from work where created_at>=? and created_at<?${hasCursor ? " and (created_at>? or (created_at=? and id>?))" : ""}
+      order by created_at,id limit ?`,
+      args: [first, end, ...(hasCursor ? [after, after, afterId] : []), reportPageSize + 1],
+    },
+  ]);
+  const events = rows.slice(0, reportPageSize);
+  const last = events.at(-1);
+  return {
+    ok: true, schemaVersion: 1, revision: proof[0].revision, events,
+    next: rows.length > reportPageSize && last ? { at: last.createdAt, id: last.id } : null,
+  };
+}
 export async function readWorkHistory(store: SqlStore, url: URL) {
   const p = url.searchParams,
     page = Math.max(0, Math.min(10000, Number(p.get("page")) || 0)) | 0;
@@ -26,16 +79,7 @@ export async function readWorkHistory(store: SqlStore, url: URL) {
     filters.push("instr(upper(w.sku||' '||w.name),?)>0");
     args.push(search);
   }
-  const from = `from (
-    select w.id,w.position_id,w.employee_id,w.employee_name employee,w.operation,w.qty,w.norm,w.coefficient,w.created_at,p.sku,p.name,s.title supply,w.supply_id,s.is_demo,case when c.id is null then 0 else 1 end canceled,c.reason cancel_reason,'supply' scope
-    from av2_work w join av2_positions p on p.id=w.position_id join av2_supplies s on s.id=w.supply_id left join av2_corrections c on c.work_id=w.id
-    union all
-    select w.id,'' position_id,r.employee_id,r.employee,'packing' operation,${warehouseWorkQty()} qty,w.norm,w.coefficient,w.created_at,r.sku,r.name,'На склад · '||c.market||' · Магазин '||c.store supply,'warehouse' supply_id,0 is_demo,case when w.canceled_at is null then 0 else 1 end canceled,w.cancel_reason,'warehouse' scope
-    from av2_warehouse_work w join av2_warehouse_receipts r on r.id=w.receipt_id join av2_warehouse_cartons c on c.id=r.carton_id
-    union all
-    select w.id,'' position_id,w.employee_id,w.employee,w.operation,w.qty,w.norm,w.coefficient,w.created_at,w.sku,w.name,'В запас · '||w.market||' · Магазин '||w.store supply,'warehouse' supply_id,0 is_demo,case when w.canceled_at is null then 0 else 1 end canceled,w.cancel_reason,'warehouse' scope
-    from av2_stock_cut_work w
-  ) w ${filters.length ? "where " + filters.join(" and ") : ""}`;
+  const from = `from (${workRows}) w ${filters.length ? "where " + filters.join(" and ") : ""}`;
   const q = (sql: string, ...a: (string | number | null)[]): Statement => ({
     sql,
     args: a,

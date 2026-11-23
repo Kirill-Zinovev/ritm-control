@@ -1,4 +1,12 @@
 import type { Market } from "./model";
+export interface RitmSchedule {
+  readyAt: string | null;
+  packingAt: string | null;
+  shipAt: string | null;
+  urgent: boolean;
+  printed: boolean;
+  cut: boolean;
+}
 export interface RitmPosition {
   photoUrl?: string;
   unitsPerBox?: number | null;
@@ -18,6 +26,7 @@ export interface RitmSupply {
   title: string;
   market: Market;
   locked: boolean;
+  schedule?: RitmSchedule;
   positions: RitmPosition[];
 }
 export interface RitmIssue {

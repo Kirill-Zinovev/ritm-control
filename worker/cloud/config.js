@@ -1,5 +1,5 @@
 const documentId = /^[A-Za-z0-9_-]{20,100}$/;
-const keys = ["seasonalPrintingId", "rollPrintingId", "boxPrintingId", "catalogId", "fboSourceId", "assemblyDatabaseId"];
+const keys = ["seasonalPrintingId", "rollPrintingId", "boxPrintingId", "catalogId", "assemblyDatabaseId"];
 
 export function sourceId(bindings, key) {
   const name = "RITM_GOOGLE_" + key.replace(/[A-Z]/g, (letter) => "_" + letter).toUpperCase();

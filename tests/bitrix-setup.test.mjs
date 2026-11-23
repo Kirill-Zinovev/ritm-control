@@ -11,7 +11,7 @@ import { saveBitrixConfiguration } from '../worker/cloud/bitrixSettings.js';
 test('only the owner can save validated encrypted connection settings', async()=>{
   const db=new LocalD1();db.db.exec(cloudSchemaStatements().join(';\n'));
   const env={...bindings,DB:db,RITM_OWNER_USER_IDS:'owner',RITM_GOOGLE_READER_JSON:'{}',RITM_ASSEMBLY_SYNC_SECRET:'a'.repeat(64)};
-  const body=JSON.stringify({webhook:'https://kaleidoskop.bitrix24.ru/rest/1/fictionalkey/',clientId:'fictional-client-key'});
+  const body=JSON.stringify({webhook:'https://kaleidoskop.bitrix24.ru/rest/1/testhook0001/',clientId:'fictional-client-key'});
   const request=(id,origin='https://ritm.test')=>new Request('https://ritm.test/api/bitrix-setup',{method:'POST',headers:{'oai-authenticated-user-id':id,'content-type':'application/json',origin},body});
   let calls=0;const mock=async()=>{calls++;return Response.json({result:[5768]});};
   try {
@@ -23,12 +23,12 @@ test('only the owner can save validated encrypted connection settings', async()=
     assert.equal(calls,2);
     const stored=(await new CloudStore(db).scope()).meta('bitrixNotificationConfig');
     assert.ok(stored.ciphertext);
-    assert.equal(JSON.stringify(stored).includes('fictionalkey'),false);
+    assert.equal(JSON.stringify(stored).includes('testhook0001'),false);
     const settings = (method, id, body) => new Request('https://ritm.test/api/bitrix-settings',{method,headers:{'oai-authenticated-user-id':id,'content-type':'application/json',origin:'https://ritm.test'},...(body?{body:JSON.stringify(body)}:{})});
     assert.equal((await cloudApi(settings('GET','other'),env,{}, {fetcher:mock})).status,403);
     const before=await (await cloudApi(settings('GET','owner'),env,{}, {fetcher:mock})).json();
     assert.equal(before.configured,true);assert.equal(before.enabled,true);
-    assert.ok(!JSON.stringify(before).includes('fictionalkey'));
+    assert.ok(!JSON.stringify(before).includes('testhook0001'));
     const disabled=await (await cloudApi(settings('POST','owner',{enabled:false}),env,{}, {fetcher:mock})).json();
     assert.equal(disabled.enabled,false);
     const enabled=await (await cloudApi(settings('POST','owner',{enabled:true}),env,{}, {fetcher:mock})).json();
@@ -39,16 +39,15 @@ test('only the owner can save validated encrypted connection settings', async()=
     await cloudApi(settings('POST','owner',{chatId:'chat37628'}),env,{}, {fetcher:mock});
     await cloudApi(settings('POST','owner',{chatId:'chat26688'}),env,{}, {fetcher:mock});
     const greeting = () => new Request('https://ritm.test/api/bitrix-setup/greeting',{method:'POST',headers:{'oai-authenticated-user-id':'owner','content-type':'application/json',origin:'https://ritm.test'},body:'{}'});
-    let greetings=0;const greetFetch=async (_url,init)=>{greetings++;const msg=JSON.parse(init.body);assert.equal(msg.DIALOG_ID,'chat26688');assert.match(msg.MESSAGE,/Всем привет! Я Аркадий/);return Response.json({result:123});};
-    assert.equal((await (await cloudApi(greeting(),env,{}, {fetcher:greetFetch})).json()).status,'sent');
-    assert.equal((await (await cloudApi(greeting(),env,{}, {fetcher:greetFetch})).json()).status,'sent');
-    assert.equal(greetings,1);
+    let greetings=0;const greetFetch=async ()=>{greetings++;return Response.json({result:123});};
+    assert.equal((await (await cloudApi(greeting(),env,{}, {fetcher:greetFetch})).json()).status,'superseded');
+    assert.equal(greetings,0);
     await cloudApi(settings('POST','owner',{chatId:'chat37628'}),env,{}, {fetcher:mock});
     const check = new Request('https://ritm.test/api/bitrix-setup/test',{method:'POST',headers:{'oai-authenticated-user-id':'owner','content-type':'application/json',origin:'https://ritm.test'},body:'{}'});
     const delivered=[];
     const testResponse=await cloudApi(check,env,{}, {fetcher:async (_url,init)=>{delivered.push(JSON.parse(init.body));return Response.json({result:123});}});
-    assert.deepEqual((await testResponse.json()).results,{shared:'sent'});
-    assert.deepEqual(delivered.map(row=>row.DIALOG_ID),['chat37628']);
+    assert.deepEqual((await testResponse.json()).results,{private:'sent'});
+    assert.deepEqual(delivered.map(row=>row.DIALOG_ID),['1698']);
     assert.ok(delivered.every(row=>row.MESSAGE==='🦎 Аркадий'));
     assert.ok(delivered.every(row=>JSON.stringify(row.ATTACH).includes('Тестовое сообщение')));
     env.ASSETS={fetch:async()=>new Response(new Uint8Array([1,2,3]))};
@@ -65,7 +64,7 @@ test('confirmed production event is journaled, delivered once and survives reloa
   const db=new LocalD1();db.db.exec(cloudSchemaStatements().join(';\n'));
   const env={...bindings,DB:db,RITM_OWNER_USER_IDS:'owner',RITM_GOOGLE_READER_JSON:'{}',RITM_ASSEMBLY_SYNC_SECRET:'a'.repeat(64)};
   const store=new CloudStore(db);
-  const setup=new Request('https://ritm.test/api/bitrix-setup',{method:'POST',headers:{'oai-authenticated-user-id':'owner','content-type':'application/json',origin:'https://ritm.test'},body:JSON.stringify({webhook:'https://kaleidoskop.bitrix24.ru/rest/1/fictionalkey/',clientId:'fictional-client-key'})});
+  const setup=new Request('https://ritm.test/api/bitrix-setup',{method:'POST',headers:{'oai-authenticated-user-id':'owner','content-type':'application/json',origin:'https://ritm.test'},body:JSON.stringify({webhook:'https://kaleidoskop.bitrix24.ru/rest/1/testhook0001/',clientId:'fictional-client-key'})});
   try {
     assert.equal((await cloudApi(setup,env,{}, {fetcher:async()=>Response.json({result:[5768]})})).status,200);
     const op={id:'test-op',action:'create',status:'verified',name:'Тестовая поставка',steps:[{department:'roll',status:'verified',lines:[{quantity:8}]}]};
@@ -83,7 +82,7 @@ const settingsRequest = (body, owner='owner') => new Request('https://ritm.test/
   method: body ? 'POST' : 'GET', headers: {'oai-authenticated-user-id':owner, 'content-type':'application/json', origin:'https://ritm.test'},
   ...(body ? {body:JSON.stringify(body)} : {}),
 });
-const testConfig = {RITM_BITRIX_WEBHOOK_URL:'https://kaleidoskop.bitrix24.ru/rest/1/fictionalkey/',RITM_BITRIX_BOT_TOKEN:'fictional-client-key',RITM_BITRIX_BOT_ID:'5768',RITM_BITRIX_BOX_CHAT:'chat37626',RITM_BITRIX_ROLL_CHAT:'chat26688'};
+const testConfig = {RITM_BITRIX_WEBHOOK_URL:'https://kaleidoskop.bitrix24.ru/rest/1/testhook0001/',RITM_BITRIX_BOT_TOKEN:'fictional-client-key',RITM_BITRIX_BOT_ID:'5768',RITM_BITRIX_BOX_CHAT:'chat37626',RITM_BITRIX_ROLL_CHAT:'chat26688'};
 
 test('owner settings save during production work without changing its lease, outbox or phrase history', async()=>{
   const db=new LocalD1(); db.db.exec(cloudSchemaStatements().join(';\n'));
@@ -111,7 +110,7 @@ test('owner settings save during production work without changing its lease, out
     const scope=await store.scope();
     assert.equal(scope.meta('bitrixCompletionPraiseSequenceV2'),123);assert.equal(scope.meta('bitrixAssignmentJokeSequenceV2:normal'),456);
     assert.equal(scope.operations.get('bitrix-notification:lost-ack').value.status,'uncertain');assert.equal(scope.meta('productionSupplies')[0].id,'existing-production');
-    const encrypted=await store.readMeta('bitrixNotificationConfig');assert.equal(JSON.stringify(encrypted).includes('fictionalkey'),false);
+    const encrypted=await store.readMeta('bitrixNotificationConfig');assert.equal(JSON.stringify(encrypted).includes('testhook0001'),false);
     assert.equal((await cloudApi(settingsRequest({humorLevel:'off'},'manager'),env,{}, {fetcher:fake})).status,403);
     assert.equal((await cloudApi(settingsRequest({enabled:'false'}),env,{}, {fetcher:fake})).status,400);
     assert.equal((await cloudApi(settingsRequest({humorLevel:'off',enabled:true}),env,{}, {fetcher:fake})).status,400);

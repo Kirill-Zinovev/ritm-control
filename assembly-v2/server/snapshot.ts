@@ -14,9 +14,11 @@ import type { SqlStore, Statement } from "./database";
 import { effectiveWorkNorms, type ShiftNorm } from "../shared/work-norm";
 import { positionCatalogJoin } from "./catalog-store";
 import { groupDirections } from "../shared/directions";
+import type { RitmSchedule } from "../shared/ritm";
 
 type CartonRow = Omit<Snapshot["cartons"][number], "items" | "fill" | "qty">;
 type DispatchRow = Omit<Dispatch, "cartonIds"> & { cartonIds: string };
+type RosterRow = Omit<Supply, "schedule"> & { schedule?: string | null };
 // Catalog, connection settings and journal need names and filters, not every
 // carton composition and production position. Keep this read in one transaction.
 export async function readDirectorySnapshot(store: SqlStore): Promise<Snapshot> {
@@ -34,6 +36,25 @@ export async function readDirectorySnapshot(store: SqlStore): Promise<Snapshot> 
 }
 const usable =
   "s.is_demo=0 and exists(select 1 from av2_positions p where p.supply_id=s.id)";
+const rosterSql = `select s.id,s.external_id,s.origin_shipment_id,s.source_active,s.title,s.market,s.store,s.destination,s.source_version,
+  coalesce(json_extract(l.payload,'$.locked'),0) source_locked,
+  json_extract(l.payload,'$.schedule') schedule,
+  case when json_extract(l.payload,'$.schedule.packingAt') is not null and s.source_active=1
+    and exists(select 1 from av2_positions p where p.supply_id=s.id and p.source_active=1) then not exists(
+    select 1 from av2_positions p left join av2_position_totals t on t.position_id=p.id
+    where p.supply_id=s.id and p.source_active=1 and coalesce(t.packing,0)<p.plan
+  ) else 0 end packing_complete
+  from av2_supplies s left join av2_ritm_links l on l.shipment_id=s.origin_shipment_id
+  where ${usable} order by s.source_active desc,s.created_at desc,s.id desc limit 300`;
+function readRoster(rows: RosterRow[]): Supply[] {
+  return rows.map(({schedule, ...row}) => ({
+    ...row,
+    sourceActive: !!row.sourceActive,
+    sourceLocked: !!row.sourceLocked,
+    packingComplete: !!row.packingComplete,
+    ...(schedule ? { schedule: JSON.parse(schedule) as RitmSchedule } : {}),
+  }));
+}
 const selected = `coalesce((select s.id from av2_supplies s where ${usable} and s.id=?),
  (select s.id from av2_supplies s join av2_work w on w.supply_id=s.id where ${usable} and s.origin_shipment_id is not null order by w.created_at desc,w.id desc limit 1),
  (select s.id from av2_supplies s where ${usable} order by s.created_at desc,s.id desc limit 1))`;
@@ -45,7 +66,6 @@ export async function readWorkspaceSnapshot(
   directions = false,
   retry = 0,
 ): Promise<Snapshot> {
-  const rosterSql = `select s.id,s.external_id,s.origin_shipment_id,s.source_active,s.title,s.market,s.store,s.destination,s.source_version,coalesce(json_extract(l.payload,'$.locked'),0) source_locked from av2_supplies s left join av2_ritm_links l on l.shipment_id=s.origin_shipment_id where ${usable} order by s.source_active desc,s.created_at desc,s.id desc limit 300`;
   const seed = directions
     ? await store.readBatch([
         {
@@ -56,11 +76,7 @@ export async function readWorkspaceSnapshot(
       ])
     : null;
   const originalSupplies = seed
-    ? (seed[1].map((s) => ({
-        ...s,
-        sourceActive: !!s.sourceActive,
-        sourceLocked: !!s.sourceLocked,
-      })) as unknown as Supply[])
+    ? readRoster(seed[1] as RosterRow[])
     : [];
   const chosenSource = originalSupplies.find(
     (s) => s.id === seed?.[0][0].selectedSupplyId,
@@ -117,9 +133,7 @@ export async function readWorkspaceSnapshot(
       coalesce((select sum(t.packing) from av2_positions p join av2_position_totals t on t.position_id=p.id where p.supply_id=chosen.id),0) packed from chosen`,
       supplyId,
     ),
-    query(
-      `select s.id,s.external_id,s.origin_shipment_id,s.source_active,s.title,s.market,s.store,s.destination,s.source_version,coalesce(json_extract(l.payload,'$.locked'),0) source_locked from av2_supplies s left join av2_ritm_links l on l.shipment_id=s.origin_shipment_id where ${usable} order by s.source_active desc,s.created_at desc,s.id desc limit 300`,
-    ),
+    query(directions ? "select 1 where 0" : rosterSql),
     query(
       `select p.*,coalesce(t.cut,0) cut,coalesce(t.assembly,0) assembly,coalesce(t.packing,0) packing,coalesce(t.boxed,0) boxed,(select coalesce(sum(r.qty),0) from av2_warehouse_receipts r where r.position_id=p.id) warehouse_qty
       ,coalesce(json_extract(pc.value,'$.photoUrl'),(select o.url from av2_photo_overrides o where o.sku=upper(p.sku)),(select sp.url from av2_source_photos sp where sp.position_id=p.external_id and sp.sku=p.sku)) photo_url
@@ -150,7 +164,7 @@ export async function readWorkspaceSnapshot(
       coalesce(d.qty,(select coalesce(sum(a.qty),0) from av2_cartons c join av2_all_allocations a on a.carton_id=c.id and a.removed_at is null where c.dispatch_id=d.id)) qty
       from av2_dispatches d order by d.created_at desc,d.id desc limit 100`),
     query(
-      "select id,dispatch_id,kind,created_at from av2_exports order by created_at desc,id desc limit 100",
+      "select id,dispatch_id,kind,created_at from av2_exports where kind in ('account','template') order by created_at desc,id desc limit 100",
     ),
     query(
       `select a.id,a.carton_id,a.position_id,p.supply_id,s.title supply,coalesce(s.origin_shipment_id,s.external_id) external_supply_id,p.external_id external_position_id,
@@ -198,12 +212,7 @@ export async function readWorkspaceSnapshot(
       : { plan: meta.plan, packed: meta.packed },
     selectedSupplyId: meta.selectedSupplyId,
     // Selected metrics also remain present for an already-open v1 browser.
-    supplies: (directions ? navigationGroups : rows<Supply>(1))
-      .map((r) => ({
-        ...r,
-        sourceActive: !!r.sourceActive,
-        sourceLocked: !!r.sourceLocked,
-      }))
+    supplies: (directions ? navigationGroups : readRoster(rows<RosterRow>(1)))
       .map((s) =>
         s.id === meta.selectedSupplyId
           ? { ...s, plan: meta.plan, packed: meta.packed }

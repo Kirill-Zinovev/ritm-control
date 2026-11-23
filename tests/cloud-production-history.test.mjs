@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CloudStore } from '../worker/cloud/store.js';
 import { DEPARTMENTS, ProductionSupplyService } from '../agent/productionSupplies.js';
+import { createServices } from '../worker/cloud/services.js';
+import { buildAssemblyV2Feed } from '../worker/cloud/assemblyV2Feed.js';
 import { LocalD1 } from './helpers/d1-sqlite.mjs';
 import { cloudSchemaStatements } from './helpers/cloud-schema.mjs';
 
@@ -59,11 +61,13 @@ test('a new supply checkpoints only its own operation after a large production h
   } finally { db.close(); }
 });
 
-test('the real two-department supply service completes and deduplicates a request with a large D1 history', async () => {
+test('a closed two-department supply reaches its first Assembly feed already locked, with no old delivery', async () => {
   const {db, store} = fixture(), before = historyRows(db), writes = [];
   try {
     await store.withScope(async scope => {
+      scope.meta('migrationReady', true);
       let sheetId = 20000;
+      const written = new Map();
       const writers = Object.fromEntries(['roll', 'box'].map(department => {
         const sheets = new Map();
         return [department, {
@@ -74,26 +78,38 @@ test('the real two-department supply service completes and deduplicates a reques
             await scope.checkpoint();
             const saved = JSON.parse(db.db.prepare('SELECT payload FROM cloud_operations WHERE id=?').get(plan.operationId).payload);
             assert.equal(saved.steps.find(step => step.department === department).status, 'writing');
+            const lock = scope.operations.get('production-shipment-lock:RITM-SUPPLY-' + plan.operationId)?.value;
+            assert.equal(lock?.status, 'locked');
             writes.push(department); sheets.set(plan.sheetId, structuredClone(plan));
           },
           async verify(plan) { assert.ok(sheets.has(plan.sheetId)); return {calculations: []}; },
-          async publish(plan, manifest) { await scope.checkpoint(); sheets.get(plan.sheetId).manifest = {...manifest, ready: true}; },
+          async publish(plan, manifest) { await scope.checkpoint(); sheets.get(plan.sheetId).manifest = {...manifest, ready: true}; written.set(department, sheets.get(plan.sheetId)); },
           async manifest(id) { return sheets.get(id)?.manifest || null; },
         }];
       }));
-      const service = new ProductionSupplyService(scope, {writers, refreshAfterWrite: false});
-      service.catalog = async () => ({
-        WB: [['Артикул', 'Вид станка по умолчанию']],
-        OZON: [['Артикул', '', 'станок', 'магазин'], ['ROLL-TEST', '', '2-GO', '1'], ['BOX-TEST', '', 'XEROX', '1']],
-        extensions: [['Артикул', 'Расширение печати'], ['ROLL-TEST', 'A3']],
-      });
+      const {production:service} = await createServices({
+        RITM_ASSEMBLY_V2_TARGET_URL: 'https://assembly-v2.zinovevkirill234.chatgpt.site',
+        RITM_ASSEMBLY_V2_FEED_SECRET: '2'.repeat(64),
+        RITM_ASSEMBLY_V2_TARGET_TOKEN: 'test',
+        RITM_ASSEMBLY_SYNC_SECRET: '3'.repeat(64),
+      }, scope, {fetcher:async () => assert.fail('Closing a new supply requires no outbound preflight')});
+      service.writers = writers;
+      service.createCatalog = async () => [
+        {article: 'ROLL-TEST', primary: true, store: '1', machine: '2-GO', printExtension: 'A3', rollMultiplicity: '5'},
+        {article: 'BOX-TEST', primary: true, store: '1', machine: 'XEROX', printExtension: 'X', sheetsPerUnit: '1', xeroxMultiplicity: '4'},
+      ];
       const input = {
         action: 'create', operationId: crypto.randomUUID(), explicitWriteApproval: true, name: 'OZON isolated checkpoint test',
-        lines: [{article: 'ROLL-TEST', quantity: 10}, {article: 'BOX-TEST', quantity: 7}],
+        lockAfterCreate: true,
+        lines: [{article: 'ROLL-TEST', quantity: 7}, {article: 'BOX-TEST', quantity: 7}],
         planning: {readyAt: '2026-11-19T12:00:00.000Z', packingAt: '2026-11-21T14:00:00.000Z', shipAt: '2026-11-23T07:00:00.000Z'},
       };
       const preview = await service.preview(input);
-      const request = {...input, previewId: preview.id, xeroxRounding: [{article: 'BOX-TEST', direction: 'up'}]};
+      const request = {
+        ...input, previewId: preview.id,
+        rollRounding: [{article: 'ROLL-TEST', direction: 'down'}],
+        xeroxRounding: [{article: 'BOX-TEST', direction: 'up'}],
+      };
       assert.equal((await service.execute(request)).status, 'verified');
       await scope.checkpoint();
       assert.equal((await service.execute(request)).status, 'verified');
@@ -101,9 +117,25 @@ test('the real two-department supply service completes and deduplicates a reques
       assert.equal(scope.meta('productionSupplyOperations').length, before.length + 1);
       assert.equal(scope.meta('productionSupplyOperations').at(-1).id, input.operationId);
       assert.deepEqual(scope.meta('productionSupplies')[0].planning, input.planning);
+      const registry=scope.meta('productionSupplies')[0], now=Date.now();
+      const sheets=registry.parts.map(part=>({
+        sourceId:part.department+'-printing',spreadsheetId:part.documentId,sheetId:part.sheetId,name:registry.name,assemblyShipmentId:registry.id,
+      }));
+      const supplies=sheets.flatMap(sheet=>written.get(sheet.sourceId.split('-')[0]).lines.map((line,index)=>({
+        ...sheet,sheetName:sheet.name,row:5+index,rawUid:'test-'+line.article,article:line.article,quantity:line.quantity,
+      })));
+      const documents=Object.fromEntries(sheets.map(sheet=>[sheet.sourceId,sheet.spreadsheetId]));
+      const feed=buildAssemblyV2Feed({scope,now,documents,snapshot:{at:now,value:{
+        ok:true,quality:{status:'valid'},issues:[],sheets,supplies,productionSupplyRevision:scope.meta('productionSupplyRevision'),
+      }}});
+      assert.deepEqual(feed.issues,[]);
+      assert.equal(feed.supplies.length,1);
+      assert.equal(feed.supplies[0].locked,true);
+      assert.deepEqual(feed.supplies[0].positions.map(position=>position.quantity).sort((a,b)=>a-b),[5,8]);
     });
     assert.deepEqual(historyRows(db), before);
     assert.equal(db.db.prepare('SELECT count(*) n FROM assembly_v2_supply_deliveries').get().n, 1);
+    assert.equal(db.db.prepare('SELECT count(*) n FROM cloud_sync_events').get().n, 0);
   } finally { db.close(); }
 });
 

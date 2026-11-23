@@ -4,7 +4,7 @@ import { Button, Notice } from './ui';
 import './arkadySettings.css';
 
 type HumorLevel = 'off' | 'sometimes' | 'always';
-type Settings = { configured: boolean; enabled: boolean; humorLevel: HumorLevel; reminderHumorLevel: HumorLevel; chatId: string; pending: number; uncertain: number; lastSentAt: string | null };
+type Settings = { configured: boolean; enabled: boolean; humorLevel: HumorLevel; chatId: string; pending: number; uncertain: number; lastSentAt: string | null };
 
 export default function ArkadySettings() {
   const auth = useCloudAuth();
@@ -40,8 +40,8 @@ export default function ArkadySettings() {
     setBusy(true); setMessage(''); setError('');
     try {
       const result = await request('/api/bitrix-setup/test', {});
-      if (result.results?.shared === 'sent') setMessage('Тестовое сообщение отправлено в общий чат.');
-      else setError('Доставка не подтверждена. Проверьте чат перед повторной отправкой.');
+      if (result.results?.private === 'sent') setMessage('Тестовое сообщение отправлено Кириллу Зиновьеву.');
+      else setError('Доставка не подтверждена. Проверьте личный чат перед повторной отправкой.');
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось отправить тест.'); }
     finally { setBusy(false); }
   }
@@ -49,13 +49,6 @@ export default function ArkadySettings() {
     refreshSequence.current++;
     setBusy(true); setMessage(''); setError('');
     try { setSettings(await request('/api/bitrix-settings', {humorLevel})); setMessage('Степень юмора сохранена.'); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось сохранить настройку.'); }
-    finally { setBusy(false); }
-  }
-  async function changeReminderHumor(reminderHumorLevel: HumorLevel) {
-    refreshSequence.current++;
-    setBusy(true); setMessage(''); setError('');
-    try { setSettings(await request('/api/bitrix-settings', {reminderHumorLevel})); setMessage('Частота шуток в напоминаниях сохранена.'); }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось сохранить настройку.'); }
     finally { setBusy(false); }
   }
@@ -75,9 +68,9 @@ export default function ArkadySettings() {
       <div className="arkady-row"><div><h3>Общий чат</h3><p>{settings.chatId === 'chat37628' ? 'RITM · Рулонная печать' : 'Чат Битрикс24'} · {settings.chatId || 'не выбран'}</p><small>Сюда приходят задания для рулонной печати и бокса. Добавьте Аркадия в новый чат до изменения ID.</small>{editingChat && <form className="arkady-chat-form" onSubmit={saveChat}><label htmlFor="arkady-chat-id">ID чата</label><input id="arkady-chat-id" value={chatId} onChange={event=>setChatId(event.target.value)} placeholder="Например, chat12345" required pattern="chat[0-9]+" /><Button kind="primary" disabled={busy}>Сохранить чат</Button><Button type="button" onClick={()=>setEditingChat(false)} disabled={busy}>Отмена</Button></form>}</div><div className="arkady-chat-actions"><Button onClick={()=>{setChatId(settings.chatId);setEditingChat(true);}} disabled={busy || !settings.configured}>Изменить чат</Button><a href="https://kaleidoskop.bitrix24.ru/online/" target="_blank" rel="noreferrer">Открыть Битрикс24 ↗</a></div></div>
       <div className="arkady-row"><div><h3>Автоматические уведомления</h3><p>{settings.enabled ? 'Включены' : 'Отключены'}</p><small>{settings.enabled ? 'Аркадий сообщает о новых заданиях и подтверждённой готовности печати и порезки.' : 'Новые сообщения не создаются. Ранее ожидавшие отправки остаются в очереди.'}</small></div><Button onClick={toggle} disabled={busy || !settings.configured}>{settings.enabled ? 'Отключить' : 'Включить'}</Button></div>
       <div className="arkady-row"><div><h3>Степень юмора</h3><p>Как часто Аркадий добавляет шутки к заданиям.</p><small>Важные данные всегда остаются в сообщении. Уже использованные шутки не повторяются.</small></div><label className="arkady-humor"><span>Частота шуток</span><select value={settings.humorLevel || 'always'} onChange={event => void changeHumor(event.target.value as HumorLevel)} disabled={busy}><option value="off">Без шуток</option><option value="sometimes">Иногда — каждое третье сообщение</option><option value="always">Максимум — в каждом сообщении</option></select></label></div>
-      <div className="arkady-row"><div><h3>Юмор в напоминаниях</h3><p>Отдельная настройка для срочных заданий, ещё не взятых в работу.</p><small>Шутки не повторяются; когда они закончатся, напоминания продолжат приходить без них.</small></div><label className="arkady-humor"><span>Частота шуток в напоминаниях</span><select value={settings.reminderHumorLevel || 'off'} onChange={event => void changeReminderHumor(event.target.value as HumorLevel)} disabled={busy}><option value="off">Без шуток</option><option value="sometimes">Иногда — каждое третье напоминание</option><option value="always">В каждом напоминании</option></select></label></div>
+      <div className="arkady-row"><div><h3>Готовность печати и порезки</h3><p>Личные сообщения Кириллу Зиновьеву и Алексею Соломонову.</p><small>Напоминания о старте срочных заданий приостановлены.</small></div></div>
       <div className="arkady-row"><div><h3>Состояние отправки</h3><p>Ожидают: {settings.pending} · Не подтверждены: {settings.uncertain}</p><small>Неподтверждённые сообщения автоматически не повторяются, чтобы избежать дублей.</small></div><Button onClick={() => void refresh()} disabled={busy}>Обновить</Button></div>
-      <div className="arkady-actions"><Button kind="primary" onClick={sendTest} disabled={busy || !settings.configured}>Отправить тест в чат</Button><a href="/bitrix-setup" target="_blank" rel="noreferrer">Подключение и аватар ↗</a></div>
+      <div className="arkady-actions"><Button kind="primary" onClick={sendTest} disabled={busy || !settings.configured}>Отправить тест в личку Кириллу</Button><a href="/bitrix-setup" target="_blank" rel="noreferrer">Подключение и аватар ↗</a></div>
     </>}
   </section>;
 }

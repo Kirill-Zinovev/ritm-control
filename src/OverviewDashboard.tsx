@@ -68,7 +68,8 @@ export function OverviewDashboard({ live, liveError, assembly, assemblyError, da
   const work = (assembly?.history || []).filter((row) => inPeriod(row.date, date, period) && (row.machineCut > 0 || row.manualCut > 0 || row.packed > 0 || (row.coefficient ?? 0) > 0));
   const people = new Set(work.map((row) => row.identityKey || (row.employeeId ? `assembly:${row.employeeId}` : `fbo:${row.employee}`))).size;
   const contributions = work.flatMap((row) => row.sourceContributions || []);
-  const assemblyComplete = !!assembly && !assemblyError && !assembly.stale && !assembly.staleSnapshot && assembly.sources?.fbo.status === "available" && assembly.sources?.assembly.status === "available" && assembly.quality?.status !== "partial" && work.every((row) => !!row.sourceContributions?.length);
+  const assemblyOnly = assembly?.sourcePolicy?.mode !== "simultaneous";
+  const assemblyComplete = !!assembly && !assemblyError && !assembly.stale && !assembly.staleSnapshot && (assemblyOnly || assembly.sources?.fbo?.status === "available") && assembly.sources?.assembly.status === "available" && assembly.quality?.status !== "partial" && work.every((row) => !!row.sourceContributions?.length);
   const employeePacked = contributions.length || (assemblyComplete && !work.length) ? contributions.reduce((sum, source) => sum + source.packed, 0) : null;
   const employeeCoefficient = contributions.every((source) => source.coefficient !== null) && (contributions.length || (assemblyComplete && !work.length)) ? contributions.reduce((sum, source) => sum + (source.coefficient || 0), 0) : null;
   const overlap = work.some((row) => row.reconciliationStatus !== "clear");
@@ -107,8 +108,8 @@ export function OverviewDashboard({ live, liveError, assembly, assemblyError, da
         <p className="ov-panel-note">Задания не означают, что станок сейчас работает.</p>
       </section>
       <section className="ov-panel"><div className="ov-heading"><div><h2>Сборщики</h2><p>Результаты {periodName}</p></div><button type="button" className="ov-link" onClick={() => go("assembly")}>Все сборщики <ArrowRight size={17} /></button></div>
-        <div className="ov-team-stats"><Metric label="Сотрудники с записями" value={assembly && (work.length > 0 || assemblyComplete) ? num(people) : "—"} note={assemblyComplete ? "За выбранный период" : "По доступным данным"} icon={<Users size={22} />} /><Metric label="Упаковано" value={employeePacked === null ? "—" : `${num(employeePacked)} шт.`} note="FBO + Assembly" icon={<Package size={22} />} tone="teal" /><Metric label="Сумма коэффициентов" value={employeeCoefficient === null ? "—" : num(employeeCoefficient, 3)} note="FBO + Assembly" icon={<ChartBar size={22} />} /></div>
-        {assembly && (!assemblyComplete || overlap || bothSources) && <p className="ov-panel-note">{!assemblyComplete ? "Источники доступны частично. " : ""}{overlap || bothSources ? "Возможные повторы между источниками не вычитались." : ""}</p>}
+        <div className="ov-team-stats"><Metric label="Сотрудники с записями" value={assembly && (work.length > 0 || assemblyComplete) ? num(people) : "—"} note={assemblyComplete ? "За выбранный период" : "По доступным данным"} icon={<Users size={22} />} /><Metric label="Упаковано" value={employeePacked === null ? "—" : `${num(employeePacked)} шт.`} note={assemblyOnly ? "RITM Сборка" : "FBO + RITM Сборка"} icon={<Package size={22} />} tone="teal" /><Metric label="Сумма коэффициентов" value={employeeCoefficient === null ? "—" : num(employeeCoefficient, 3)} note={assemblyOnly ? "RITM Сборка" : "FBO + RITM Сборка"} icon={<ChartBar size={22} />} /></div>
+        {assembly && (!assemblyComplete || !assemblyOnly && (overlap || bothSources)) && <p className="ov-panel-note">{!assemblyComplete ? "Данные сборщиков требуют обновления. " : ""}{!assemblyOnly && (overlap || bothSources) ? "Возможные повторы между источниками не вычитались." : ""}</p>}
         {!assembly && <p className="ov-panel-note">{assemblyError || "Данные сборщиков пока недоступны."}</p>}
       </section>
     </div>

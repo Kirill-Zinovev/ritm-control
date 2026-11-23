@@ -13,6 +13,7 @@ import {
 } from "../worker/printing.js";
 import { privateGoogleSource } from "../worker/privateGoogleConfig.js";
 import { xeroxPlanRounding, xeroxSheetCount } from "./xeroxQuantity.js";
+import { quantityRounding } from "./quantityRounding.js";
 
 export const CATALOG_ID = privateGoogleSource("catalogId");
 export const DEPARTMENTS = Object.freeze({
@@ -84,6 +85,73 @@ export function shipmentMarketplace(name) {
   const ozon = /(?:^|[^\p{L}\p{N}])OZON(?=$|[^\p{L}\p{N}])/u.test(text);
   const wb = /(?:^|[^\p{L}\p{N}])WB(?=$|[^\p{L}\p{N}])/u.test(text);
   return ozon === wb ? null : ozon ? "OZON" : "WB";
+}
+
+export function routeAssemblyCatalogLines(lines, entries, name, {stock = false} = {}) {
+  const shopMatches = [...String(name).matchAll(/(?:магазин\s*([12])(?!\d)|(?<!\d)([12])\s*(?:[-‑–]\s*)?(?:й|ый)?\s*магазин)/giu)];
+  const shops = new Set(shopMatches.map(match => match[1] || match[2]));
+  const selectedShop = shops.size === 1 ? [...shops][0] : "";
+  const index = new Map();
+  for (const entry of entries) {
+    const matches = index.get(entry.article) || [];
+    matches.push(entry);
+    index.set(entry.article, matches);
+  }
+  const validValue = value => typeof value === "string" && !value.trim().startsWith("#") ? value.trim() : "";
+  const unique = (entries, key) => new Set(entries.map(entry => validValue(entry[key])));
+  return lines.map(line => {
+    const candidates = index.get(line.article.trim().normalize("NFC").toUpperCase()) || [];
+    const scoped = selectedShop ? candidates.filter(entry => entry.store === selectedShop) : candidates;
+    const primary = scoped.filter(entry => entry.primary);
+    const matches = primary.length ? primary : scoped;
+    const skip = issue => ({ ...line, machine: "", department: null, issue });
+    if (!matches.length) return skip(selectedShop
+      ? "Артикул не найден в справочнике Assembly для указанного магазина"
+      : "Артикул не найден в справочнике Assembly");
+    const machines = unique(matches, "machine");
+    const extensions = unique(matches, "printExtension");
+    if (machines.size !== 1 || extensions.size !== 1)
+      return skip("В справочнике Assembly расходятся станок или расширение печати. Укажите магазин или проверьте карточку.");
+    const machine = [...machines][0], extension = [...extensions][0], department = machineDepartment(machine);
+    const stores = unique(matches, "store");
+    const store = stores.size === 1 && /^\d+$/.test([...stores][0]) ? [...stores][0] : "";
+    const issue = !department ? "Станок в справочнике Assembly не задан или не распознан"
+      : department === "roll" && !extension ? "В справочнике Assembly не задано расширение печати"
+      : xeroxExtensionIssue(department, machine, extension);
+    const result = { ...line, machine, department: issue ? null : department, extension: extension || null,
+      store, storeIssue: store ? null : "Магазин не подтверждён в справочнике Assembly", issue, assemblyCatalog: true };
+    const singleNumber = key => {
+      const values = unique(matches, key);
+      const value = values.size === 1 ? Number([...values][0].replace(",", ".")) : 0;
+      return Number.isSafeInteger(value) && value > 0 ? value : null;
+    };
+    if (stock) {
+      const photos = new Set(matches.map(entry=>entry.photoUrl).filter(Boolean));
+      return {...result, photoUrl:photos.size===1 ? [...photos][0] : "",
+        sheetsPerUnit:singleNumber("sheetsPerUnit"),
+        stockMultiplicity:singleNumber(department==="roll"?"rollMultiplicity":"xeroxMultiplicity")};
+    }
+    if (issue) return result;
+    if (department === "roll") {
+      const rollMultiplicity = singleNumber("rollMultiplicity");
+      if (!rollMultiplicity) {
+        return { ...result, rollIssue: "В справочнике Assembly не подтверждена кратность рулонной печати." };
+      }
+      const choices = quantityRounding(line.quantity, rollMultiplicity, { minimum: 0, maximum: MAX_SUPPLY_QUANTITY });
+      return { ...result, rollMultiplicity, ...(choices && { rounding: { choices } }) };
+    }
+    if (machine.toUpperCase() !== "XEROX") return result;
+    const factors = unique(matches, "sheetsPerUnit"), multiplicities = unique(matches, "xeroxMultiplicity");
+    const factor = factors.size === 1 ? Number([...factors][0]) : 0;
+    const multiplicity = multiplicities.size === 1 ? Number([...multiplicities][0]) : 0;
+    const formats = {xeroxFactor: factor, xeroxMultiplicity: multiplicity};
+    const rounding = xeroxPlanRounding(line.quantity, factor, multiplicity, { minimum: 0, maximum: MAX_SUPPLY_QUANTITY });
+    if (rounding) return { ...result, ...formats, rounding };
+    const xeroxSheets = xeroxSheetCount(line.quantity, factor, multiplicity);
+    return xeroxSheets === null
+      ? { ...result, department: null, issue: "В справочнике Assembly не подтверждены листы на изделие и кратность Xerox." }
+      : { ...result, ...formats, xeroxSheets };
+  });
 }
 
 // Read the machine from the selected marketplace first. OZON's machine is a
@@ -315,9 +383,9 @@ export class ProductionSupplyWriter extends RollSupplySheetsWriter {
 export class ProductionSupplyService {
   constructor(
     store,
-    { writers, legacy, now = () => Date.now(), refresh = null, refreshAfterWrite = true, recoverInterrupted = true, beforeCreateWrite = null, onVerified = null } = {},
+    { writers, legacy, now = () => Date.now(), refresh = null, refreshAfterWrite = true, recoverInterrupted = true, beforeCreateWrite = null, onVerified = null, createCatalog = null } = {},
   ) {
-    Object.assign(this, { store, writers, legacy, now, refresh, refreshAfterWrite, beforeCreateWrite, onVerified });
+    Object.assign(this, { store, writers, legacy, now, refresh, refreshAfterWrite, beforeCreateWrite, onVerified, createCatalog });
     this.previews = new Map();
     this.busy = false;
     // An interrupted write is never replayed. Its exact persisted plan must be
@@ -731,7 +799,7 @@ export class ProductionSupplyService {
     };
   }
   normalize(input) {
-    const { previewId, department, priority, reminderMinutes, planning, xeroxRounding, ...raw } = input || {};
+    const { previewId, department, priority, reminderMinutes, planning, xeroxRounding, rollRounding, ...raw } = input || {};
     if (reminderMinutes !== undefined && (raw.action !== "create" || priority !== "urgent" || ![0, 30, 60, 120, 240].includes(reminderMinutes)))
       fail("production_reminder_invalid", "Выберите время напоминания для срочной поставки.", 400);
     if (priority !== undefined && (raw.action !== 'create' || !['normal', 'urgent'].includes(priority)))
@@ -758,23 +826,33 @@ export class ProductionSupplyService {
     if (department !== undefined && !["roll", "box"].includes(department))
       fail("production_department_invalid", "Неизвестный отдел производства.");
     if (payload.action === "append") payload.department = department || "roll";
-    const decisions = new Map();
-    if (xeroxRounding !== undefined) {
-      if (payload.action !== "create" || !Array.isArray(xeroxRounding) || xeroxRounding.length > payload.lines.length)
-        fail("production_xerox_rounding_required", "Проверьте выбранное округление Xerox.", 400);
-      for (const choice of xeroxRounding) {
+    const readChoices = (choices, kind, message) => {
+      const selected = new Map();
+      if (choices === undefined) return selected;
+      if (payload.action !== "create" || !Array.isArray(choices) || choices.length > payload.lines.length)
+        fail(`production_${kind}_rounding_required`, message, 400);
+      for (const choice of choices) {
         const article = typeof choice?.article === "string" ? articleKey(choice.article) : "";
-        if (!article || article.length > 120 || decisions.has(article) ||
+        if (!article || article.length > 120 || selected.has(article) ||
             Object.keys(choice).sort().join(",") !== "article,direction" ||
             !["down", "up"].includes(choice.direction))
-          fail("production_xerox_rounding_required", "Проверьте выбранное округление Xerox.", 400);
-        decisions.set(article, choice.direction);
+          fail(`production_${kind}_rounding_required`, message, 400);
+        selected.set(article, choice.direction);
       }
-    }
+      return selected;
+    };
+    const decisions = {
+      xerox: readChoices(xeroxRounding, "xerox", "Проверьте выбранное округление Xerox."),
+      roll: readChoices(rollRounding, "roll", "Проверьте выбранное округление для рулонной печати."),
+    };
     return { payload, previewId, decisions };
   }
   async routedLines(payload) {
     const marketplace = shipmentMarketplace(payload.name);
+    if (payload.action === "create" && this.createCatalog) {
+      if (!marketplace) fail("supply_marketplace_unknown", "В названии поставки укажите ровно один маркетплейс: OZON или WB.");
+      return routeAssemblyCatalogLines(payload.lines, await this.createCatalog(marketplace, payload.lines.map(line => line.article)), payload.name);
+    }
     const routed = routeSupplyLines(payload.lines, marketplace, await this.catalog());
     if (payload.action !== "create") return routed;
     const isXerox = line => line.department === "box" && line.machine.toUpperCase() === "XEROX";
@@ -800,8 +878,9 @@ export class ProductionSupplyService {
         503,
       );
     const { payload, decisions } = this.normalize(input);
-    if (decisions.size)
-      fail("production_xerox_rounding_required", "Выберите округление после проверки распределения.", 400);
+    if (decisions.roll.size || decisions.xerox.size)
+      fail(decisions.roll.size ? "production_roll_rounding_required" : "production_xerox_rounding_required",
+        "Выберите округление после проверки распределения.", 400);
     const routed = await this.routedLines(payload);
     const id = randomUUID();
     const value = {
@@ -916,10 +995,11 @@ export class ProductionSupplyService {
     for (const department of Object.keys(DEPARTMENTS)) {
       const lines = routed
         .filter((l) => l.department === department)
-        .map(({ article, quantity, extension }) => ({
+        .map(({ article, quantity, extension, assemblyCatalog, machine, store, xeroxFactor, xeroxMultiplicity }) => ({
           article,
           quantity,
           ...(extension ? { extension } : {}),
+          ...(assemblyCatalog ? {catalogMachine:machine, store, ...(xeroxFactor ? {xeroxFactor, xeroxMultiplicity} : {})} : {}),
         }));
       const part =
         existing?.parts.find((p) => p.department === department) ||
@@ -983,6 +1063,9 @@ export class ProductionSupplyService {
       ...(payload.action === "create" && payload.lockAfterCreate === true ? { lockAfterCreate: true } : {}),
       lines: payload.lines,
       skippedLines: routed.filter((l) => !l.department && l.quantity > 0),
+      ...(routed.some(line => line.assemblyCatalog) ? {catalogStores: Object.fromEntries(
+        routed.filter(line => line.department).map(line => [line.article.trim().normalize("NFC").toUpperCase(), line.store]),
+      )} : {}),
       ...(payload.planning ? {planning:payload.planning} : {}),
       requestHash: digest(payload),
       status: "writing",
@@ -1068,7 +1151,11 @@ export class ProductionSupplyService {
       const normalized = this.normalize(input);
       payload = normalized.payload;
       decisions = normalized.decisions;
-      requestHash = digest(decisions.size ? { ...payload, xeroxRounding: [...decisions].sort() } : payload);
+      requestHash = digest({
+        ...payload,
+        ...(decisions.xerox.size ? { xeroxRounding: [...decisions.xerox].sort() } : {}),
+        ...(decisions.roll.size ? { rollRounding: [...decisions.roll].sort() } : {}),
+      });
       op = this.operations().find((o) => o.id === payload.operationId);
       if (op) {
         if (op.requestHash !== requestHash)
@@ -1121,21 +1208,27 @@ export class ProductionSupplyService {
         if (digest(fresh) !== digest(this.previewById(input.previewId)?.routed))
           fail(
             "production_routing_changed",
-            "Станки или параметры Xerox изменились. Проверьте распределение заново.",
+            "Станки или параметры кратности изменились. Проверьте распределение заново.",
           );
         const confirmed = fresh.map(line => {
           if (!line.rounding) return line;
           const article = articleKey(line.article);
-          const choice = line.rounding.choices.find(option => option.direction === decisions.get(article));
+          const isRoll = line.department === "roll";
+          const selected = isRoll ? decisions.roll : decisions.xerox;
+          const choice = line.rounding.choices.find(option => option.direction === selected.get(article));
           if (!choice)
-            fail("production_xerox_rounding_required", `Выберите количество Xerox для «${line.article}».`);
-          decisions.delete(article);
+            fail(isRoll ? "production_roll_rounding_required" : "production_xerox_rounding_required",
+              isRoll ? `Выберите количество для «${line.article}» в рулонной печати.` : `Выберите количество Xerox для «${line.article}».`);
+          selected.delete(article);
           return { ...line, quantity: choice.quantity, department: choice.quantity ? line.department : null };
         });
-        if (decisions.size)
-          fail("production_xerox_rounding_required", "Список округлений изменился. Проверьте распределение заново.");
+        if (decisions.roll.size || decisions.xerox.size)
+          fail(decisions.roll.size ? "production_roll_rounding_required" : "production_xerox_rounding_required",
+            "Список округлений изменился. Проверьте распределение заново.");
         if (!confirmed.some(line => line.department))
-          fail("production_xerox_rounding_required", "Добавьте хотя бы одну позицию с количеством больше нуля.");
+          fail(fresh.some(line => line.department === "roll" && line.rounding)
+            ? "production_roll_rounding_required"
+            : "production_xerox_rounding_required", "Добавьте хотя бы одну позицию с количеством больше нуля.");
         // Preflight every destination before the first production write.
         op = await this.prepare(payload, confirmed);
         op.requestHash = requestHash;
@@ -1281,6 +1374,8 @@ export class ProductionSupplyService {
           id: op.shipmentId,
           name: op.name,
           parts: op.manifest.parts.map((p) => ({ ...p, name: op.name })),
+          ...((op.catalogStores || registry.find(s => s.id === op.shipmentId)?.catalogStores) ?
+            {catalogStores: op.catalogStores || registry.find(s => s.id === op.shipmentId).catalogStores} : {}),
           ...((registry.find(s => s.id === op.shipmentId)?.planning || op.planning) ? {planning:registry.find(s => s.id === op.shipmentId)?.planning || op.planning} : {}),
         },
       ]);

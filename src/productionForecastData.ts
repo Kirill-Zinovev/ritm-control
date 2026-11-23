@@ -314,7 +314,7 @@ export function forecastInput(
     );
   const packingIssues: string[] = [];
   if (extraItems === null)
-    packingIssues.push("Дополнительные товары Assembly обновляются; повторяем проверку.");
+    packingIssues.push("Дополнительные товары «RITM Сборка» обновляются; повторяем проверку.");
   const activeIds = new Set<string>();
   const shipmentKeys = new Map<string, string>();
   for (const sheet of live?.sheets || []) {
@@ -422,7 +422,7 @@ export function forecastInput(
       !item.article
     ) {
       packingIssues.push(
-        "Не подтверждён состав дополнительных товаров Assembly.",
+        "Не подтверждён состав дополнительных товаров «RITM Сборка».",
       );
       continue;
     }
@@ -461,7 +461,7 @@ export function forecastInput(
     packingIssues.push(
       !stockSnapshot && stockReason
         ? stockReason
-        : "Не подтверждён состав заданий «Запасы склад» в Assembly.",
+        : "Не подтверждён состав заданий «Запасы склад» в «RITM Сборка».",
     );
   else {
     const seen = new Set<string>();
@@ -543,7 +543,7 @@ export function forecastInput(
     ))
       if (!task.stockPositionId || !seen.has(task.stockPositionId))
         packingIssues.push(
-          `${task.article}: производственные запасы не совпадают с заданием Assembly.`,
+          `${task.article}: производственные запасы не совпадают с заданием «RITM Сборка».`,
         );
   }
   const timestamp = Date.parse(live?.snapshotAt || live?.updatedAt || "");

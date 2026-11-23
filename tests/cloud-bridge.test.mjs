@@ -6,6 +6,7 @@ import { bridgeSignature, verifyBridge, verifyAssemblyControlApp } from "../work
 import { externalLease } from "../worker/cloud/externalLease.js";
 import { requireCutover } from "../worker/cloud/services.js";
 import { CloudStore } from "../worker/cloud/store.js";
+import { cloudApi } from "../worker/cloud/runtime.js";
 import { LocalD1 } from "./helpers/d1-sqlite.mjs";
 import { cloudSchemaStatements } from "./helpers/cloud-schema.mjs";
 import { bindings } from "./cloud-env.mjs";
@@ -37,6 +38,33 @@ async function ready(store) {
 function signed(path, { method = "GET", body = "", nonce = randomUUID(), timestamp = String(Date.now()) } = {}) {
   return new Request(origin + path, { method, headers: { "content-type": "application/json", "x-ritm-bridge-id": id, "x-ritm-bridge-at": timestamp, "x-ritm-bridge-nonce": nonce, "x-ritm-bridge-signature": bridgeSignature(secret, { method, path, timestamp, nonce, body }) }, ...(method === "GET" ? {} : { body }) });
 }
+test('the local printing bridge can read a saved queue and submit only a signed request to its own API', async () => {
+  const {db,store,env} = fixture();
+  const configured = {...env,RITM_PRINTING_WORKSPACE_TOKEN:'r'.repeat(64),RITM_PRINTING_WORKSPACE_WRITE_TOKEN:'w'.repeat(64)};
+  const sheet = {spreadsheetId:documentId,sheetId:42,sourceId:'roll-printing',name:'Test'};
+  const old = {sheets:[sheet],supplies:[{...sheet,sheetName:'Test',row:5,uid:'fixture-uid',article:'TEST'}]};
+  const fetcher = () => assert.fail('The saved queue and invalid write must stay inside RITM');
+  const feed = '/api/printing-workspace-feed?department=roll&preview=1&supply='+documentId+':42';
+  const write = '/api/printing-workspace-write';
+  const options = {method:'POST',body:'{}'};
+  try {
+    const lease = await store.acquire('test-printing-snapshot');
+    try { await store.saveSnapshot('printing',old,lease); }
+    finally { await store.release(lease); }
+    const request = signed(feed);
+    await assert.rejects(verifyBridge(request.clone(),configured),{code:'bridge_forbidden'});
+    const response = await cloudApi(request.clone(),configured,undefined,{fetcher});
+    assert.equal(response.status,200);
+    assert.equal((await response.json()).rows[0].article,'TEST');
+    assert.equal((await cloudApi(request.clone(),configured,undefined,{fetcher})).status,409);
+    const notTrusted = new Request(origin+write,signed(write,options));
+    const changed = new Request(notTrusted,{body:'{"untrusted":true}'});
+    assert.equal((await cloudApi(changed,configured,undefined,{fetcher})).status,403);
+    assert.equal((await cloudApi(signed(write,options),configured,undefined,{fetcher})).status,400);
+    const disabled = {...configured,RITM_PRINTING_WORKSPACE_WRITE_TOKEN:''};
+    assert.equal((await cloudApi(signed(write,options),disabled,undefined,{fetcher})).status,403);
+  } finally { db.close(); }
+});
 test("bridge signatures bind method, path, query and body; reject stale, replayed and out-of-scope requests", async () => {
   const { db, env } = fixture();
   try {

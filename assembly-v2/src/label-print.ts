@@ -23,7 +23,7 @@ export async function printLabelCopies(items: LabelPrintItem[]): Promise<void> {
     popup.opener = null;
     const doc = popup.document;
     doc.open();
-    doc.write('<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Этикетки — Assembly</title></head><body></body></html>');
+    doc.write('<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Этикетки — RITM Сборка</title></head><body></body></html>');
     doc.close();
     const style = doc.createElement("style");
     style.textContent = printCss;

@@ -21,7 +21,12 @@ const encoder = new TextEncoder();
 const signedRoutes = new Map([
   ["/api/ritm/sync", "POST"],
   ["/api/ritm/deliver", "POST"],
+  ["/api/ritm/remove-manual-item", "POST"],
+  ["/api/ritm/retire-shipments", "POST"],
+  ["/api/ritm/production-catalog", "POST"],
+  ["/api/ritm/production-extensions", "POST"],
   ["/api/ritm/warehouse", "GET"],
+  ["/api/ritm/work-report", "GET"],
   ["/api/ritm/warehouse/dispatch", "POST"],
 ]);
 function equal(a: string, b: string): boolean {
@@ -53,14 +58,18 @@ export function sameOrigin(request: Request): boolean {
     (!origin || origin === new URL(request.url).origin)
   );
 }
+export function assemblyOwnerAccount(request: Request, env: AccessEnv): string | null {
+  const user = request.headers.get("oai-authenticated-user-id");
+  return env.AV2_OWNER_USER_ID && user === env.AV2_OWNER_USER_ID ? user : null;
+}
 export async function authenticate(
   request: Request,
   env: AccessEnv,
   now = Date.now(),
   store?: SqlStore,
 ): Promise<Principal | null> {
-  const user = request.headers.get("oai-authenticated-user-id");
-  if (env.AV2_OWNER_USER_ID && user === env.AV2_OWNER_USER_ID)
+  const user = assemblyOwnerAccount(request, env);
+  if (user)
     return { role: "owner", actor: user };
   const admin = request.headers.get("x-assembly-admin-token") || "";
   if (env.AV2_OWNER_API_TOKEN && equal(admin, env.AV2_OWNER_API_TOKEN))
@@ -206,4 +215,4 @@ export const collectorActions = new Set([
   "warehouse.reopen",
   "warehouse.move",
 ]);
-export const managerActions=new Set([...collectorActions,'catalog.save','catalog.activate','photo.assign','carton.create','dispatch.create','dispatch.cancel','dispatch.send','export.create']);
+export const managerActions=new Set([...collectorActions,'catalog.save','catalog.activate','photo.assign','carton.create','carton.reopen','dispatch.create','dispatch.cancel','dispatch.send','export.create','ozon.prepare','ozon.assign']);

@@ -12,6 +12,11 @@ const sourcePending = new Set(["assembly_v2_source_busy", "assembly_v2_snapshot_
 
 export function supplyDeliveryJob(kind, operation, now) {
   if (!confirmed.has(operation?.status)) return null;
+  const fullDelete = kind === "production" && operation.status === "verified" &&
+    /^RITM-SUPPLY-[a-f0-9-]{36}$/i.test(operation.shipmentId || "") &&
+    (operation.action === "deleteSupply" || (operation.action === "deletePart" && operation.survivors?.length === 0));
+  if (fullDelete)
+    return { id: fullDeleteKind + ":" + operation.id, shipmentId: operation.shipmentId, createdAt: now };
   let shipmentId = operation.shipmentId || operation.result?.shipmentId || operation.payload?.removal?.shipmentId ||
     (kind === moveKind ? operation.input?.shipmentId : null);
   if (!shipmentId && kind === "roll") {
@@ -24,7 +29,7 @@ export function supplyDeliveryJob(kind, operation, now) {
     shipmentId = null;
   // Global jobs still require a fresh persisted feed receipt (e.g. deleting a
   // physical sheet). Creation jobs additionally require the canonical supply.
-  return { id: (operation.action === "deleteSupply" ? fullDeleteKind : kind) + ":" + operation.id, shipmentId, createdAt: now };
+  return { id: kind + ":" + operation.id, shipmentId, createdAt: now };
 }
 export function snapshotDeliveryJob(printing, now) {
   const identity = JSON.stringify(
@@ -75,6 +80,39 @@ async function retryTargetWork(bindings,store,fetcher){
   if(gate.meta?.changes!==1)return;
   try{const response=await callAssemblyV2(bindings,'/api/ritm/deliver',{method:'POST',body:'{}',fetcher,timeout:18000});await response.body?.cancel();}catch{/* Durable work events remain pending in Assembly until the next retry. */}
 }
+const exactDeleteJob = "id like 'production-delete:%' and shipment_id like 'RITM-SUPPLY-%'";
+async function deliverConfirmedDeletes(bindings, store, fetcher) {
+  // These jobs were written in the same checkpoint as the verified removal.
+  // They can be delivered even when a refresh owns the regular delivery lease.
+  const { results: jobs = [] } = await store.db.prepare(
+    `select id,shipment_id,attempts from assembly_v2_supply_deliveries
+      where delivered_at is null and next_attempt_at<=? and (${exactDeleteJob})
+      order by created_at desc,id limit 10`,
+  ).bind(store.now()).all();
+  if (!jobs.length) return;
+  const deletions = jobs.map(job => ({ eventId:job.id, shipmentId:job.shipment_id }));
+  try {
+    const response = await callAssemblyV2(bindings, "/api/ritm/retire-shipments", {
+      method:"POST", body:JSON.stringify({deletions}), fetcher, timeout:5000,
+    });
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw Error("retirement_unconfirmed");
+    }
+    const receipt = await response.json();
+    if (receipt?.ok !== true || !Array.isArray(receipt.retired) ||
+        !deletions.every(event => receipt.retired.some(row => row?.eventId === event.eventId && row?.shipmentId === event.shipmentId)))
+      throw Error("retirement_unconfirmed");
+    await store.db.batch(deletions.map(event => store.db.prepare(
+      "update assembly_v2_supply_deliveries set delivered_at=?,attempts=attempts+1,last_error=null,receipt=? where id=? and delivered_at is null",
+    ).bind(store.now(),JSON.stringify(event),event.eventId)));
+  } catch {
+    await store.db.batch(jobs.map(job => store.db.prepare(
+      "update assembly_v2_supply_deliveries set attempts=attempts+1,next_attempt_at=?,last_error=? where id=? and delivered_at is null",
+    ).bind(store.now()+Math.min(30000,5000*2**Math.min(job.attempts,3)),
+      "Снятие поставки с нового Assembly ожидает подтверждения",job.id)));
+  }
+}
 export async function drainAssemblyV2(
   bindings,
   store,
@@ -85,9 +123,12 @@ export async function drainAssemblyV2(
     !bindings.RITM_ASSEMBLY_V2_TARGET_TOKEN
   )
     return { configured: false };
+  await deliverConfirmedDeletes(bindings, store, fetcher);
   const due = await store.db
     .prepare(
-      "select * from assembly_v2_supply_deliveries where delivered_at is null and next_attempt_at<=? order by (shipment_id is not null) desc, (id like 'box-position-removal:%') desc,created_at,id limit 10",
+      `select * from assembly_v2_supply_deliveries where delivered_at is null and next_attempt_at<=?
+        and (shipment_id is null or not (${exactDeleteJob}))
+        order by (shipment_id is not null) desc, (id like 'box-position-removal:%') desc,created_at,id limit 10`,
     )
     .bind(store.now())
     .all();
@@ -108,6 +149,7 @@ export async function drainAssemblyV2(
   }
   try {
     const minimum = Math.max(...jobs.map((j) => j.created_at));
+    const sourceMinimum = Math.max(0, ...jobs.filter(j => !j.id.startsWith("lock:")).map(j => j.created_at));
     const readSnapshot = () => store.assemblySourceSnapshot ? store.assemblySourceSnapshot() : store.snapshot("printing");
     let snapshot = await readSnapshot();
     let refreshed = false;
@@ -120,7 +162,7 @@ export async function drainAssemblyV2(
     };
     if (
       !snapshot ||
-      snapshot.at < minimum ||
+      snapshot.at < sourceMinimum ||
       store.now() - snapshot.at >= 240000
     ) {
       await refreshSource();
