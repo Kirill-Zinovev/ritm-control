@@ -26,6 +26,9 @@ type RecoveryStep = {department:'roll'|'box';status:string;plan?:{entries?:Suppl
 type RecoveryOperation = {status:string;message?:string;steps?:RecoveryStep[]};
 type RecoveryResult = {operation?:RecoveryOperation;notSaved?:boolean;message?:string};
 
+const CATALOG_NAME = '«RITM СБОРКА»';
+const displayStockMessage = (message: string) => message.replace(/«RITM Сборка»|\bAssembly\b/g, CATALOG_NAME);
+
 function parseLines(text:string):SupplyImportLine[] {
   const lines=text.split(/\r?\n/).filter(line=>line.trim());
   if(!lines.length||lines.length>500)throw new Error('Укажите от 1 до 500 строк с артикулом и количеством.');
@@ -95,12 +98,12 @@ export default function StockWorkspace(){
     <p className="stock-input-hint">Каждый артикул — с новой строки. Количество укажите через точку с запятой.</p>
     <div className="stock-file"><span className="stock-file-icon"><FileSpreadsheet size={20}/></span><Field label="Или загрузите Excel"><input type="file" accept=".xlsx" disabled={busy||!!pending||pendingState.invalid} onChange={e=>void importFile(e.target.files?.[0])} /></Field></div>
     <div className="stock-form-actions"><span>Перед добавлением проверьте распределение.</span><Button kind="primary" disabled={busy||!!pending||pendingState.invalid} onClick={()=>void check()}>{busy?'Проверяем…':'Проверить и распределить'} <ArrowRight size={16}/></Button></div></div>
-    <aside className="stock-guide" aria-label="Работа с запасами"><div className="stock-guide-top"><span className="stock-guide-icon"><Layers3 size={22}/></span><h3>Как распределяются товары</h3><p>RITM определит участок по станку в базе и покажет результат перед добавлением.</p></div><div className="stock-route"><div><span className="stock-route-icon stock-route-icon--box"><Box size={18}/></span><span><strong>Бокс</strong><small>Задания для бокса</small></span></div><div><span className="stock-route-icon"><Printer size={18}/></span><span><strong>Рулонная печать</strong><small>Задания для рулонной печати</small></span></div></div><p className="stock-guide-note">Если артикул уже есть в выбранном списке запасов, количество прибавится к плану.</p><div className="stock-workspace-links"><a href="https://docs.google.com/spreadsheets/d/1VWIy6t3cIJzTMHgtwkiZKUbzjHf1TBSDNV1TJSrUMaI/edit" target="_blank" rel="noreferrer">Таблица бокса <ExternalLink size={15}/></a><a href="https://docs.google.com/spreadsheets/d/1vzLLRe7oi4IlvzIaWZd08dte7byCkqeXVAL4iSFqhOg/edit" target="_blank" rel="noreferrer">Таблица рулонной печати <ExternalLink size={15}/></a></div></aside></div>
+    <aside className="stock-guide" aria-label="Работа с запасами"><div className="stock-guide-top"><span className="stock-guide-icon"><Layers3 size={22}/></span><h3>Как распределяются товары</h3><p>RITM определит участок по станку из справочника {CATALOG_NAME} и покажет результат перед добавлением.</p></div><div className="stock-route"><div><span className="stock-route-icon stock-route-icon--box"><Box size={18}/></span><span><strong>Бокс</strong><small>Задания для бокса</small></span></div><div><span className="stock-route-icon"><Printer size={18}/></span><span><strong>Рулонная печать</strong><small>Задания для рулонной печати</small></span></div></div><p className="stock-guide-note">Если артикул уже есть в выбранном списке запасов, количество прибавится к плану.</p><div className="stock-workspace-links"><a href="https://docs.google.com/spreadsheets/d/1VWIy6t3cIJzTMHgtwkiZKUbzjHf1TBSDNV1TJSrUMaI/edit" target="_blank" rel="noreferrer">Таблица бокса <ExternalLink size={15}/></a><a href="https://docs.google.com/spreadsheets/d/1vzLLRe7oi4IlvzIaWZd08dte7byCkqeXVAL4iSFqhOg/edit" target="_blank" rel="noreferrer">Таблица рулонной печати <ExternalLink size={15}/></a></div></aside></div>
     {preview&&<div className="stock-preview">
       <div className="stock-preview-heading">
         <div><h3>Проверка перед добавлением</h3>
           <p>{needsRounding.length
-            ? 'Выберите, как округлить итоговый план по кратности из справочника Assembly.'
+            ? `Выберите, как округлить итоговый план по кратности из справочника ${CATALOG_NAME}.`
             : 'Проверьте товары и участки. Удалить из этого списка можно до сохранения.'}</p>
         </div><span>{preview.changes.length} поз.</span>
       </div>
@@ -137,7 +140,7 @@ export default function StockWorkspace(){
               {row.rounding.choices.map(choice => <option key={choice.direction} value={choice.direction}>
                 {choice.direction==='down'?'Вниз':'Вверх'} · {choice.quantity===0?'не добавлять':`добавить ${choice.quantity} шт.`}{choice.sheets!==undefined&&` · ${choice.sheets.toLocaleString('ru-RU')} лист.`}
               </option>)}
-            </select></> : row.issue || (row.action==='increase'?'Прибавить к плану':'Новый артикул')}</td>
+            </select></> : displayStockMessage(row.issue || (row.action==='increase'?'Прибавить к плану':'Новый артикул'))}</td>
             <td><button type="button" className="stock-remove" disabled={busy||!!pending} aria-label={`Убрать ${row.article} из списка`} title="Убрать из списка" onClick={()=>removeDraft(row.article)}><Trash2 size={17}/></button></td>
           </tr>;
         })}</tbody>
@@ -157,7 +160,7 @@ export default function StockWorkspace(){
       <details><summary>Показать исходный список</summary><ul>{pending.input.lines.map((line,index)=><li key={`${line.article}-${index}`}>{line.article} · {line.quantity} шт.</li>)}</ul></details>
       {!busy&&!preview&&<Button onClick={()=>void save()}>Проверить сохранение</Button>}
     </div>}
-    {message&&<Notice tone="warning">{message}</Notice>}
+    {message&&<Notice tone="warning">{displayStockMessage(message)}</Notice>}
     <StockTaskHistory blocked={busy} setBusy={setBusy} revision={historyRevision} />
   </section>;
 }
