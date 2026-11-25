@@ -38,7 +38,10 @@
 .stock-workspace table { width: 100%; min-width: 700px; border-collapse: collapse; }
 .stock-workspace th,.stock-workspace td { text-align: left; padding: 13px 16px; border-top: 1px solid var(--border); }
 .stock-workspace th { background: #f2f6fb; color: var(--muted); font-size: 13px; }
+.stock-preview td { white-space: normal; }
+.stock-preview th:last-child { min-width: 0; }
 .stock-product { display: flex; gap: 12px; align-items: center; }
+.stock-product > div:last-child { min-width: 0; overflow-wrap: anywhere; }
 .stock-photo { width: 46px; height: 46px; display: grid; place-items: center; overflow: hidden; flex: none; background: #f0f4f8; color: #78899e; border-radius: 8px; }
 .stock-photo img { width: 100%; height: 100%; object-fit: cover; }
 .stock-department { display: inline-block; padding: 5px 9px; border-radius: 7px; background: #edf3ff; color: #255dc3; font-weight: 600; white-space: nowrap; }
