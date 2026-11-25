@@ -1097,3 +1097,6 @@ footer {
 .stock-drop-target{outline:3px solid #2563eb; background:#eff6ff!important;}
 .stock-transfer[draggable="true"]{cursor:grab;}
 .stock-transfer[draggable="true"]:active{cursor:grabbing;}
+.catalog-article-link { color: #174bc8; font-weight: 750; text-decoration: underline; text-underline-offset: 3px; }
+.catalog-article-link:hover { color: #0a3196; }
+.catalog-article-link:focus-visible { outline: 2px solid #1b58db; outline-offset: 3px; border-radius: 2px; }

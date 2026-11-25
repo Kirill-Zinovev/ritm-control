@@ -1,13 +1,14 @@
 import { cloudApi } from "./cloud/runtime.js";
 import { mcp } from "./cloud/mcp.js";
-import { ritmOwnerAccount } from "./cloud/auth.js";
+import { resolvePrincipal } from "./cloud/auth.js";
 import { databaseBackup, databaseBackupPath } from "./database-backup.mjs";
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname === databaseBackupPath) {
-      return databaseBackup(request, env.DB, "ritm", Boolean(ritmOwnerAccount(request, env)));
+      const principal = await resolvePrincipal(request, env);
+      return databaseBackup(request, env.DB, "ritm", principal?.role === "owner");
     }
     // This bot only sends production notices. Incoming events have no
     // commands or side effects; acknowledge without retaining their payload.

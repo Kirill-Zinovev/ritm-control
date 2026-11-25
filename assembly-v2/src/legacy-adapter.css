@@ -99,15 +99,136 @@
 .legacy-assembly .review-navigation button:hover {
   background: var(--primary-soft);
 }
-.legacy-assembly .legacy-source-description {
-  display: grid;
-  gap: 5px;
-  padding: 12px;
-  overflow-wrap: anywhere;
-}
-.legacy-assembly .direction-jobs {
+.legacy-assembly .shipment-overview {
+  position: relative;
+  width: fit-content;
   max-width: 100%;
-  margin-left: 0;
+}
+.legacy-assembly .shipment-overview .direction-jobs {
+  position: static;
+  margin: 0;
+  max-width: 100%;
+}
+.legacy-assembly .shipment-overview .direction-jobs[open] {
+  background: transparent;
+  box-shadow: none;
+}
+.legacy-assembly .shipment-title-block:has(.direction-jobs[open]) {
+  position: relative;
+  z-index: 4;
+}
+.legacy-assembly .direction-jobs > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+  min-height: 38px;
+  padding: 7px 10px;
+  color: #173965;
+  font-size: 13px;
+  font-weight: 650;
+}
+.legacy-assembly .direction-jobs > summary::-webkit-details-marker { display: none; }
+.legacy-assembly .direction-jobs > summary:hover,
+.legacy-assembly .direction-jobs[open] > summary {
+  background: #edf4ff;
+  border-color: #9cb9e7;
+}
+.legacy-assembly .direction-jobs-count {
+  display: grid;
+  place-items: center;
+  min-width: 22px;
+  padding: 2px 5px;
+  border-radius: 6px;
+  background: #e9f1fd;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.legacy-assembly .direction-jobs[open] .direction-jobs-chevron { transform: rotate(180deg); }
+.legacy-assembly .direction-jobs-panel {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 8px);
+  inset-inline-end: 0;
+  width: min(420px, 100%);
+  border: 1px solid #c9d9ee;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 14px 30px #17396528, 0 2px 5px #17396512;
+}
+.legacy-assembly .direction-jobs-heading,
+.legacy-assembly .direction-jobs-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 16px;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+}
+.legacy-assembly .direction-jobs-heading {
+  background: #173965;
+  color: #f4f7fb;
+  font-size: 12px;
+  font-weight: 650;
+}
+.legacy-assembly .direction-jobs-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: min(280px, 46dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.legacy-assembly .direction-jobs-row {
+  width: 100%;
+  min-height: 44px;
+  border: 0;
+  border-top: 1px solid #e5edf6;
+  background: #fff;
+  color: #173965;
+  font: inherit;
+  text-align: start;
+}
+.legacy-assembly button.direction-jobs-row:enabled { cursor: pointer; }
+.legacy-assembly button.direction-jobs-row:enabled:hover { background: #f3f7fd; }
+.legacy-assembly button.direction-jobs-row:disabled { opacity: .65; }
+.legacy-assembly button.direction-jobs-row:focus-visible { outline-offset: -3px; }
+.legacy-assembly .direction-jobs-list [aria-current] .direction-jobs-row {
+  background: #edf4ff;
+  box-shadow: inset 3px 0 #2663eb;
+}
+.legacy-assembly .direction-jobs-name {
+  font-weight: 650;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+.legacy-assembly .direction-jobs-status {
+  justify-self: end;
+  border-radius: 6px;
+  padding: 4px 7px;
+  color: #4f6380;
+  background: #edf1f6;
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.legacy-assembly .direction-jobs-status.is-active { color: #146345; background: #e2f3e9; }
+.legacy-assembly .direction-jobs-status.is-locked { color: #845018; background: #fff1dc; }
+.legacy-assembly .direction-jobs-departments {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 8px 12px;
+  border-top: 1px solid #dce5f0;
+  background: #f6f8fc;
+  font-size: 11px;
+  color: #4f6380;
+}
+.legacy-assembly .direction-jobs-departments span + span {
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: #e8eff8;
 }
 .legacy-assembly .list-toolbar {
   flex-wrap: wrap;

@@ -5,13 +5,13 @@ import { Button, Dialog, Field } from "./ui";
 import { request } from "./useWorkspace";
 import { printLabelCopies } from "./label-print";
 
-type LabelDialogProps = { onClose(): void } & (
+type LabelDialogProps = { onClose(): void; labelVersion?: string } & (
   { positionIds: string[]; warehouseReceiptId?: never; catalogEntryId?: never; catalogImportId?: never } |
   { positionIds?: never; warehouseReceiptId: string; catalogEntryId?: never; catalogImportId?: never } |
   { positionIds?: never; warehouseReceiptId?: never; catalogEntryId: string; catalogImportId: string }
 );
 const emptyIds: string[] = [];
-export function LabelDialog({ positionIds = emptyIds, warehouseReceiptId, catalogEntryId, catalogImportId, onClose }: LabelDialogProps) {
+export function LabelDialog({ positionIds = emptyIds, warehouseReceiptId, catalogEntryId, catalogImportId, labelVersion, onClose }: LabelDialogProps) {
   const [items, setItems] = useState<PrintableLabel[]>([]);
   const [copies, setCopies] = useState<Record<string, string>>(() => Object.fromEntries(positionIds.map(id => [id, "1"])));
   const [loading, setLoading] = useState(true), [printing, setPrinting] = useState(false);
@@ -25,16 +25,17 @@ export function LabelDialog({ positionIds = emptyIds, warehouseReceiptId, catalo
     positionIds.forEach(id => params.append("position", id));
     if (warehouseReceiptId) params.set("receipt", warehouseReceiptId);
     if (catalogEntryId && catalogImportId) { params.set("entry", catalogEntryId); params.set("catalogImport", catalogImportId); }
-    void request<{ items: PrintableLabel[] }>(`/api/labels?${params}`, { signal: controller.signal })
+    void request<{ items: PrintableLabel[] }>(`/api/labels?${params}`, { signal: controller.signal, cache: "no-store" })
       .then(data => { if (!controller.signal.aborted) { setItems(data.items); setCopies(old => Object.fromEntries(data.items.map(item => [item.positionId, old[item.positionId] ?? "1"]))); } })
       .catch(reason => { if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Не удалось загрузить этикетки."); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [attempt, positionIds, warehouseReceiptId, catalogEntryId, catalogImportId]);
+  }, [attempt, positionIds, warehouseReceiptId, catalogEntryId, catalogImportId, labelVersion]);
   const found = items.filter(item => item.status === "found");
   const validCopies = found.length > 0 && found.every(item => validLabelCopies(copies[item.positionId] || ""));
   const total = found.reduce((n, item) => n + (Number(copies[item.positionId]) || 0), 0);
-  const valid = validCopies && total <= labelCopyLimit && !imageError && !loading && !error;
+  const previewReady = !imageError && !loading && !error;
+  const valid = validCopies && total <= labelCopyLimit && previewReady;
   const current = single ? items[0] : undefined;
   const currentId = current?.positionId ?? positionIds[0] ?? "";
   async function print() {
@@ -72,8 +73,8 @@ export function LabelDialog({ positionIds = emptyIds, warehouseReceiptId, catalo
               {[1, 10, 50, 100].map(n => <Button key={n} disabled={loading || printing || current?.status !== "found"} onClick={() => amount(currentId, String(n))}>{n}</Button>)}
             </div>
             <div className="label-modal-actions">
-              {current?.status === "found" && current.imageUrl ? <a className="button" href={`${current.imageUrl}&download=1&name=${encodeURIComponent(current.sku)}`} download>Скачать этикетку</a> : null}
-              {current?.originalUrl ? <a className="button" href={current.originalUrl} target="_blank" rel="noopener noreferrer">Открыть оригинал</a> : null}
+              {previewReady && current?.status === "found" && current.imageUrl ? <a className="button" href={`${current.imageUrl}&download=1&name=${encodeURIComponent(current.sku)}`} download>Скачать этикетку</a> : null}
+              {previewReady && current?.originalUrl ? <a className="button" href={current.originalUrl} target="_blank" rel="noopener noreferrer">Открыть оригинал</a> : null}
               <Button primary disabled={!valid || printing} onClick={() => void print()}><Printer size={16} aria-hidden="true" />{printing ? "Готовим печать…" : `Печать ${validCopies ? total : 1} шт.`}</Button>
             </div>
           </div>

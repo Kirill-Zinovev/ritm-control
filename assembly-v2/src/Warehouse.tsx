@@ -13,12 +13,12 @@ import { WarehouseCompositionPreview, WarehouseOverview, WarehousePageCheck } fr
 import { PreparedDispatches, type DepartureReview } from "./PreparedDispatches";
 import "./warehouse-inventory.css";
 const ExportDialog = lazy(() => import("./exports/ExportDialog"));
-const OzonShipments = lazy(() => import("./OzonShipments"));
+const MarketplaceShipments = lazy(() => import("./MarketplaceShipments"));
 const DispatchHistory = lazy(() => import("./DispatchHistory"));
 export function Warehouse({ workspace: w }: { workspace: Workspace }) {
   const [tab, setTab] = useState(() => {
     const initial = new URLSearchParams(location.search).get("warehouse");
-    return initial === "ozon" || initial === "history" || initial === "stock" || initial === "draft" ? initial : "ready";
+    return initial === "ozon" || initial === "wb" || initial === "history" || initial === "stock" || initial === "draft" ? initial : "ready";
   });
   const [query, setQuery] = useState("");
   const [market, setMarket] = useState("");
@@ -27,6 +27,7 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
   const [downloading, setDownloading] = useState(false);
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [wbNumbers, setWbNumbers] = useState("");
   const [review, setReview] = useState(false);
   const [details, setDetails] = useState<Carton | null>(null);
   const [send, setSend] = useState<DepartureReview | null>(null);
@@ -54,12 +55,13 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
   const draftCount = state.dispatches.filter((dispatch) => dispatch.state === "draft").length;
   const departingCartons = send?.drafts.flatMap((draft) => draft.cartons) ?? [];
   const inventory = tab === "ready" || tab === "stock";
-  const standalone = inventory || tab === "ozon" || tab === "history";
+  const standalone = inventory || tab === "ozon" || tab === "wb" || tab === "history";
   function selectTab(key: string) {
     setTab(key);
     setPage(0);
+    if (key !== "wb") setWbNumbers("");
     const url = new URL(location.href);
-    if (key === "ozon" || key === "history" || key === "stock" || key === "draft") url.searchParams.set("warehouse", key);
+    if (key !== "ready") url.searchParams.set("warehouse", key);
     else url.searchParams.delete("warehouse");
     if (url.href !== location.href) history.replaceState(null, "", url);
   }
@@ -171,6 +173,7 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
           ["stock", "Запас на складе"],
           ["draft", "Подготовленные"],
           ["ozon", "Отгрузки Ozon"],
+          ["wb", "Отгрузки WB"],
           ["history", "История"],
         ].map(([key, label]) => (
           <button
@@ -184,9 +187,10 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
           </button>
         ))}
       </div>
-      {tab === "ozon" ? (
-        <Suspense fallback={<p role="status">Загружаем отгрузки Ozon…</p>}>
-          <OzonShipments workspace={w} />
+      {tab === "ozon" || tab === "wb" ? (
+        <Suspense fallback={<p role="status">Загружаем отгрузки…</p>}>
+          <MarketplaceShipments key={tab} workspace={w} market={tab === "wb" ? "WB" : "OZON"}
+            initialNumbers={tab === "wb" ? wbNumbers : undefined} onPrepared={() => selectTab("draft")} />
         </Suspense>
       ) : tab === "history" ? (
         <Suspense fallback={<p role="status">Загружаем историю отгрузок…</p>}>
@@ -335,6 +339,10 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
                 <Button className="warehouse-clear-selection" onClick={() => setSelected(new Set())}>
                   Снять выбор
                 </Button>
+                {selection.every((box) => box.market === "WB") && <Button disabled={w.busy} onClick={() => {
+                  setWbNumbers(selection.map((box) => box.label).join("\n"));
+                  selectTab("wb");
+                }}>Подготовить для WB</Button>}
                 <Button
                   primary
                   disabled={w.busy || !compatible || selection.length > 100}

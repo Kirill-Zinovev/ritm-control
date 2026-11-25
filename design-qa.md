@@ -83,3 +83,12 @@
 - Read-only source diagnosis: a discrepancy in one production or packing position can make the shared queue provisional for other supplies. The forecast now retains the underlying printer reason when it propagates to a cutting queue; it does not change production marks, output or schedules. Source records and current journal evidence remain separate from partial calendar estimates.
 - Checks: the Browser plugin was unavailable; an isolated Playwright fixture exercised duplicate warnings, unambiguous source links, grouping and show-all, dates, stale and empty states, weekly shifts, keyboard selection, mobile scroll and the month/supply/machine views. Requests outside the fixture and non-GET requests were blocked. Production authentication was not exercised by this fixture.
 - final result: passed
+
+## Создание поставки и сводка «К запуску» (2026-11-23)
+
+- Выбранные источники — форма со сроками в одну линию, сводка с иконками рулона и короба, экран проверки с видимой причиной пропуска. Снимки сняты во встроенном браузере при 1487 × 1058 и 768 × 660. В отчёте используются пробные позиции.
+- Сравнения макета и отрисованного РИТМа сохранены вместе в `.checks/supply-ui/create-comparison.jpg`, `review-comparison.jpg` и `summary-comparison.jpg`. Сверены шрифт Segoe UI Variable, интервалы, цвета этапов и состояний, штатные иконки и формулировки действий. Стиль окружения и размер полей берутся из действующей дизайн-системы РИТМа. Кнопка повторной проверки расположена у фильтров, где доступна для всего списка.
+- На первом проходе проверка занимала почти весь экран и сводка уступала по читаемости макету. В компактном виде показаны первые четыре позиции и первый пропуск, полный состав открывается одной кнопкой. Увеличены заголовки, подписи сроков и значки. Повторный снимок подтверждает сканируемый список и читаемые данные двух участков. В окне 768 × 660 нижние кнопки видимы, содержимое прокручивается вертикально, горизонтального переполнения нет.
+- Во встроенном браузере проверены загрузка, выгрузка и скачивание шаблона Excel, порядок дат, сохранение черновика при возврате, фильтры, округление вверх и до нуля, возврат позиции после округления до нуля, причина и ссылка на карточку, повторная проверка после исправления справочника. Локальное подтверждение передало выбранные количества, московские сроки, срочный приоритет и закрытие для сборки. Ошибок в консоли нет.
+- Прошли typecheck, сборка, 98 тестов поставок и 65 тестов Sites.
+- final result: passed

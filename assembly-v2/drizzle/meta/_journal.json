@@ -211,6 +211,20 @@
       "when": 1795177024617,
       "tag": "0029_fat_nick_fury",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1795519800000,
+      "tag": "0030_carton_merge_split",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1795588858440,
+      "tag": "0031_allocation_fit_confirmation",
+      "breakpoints": true
     }
   ]
 }

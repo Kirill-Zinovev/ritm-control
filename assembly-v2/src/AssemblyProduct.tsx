@@ -2,11 +2,14 @@ import { useState } from "react";
 import { Box, ChevronDown, History, Printer } from "lucide-react";
 import type { Operation, Position, Supply } from "../shared/model";
 import { dateTime, number, operationLabels } from "../shared/model";
-import { availableOperations, workBlockedReason } from "../shared/assembly";
+import { availableOperations, boxingBlockedReason, workBlockedReason } from "../shared/assembly";
 import { Button } from "./ui";
 import type { Workspace } from "./useWorkspace";
 import { CancelWorkDialog } from "./WorkHistory";
 import { ProductPhoto } from "./ProductPhoto";
+import { CatalogArticleLink } from "./CatalogArticleLink";
+import { useAccess } from "./Access";
+import { cartonStoreNumber } from "../shared/carton-number";
 
 export function AssemblyProduct({
   product: p,
@@ -35,6 +38,7 @@ export function AssemblyProduct({
   labelSelectionDisabled: boolean;
   onSelectLabel(selected: boolean): void;
 }) {
+  const workBlock = workBlockedReason(p, supply);
   return (
     <article id={`position-${p.id}`} className={`article${expanded ? " expanded" : ""}${highlighted ? " is-search-target" : ""}`}>
       <button
@@ -46,7 +50,7 @@ export function AssemblyProduct({
       >
         <div className="product-cell">
           <ProductPhoto
-            importId={p.catalogImportId ?? ""}
+            importId={p.photoCatalogImportId ?? p.catalogImportId ?? ""}
             id={p.catalog?.photoId ?? null}
             sourceUrl={p.photoUrl}
             sku={p.sku}
@@ -83,14 +87,15 @@ export function AssemblyProduct({
       <Button
         className="quick-work"
         aria-label={`Записать работу · ${p.sku}`}
-        disabled={w.busy || w.loading || w.selectionPending || !p.ready}
-        title={workBlockedReason(p, supply) || undefined}
+        disabled={w.busy || w.loading || w.selectionPending || !!workBlock}
+        title={workBlock || undefined}
+        aria-describedby={expanded && workBlock ? `boxing-help-${p.id}` : undefined}
         onClick={onWork}
       >
         Записать работу
       </Button>
       {expanded ? (
-        <ProductDetails product={p} workspace={w} onBox={onBox} onLabel={onLabel}
+        <ProductDetails product={p} supply={supply} workspace={w} onBox={onBox} onLabel={onLabel}
           labelSelected={labelSelected} labelSelectionDisabled={labelSelectionDisabled} onSelectLabel={onSelectLabel} />
       ) : null}
     </article>
@@ -143,6 +148,7 @@ function Stage({
 }
 function ProductDetails({
   product: p,
+  supply,
   workspace: w,
   onBox,
   onLabel,
@@ -151,6 +157,7 @@ function ProductDetails({
   onSelectLabel,
 }: {
   product: Position;
+  supply: Supply;
   workspace: Workspace;
   onBox(): void;
   onLabel(): void;
@@ -158,6 +165,11 @@ function ProductDetails({
   labelSelectionDisabled: boolean;
   onSelectLabel(selected: boolean): void;
 }) {
+  const role = useAccess();
+  const boxBlock = boxingBlockedReason(p, supply);
+  const storeMissing = cartonStoreNumber(supply.store) === null;
+  const catalogNeedsReview = storeMissing ? !p.catalog?.store || !p.catalog.unitsPerBox : !p.unitsPerBox;
+  const helpId = `boxing-help-${p.id}`;
   const [historyOpen, setHistoryOpen] = useState(false);
   const [cancelId, setCancelId] = useState<string | null>(null);
   const records = w.state!.works.filter((x) => x.positionId === p.id);
@@ -182,7 +194,9 @@ function ProductDetails({
         </Button>
         <Button
           className="button-quiet compact-add-box"
-          disabled={w.busy || w.loading || w.selectionPending || !p.ready}
+          disabled={w.busy || w.loading || w.selectionPending || !!boxBlock}
+          aria-describedby={boxBlock ? helpId : undefined}
+          title={boxBlock || undefined}
           onClick={onBox}
         >
           <Box size={15} aria-hidden="true" />
@@ -194,11 +208,24 @@ function ProductDetails({
             onChange={e => onSelectLabel(e.target.checked)} />В печать
         </label>
       </div>
+      {boxBlock && (
+        <div className="box-guidance is-error" id={helpId} role="status">
+          <strong>Добавление в короб недоступно.</strong> {boxBlock}
+          {role === "owner" && storeMissing && !supply.sourceLocked && supply.sourceActive !== false && p.catalog?.store ? (
+            <> <a href="/?view=setup#ritm-issues">Открыть проверку</a></>
+          ) : null}
+          {role !== "collector" && (p.sourceActive !== false || p.storeNeedsReview) && supply.sourceActive !== false &&
+            !supply.sourceLocked && catalogNeedsReview ? (
+            <> <CatalogArticleLink sku={p.sku} scope={{ market: supply.market, store: p.catalog?.store || (/^\d+$/.test(supply.store) ? supply.store : "") }}
+              label="Открыть справочник" /></>
+          ) : null}
+        </div>
+      )}
       <div className="compact-source-note">
         {p.department} ·{" "}
         {p.unitsPerBox
           ? `${number(p.unitsPerBox)} шт. / короб`
-          : "Норма короба не задана"}{" "}
+          : p.catalog?.unitsPerBox && boxBlock ? "Вместимость указана в справочнике" : "Норма короба не задана"}{" "}
         · Упаковано без короба: {number(p.packing - p.boxed)} шт.
       </div>
       {boxes.length ? (

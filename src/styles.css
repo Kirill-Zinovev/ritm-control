@@ -2695,6 +2695,38 @@ td small {
 .manager-create-form .button {
   min-height: 42px;
 }
+.owner-pin-access {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: #f5f8fc;
+}
+.owner-pin-access h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.owner-pin-access small {
+  color: var(--muted);
+}
+.owner-pin-status,
+.owner-pin-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.owner-pin-status {
+  justify-content: space-between;
+}
+.owner-pin-form {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.owner-pin-form .owner-pin-actions {
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+}
 .manager-access-section > small {
   display: block;
   margin-top: 9px;
@@ -5882,26 +5914,28 @@ td small {
 
 /* Manager-side Assembly analytics. Scoped so the existing RITM shell keeps its own design tokens. */
 .assembly-analytics {
-  --assembly-blue: #1769e8;
+  --assembly-blue: var(--primary);
   --assembly-blue-soft: #edf4ff;
-  --assembly-green: #16a36a;
+  --assembly-green: #11845a;
   --assembly-green-soft: #e7f7f0;
-  --assembly-violet: #8752d8;
+  --assembly-violet: #7845c3;
   --assembly-violet-soft: #f2ecfc;
-  --assembly-indigo: #5d59d6;
-  --assembly-indigo-soft: #efefff;
-  --assembly-teal: #099c91;
-  --assembly-text: #13233b;
-  --assembly-muted: #6d7e98;
-  --assembly-border: #dce5f0;
+  --assembly-indigo: var(--primary);
+  --assembly-indigo-soft: #edf4ff;
+  --assembly-teal: #087c72;
+  --assembly-text: var(--text);
+  --assembly-muted: var(--muted);
+  --assembly-border: var(--border);
   color: var(--assembly-text);
   display: grid;
-  gap: 14px;
+  gap: var(--space-4);
   min-width: 0;
+  container-type: inline-size;
 }
 .assembly-toolbar,
 .assembly-team-panel,
-.assembly-detail-panel {
+.assembly-detail-panel,
+.assembly-roster {
   background: #fff;
   border: 1px solid var(--assembly-border);
   border-radius: 14px;
@@ -5995,6 +6029,10 @@ td small {
   border-radius: 8px;
   color: #8191a8;
   background: #fff;
+}
+.assembly-search:focus-within {
+  border-color: var(--assembly-blue);
+  box-shadow: 0 0 0 2px var(--assembly-blue-soft);
 }
 .assembly-search input {
   min-width: 0;
@@ -6117,19 +6155,42 @@ td small {
   background: #f3f7ff;
 }
 .assembly-kpis {
+  --metric-ink: #fff;
+  --metric-label: #dbe8ff;
+  --metric-divider: #ffffff32;
+  --metric-blue: #bad8ff;
+  --metric-green: #83ebbe;
+  --metric-violet: #d5b4ff;
+  --metric-teal: #a0f0e7;
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 10px;
+  align-items: center;
+  padding: 14px 2px;
+  border-radius: 14px;
+  background: linear-gradient(110deg, #10294d 55%, #12459b 100%);
+}
+.assembly-kpis.is-compact {
+  --metric-ink: var(--assembly-text);
+  --metric-label: var(--assembly-muted);
+  --metric-divider: var(--assembly-border);
+  --metric-blue: var(--assembly-blue);
+  --metric-green: var(--assembly-green);
+  --metric-violet: var(--assembly-violet);
+  --metric-teal: var(--assembly-teal);
+  padding-block: 8px;
+  border: 1px solid var(--assembly-border);
+  background: #fff;
+}
+.assembly-kpi + .assembly-kpi {
+  border-inline-start: 1px solid var(--metric-divider, var(--assembly-border));
 }
 .assembly-kpi {
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  min-height: 82px;
-  padding: 13px;
-  border: 1px solid var(--assembly-border);
-  border-radius: 12px;
-  background: #fff;
+  align-items: center;
+  gap: clamp(8px, 0.9cqw, 14px);
+  min-width: 0;
+  min-height: 62px;
+  padding: 5px clamp(10px, 1.5cqw, 23px);
 }
 .assembly-kpi-icon {
   display: grid;
@@ -6138,8 +6199,8 @@ td small {
   width: 34px;
   height: 34px;
   border-radius: 9px;
-  color: var(--assembly-blue);
-  background: var(--assembly-blue-soft);
+  color: var(--metric-blue, var(--assembly-blue));
+  background: color-mix(in srgb, currentColor 11%, transparent);
 }
 .assembly-kpi-copy {
   display: grid;
@@ -6147,51 +6208,146 @@ td small {
   gap: 1px;
 }
 .assembly-kpi-copy small {
-  color: var(--assembly-muted);
-  font-size: 11px;
+  color: var(--metric-label, var(--assembly-muted));
+  font-size: 13px;
   line-height: 1.3;
 }
 .assembly-kpi-copy strong {
-  color: var(--assembly-text);
-  font-size: 20px;
-  line-height: 1.2;
+  color: var(--metric-ink, var(--assembly-text));
+  font-size: clamp(23px, 2.4cqw, 34px);
+  line-height: 1.15;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .assembly-kpi-copy em {
-  color: #8492a7;
+  color: var(--metric-label, var(--assembly-muted));
   font-size: 10px;
   font-style: normal;
   line-height: 1.3;
 }
-.assembly-kpi.is-indigo .assembly-kpi-icon {
-  color: var(--assembly-indigo);
-  background: var(--assembly-indigo-soft);
+.assembly-kpis.is-compact .assembly-kpi {
+  min-height: 42px;
+}
+.assembly-kpis.is-compact .assembly-kpi-copy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 8px;
+}
+.assembly-kpis.is-compact .assembly-kpi-copy strong {
+  font-size: clamp(19px, 1.75cqw, 25px);
+}
+.assembly-kpis.is-compact .assembly-kpi-copy em {
+  flex-basis: 100%;
 }
 .assembly-kpi.is-green .assembly-kpi-icon {
-  color: var(--assembly-green);
-  background: var(--assembly-green-soft);
+  color: var(--metric-green, var(--assembly-green));
 }
 .assembly-kpi.is-violet .assembly-kpi-icon {
-  color: var(--assembly-violet);
-  background: var(--assembly-violet-soft);
+  color: var(--metric-violet, var(--assembly-violet));
 }
 .assembly-kpi.is-teal .assembly-kpi-icon {
-  color: var(--assembly-teal);
-  background: #e5f7f4;
+  color: var(--metric-teal, var(--assembly-teal));
+}
+.assembly-norm-issues {
+  overflow: hidden;
+  min-width: 0;
+  scroll-margin-top: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel, 15px);
+  background: var(--surface);
+  box-shadow: 0 8px 22px rgb(28 52 91 / 6%);
+}
+.assembly-norm-issues > header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  border-inline-start: 3px solid color-mix(in srgb, var(--warning) 48%, var(--warning-bg));
+  background: color-mix(in srgb, var(--warning-bg) 48%, var(--surface));
+}
+.assembly-norm-issues-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 36px;
+  height: 36px;
+  border-radius: 9px;
+  color: var(--warning);
+  background: var(--warning-bg);
+}
+.assembly-norm-issues h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 750;
+}
+.assembly-norm-issues p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.assembly-norm-issues-count,
+.assembly-norm-pending {
+  width: fit-content;
+  border-radius: 6px;
+  background: var(--warning-bg);
+  color: var(--warning);
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 650;
+}
+.assembly-norm-issues-count {
+  margin-inline-start: auto;
+  white-space: nowrap;
+}
+.assembly-norm-pending {
+  display: inline-block;
+  white-space: normal;
+  text-decoration: none;
+}
+.assembly-norm-pending:hover {
+  text-decoration: underline;
+}
+.assembly-norm-issue {
+  display: grid;
+  grid-template-columns: minmax(140px, .68fr) minmax(0, 2fr) 195px;
+  align-items: center;
+  gap: 12px 20px;
+  padding: 11px 20px;
+  border-top: 1px solid var(--border);
+}
+.assembly-norm-issue-item, .assembly-norm-issue-reason {
+  display: grid;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+.assembly-norm-issue-reason strong { font-weight: 650; }
+.assembly-norm-issue small { color: var(--muted); font-size: 12px; }
+.assembly-norm-issue-link { min-height: 36px; justify-self: end; }
+.assembly-norm-issues-more {
+  border-top: 1px solid var(--border);
+}
+.assembly-norm-issues-more > summary {
+  padding: 11px 20px;
+  cursor: pointer;
+  color: var(--primary);
+  font-weight: 650;
+}
+@media (max-width: 680px) {
+  .assembly-norm-issues > header { flex-wrap: wrap; padding: 12px; }
+  .assembly-norm-issues > header > div { flex: 1 1 min(210px, 100%); }
+  .assembly-norm-issues-count { margin-inline-start: 48px; }
+  .assembly-norm-issue { grid-template-columns: minmax(0, 1fr); padding: 12px; gap: 8px; }
+  .assembly-norm-issue-link { justify-self: start; }
 }
 .assembly-master-detail {
   display: grid;
-  grid-template-columns: minmax(0, 1.12fr) minmax(420px, 0.88fr);
+  grid-template-columns: minmax(195px, 19%) minmax(0, 1fr);
   align-items: start;
-  gap: 12px;
+  gap: var(--space-3);
   min-width: 0;
 }
 .assembly-team-panel {
-  position: sticky;
-  top: 14px;
-  display: flex;
-  flex-direction: column;
-  max-height: calc(100vh - 28px);
   min-width: 0;
   overflow: hidden;
 }
@@ -6200,31 +6356,31 @@ td small {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 15px 16px 12px;
+  padding: 16px 20px;
   border-bottom: 1px solid #edf1f6;
 }
 .assembly-panel-heading > div {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 12px;
 }
 .assembly-heading-icon {
   display: grid;
   place-items: center;
-  width: 33px;
-  height: 33px;
+  width: 37px;
+  height: 37px;
   border-radius: 9px;
   color: var(--assembly-blue);
   background: var(--assembly-blue-soft);
 }
 .assembly-panel-heading h2 {
   margin: 0;
-  font-size: 15px;
+  font-size: 20px;
 }
 .assembly-panel-heading p {
   margin: 3px 0 0;
   color: var(--assembly-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 .assembly-loading-indicator {
   display: inline-flex;
@@ -6246,30 +6402,35 @@ td small {
   }
 }
 .assembly-team-table-scroll {
-  flex: 1 1 auto;
-  max-height: min(63vh, 690px);
-  min-height: 0;
-  overflow: auto;
-  overscroll-behavior: contain;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
 }
 .assembly-team-table {
   width: 100%;
-  min-width: 755px;
+  min-width: 735px;
   border-collapse: separate;
   border-spacing: 0;
-  font-size: 12px;
+  table-layout: fixed;
+  font-size: 14px;
 }
 .assembly-team-table thead th {
-  position: sticky;
-  top: 0;
-  z-index: 2;
+  min-width: 0;
   padding: 0;
   border-bottom: 1px solid #e5ebf3;
-  color: #60738f;
-  background: #f8fafd;
+  color: var(--assembly-muted);
+  background: #f3f7fb;
   text-align: left;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
+}
+.assembly-team-table thead th:first-child {
+  width: 23%;
+}
+.assembly-team-table thead th:nth-child(5) {
+  width: 12%;
+}
+.assembly-team-table thead th:nth-child(6) {
+  width: 17%;
 }
 .assembly-team-table thead button {
   display: inline-flex;
@@ -6277,7 +6438,7 @@ td small {
   gap: 5px;
   width: 100%;
   min-height: 42px;
-  padding: 7px 9px;
+  padding: 8px clamp(8px, 1.25cqw, 20px);
   border: 0;
   color: inherit;
   background: transparent;
@@ -6289,38 +6450,49 @@ td small {
 .assembly-team-table thead button:hover {
   color: var(--assembly-blue);
 }
-.assembly-team-table thead button > span {
-  color: #a1aec0;
+.assembly-team-table thead .assembly-sort-icon {
+  flex-shrink: 0;
+  color: var(--assembly-muted);
 }
-.assembly-team-table thead i {
-  display: inline-flex;
-  font-style: normal;
+.assembly-team-table thead th[aria-sort] button {
+  color: var(--assembly-blue);
 }
-.assembly-team-table thead i.is-green {
+.assembly-team-table thead th[aria-sort] .assembly-sort-icon {
+  color: currentColor;
+}
+.assembly-team-table thead .is-green {
   color: var(--assembly-green);
 }
-.assembly-team-table thead i.is-violet {
+.assembly-team-table thead .is-violet {
   color: var(--assembly-violet);
 }
-.assembly-team-table thead i.is-indigo {
+.assembly-team-table thead .is-indigo {
   color: var(--assembly-indigo);
 }
 .assembly-team-table tbody tr {
   cursor: pointer;
 }
-.assembly-team-table tbody tr:hover {
-  background: #f7faff;
-}
-.assembly-team-table tbody tr.is-selected {
-  background: #edf4ff;
+.assembly-team-table tbody tr:hover,
+.assembly-team-table tbody tr:focus-within {
+  background: #f2f7ff;
 }
 .assembly-team-table tbody td,
 .assembly-team-table tbody th {
-  padding: 9px;
+  padding: 12px clamp(8px, 1.25cqw, 20px);
   border-bottom: 1px solid #edf1f6;
   text-align: left;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
+}
+.assembly-team-table .assembly-row-end {
+  width: 35px;
+  padding-inline: 0 12px;
+  color: var(--assembly-muted);
+  text-align: right;
+}
+.assembly-team-table tbody tr:hover .assembly-row-end,
+.assembly-team-table tbody tr:focus-within .assembly-row-end {
+  color: var(--assembly-blue);
 }
 .assembly-team-table tbody tr:last-child td,
 .assembly-team-table tbody tr:last-child th {
@@ -6329,8 +6501,9 @@ td small {
 .assembly-person-button {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-width: 126px;
+  gap: 11px;
+  min-width: 0;
+  max-width: 100%;
   padding: 0;
   border: 0;
   color: var(--assembly-text);
@@ -6341,14 +6514,12 @@ td small {
 }
 .assembly-person-button > span:last-child {
   display: grid;
+  min-width: 0;
   gap: 2px;
 }
 .assembly-person-button strong {
-  max-width: 130px;
-  overflow: hidden;
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  font-size: 14px;
 }
 .assembly-person-button small {
   color: var(--assembly-muted);
@@ -6357,35 +6528,35 @@ td small {
 .assembly-avatar {
   display: grid;
   place-items: center;
-  flex: 0 0 31px;
-  width: 31px;
-  height: 31px;
+  flex: 0 0 35px;
+  width: 35px;
+  height: 35px;
   border: 1px solid #d7e5fb;
   border-radius: 50%;
   color: var(--assembly-blue);
   background: #eaf2ff;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 800;
 }
 .assembly-avatar.is-large {
-  flex-basis: 42px;
-  width: 42px;
-  height: 42px;
-  font-size: 14px;
+  flex-basis: 58px;
+  width: 58px;
+  height: 58px;
+  font-size: 23px;
 }
 .assembly-bar-cell {
   display: grid;
   gap: 5px;
-  min-width: 78px;
+  min-width: 0;
 }
 .assembly-bar-cell b {
   color: #172943;
-  font-size: 12px;
+  font-size: 15px;
 }
 .assembly-value-bar {
   display: block;
   width: 100%;
-  height: 5px;
+  height: 6px;
   overflow: hidden;
   border-radius: 99px;
   background: #e8edf4;
@@ -6404,21 +6575,22 @@ td small {
 }
 .assembly-coef-value {
   color: #233a59;
-  font-size: 12px;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
 }
 .assembly-last-date {
-  color: #60738f;
+  color: var(--assembly-muted);
   white-space: nowrap;
 }
 .assembly-table-foot {
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  padding: 9px 12px;
+  padding: 9px 20px;
   border-top: 1px solid #edf1f6;
-  color: #8190a4;
+  color: var(--assembly-muted);
   background: #fbfcfe;
-  font-size: 10px;
+  font-size: 11px;
 }
 .assembly-panel-state {
   display: grid;
@@ -6446,46 +6618,112 @@ td small {
   animation: assembly-spin 0.8s linear infinite;
 }
 .assembly-detail-panel {
+  min-width: 0;
+  overflow: hidden;
+}
+.assembly-roster {
   position: sticky;
   top: 14px;
   min-width: 0;
-  max-height: calc(100vh - 28px);
-  overflow: auto;
-  overscroll-behavior: contain;
+  padding: 14px;
+}
+.assembly-team-back {
+  min-height: 34px;
+  padding: 5px 9px;
+  color: var(--assembly-blue);
+  background: var(--assembly-blue-soft);
+}
+.assembly-team-back:hover {
+  color: #fff;
+  background: var(--assembly-blue);
+}
+.assembly-roster h2 {
+  margin: 16px 0 10px;
+  font-size: 16px;
+}
+.assembly-roster-list {
+  display: grid;
+  gap: 2px;
+  max-height: 62vh;
+  overflow-y: auto;
+  margin: 10px 0 0;
+  padding: 3px;
+  list-style: none;
+}
+.assembly-roster-list li + li {
+  border-top: 1px solid #edf1f6;
+}
+.assembly-roster-person {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 51px;
+  padding: 7px 9px;
+  border: 0;
+  border-inline-start: 3px solid transparent;
+  border-radius: 8px;
+  color: var(--assembly-text);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.assembly-roster-person:hover {
+  background: #f4f8fe;
+}
+.assembly-roster-person[aria-current="true"] {
+  border-inline-start-color: var(--assembly-blue);
+  background: var(--assembly-blue-soft);
+}
+.assembly-roster-name {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+.assembly-roster-name small,
+.assembly-roster-empty {
+  color: var(--assembly-muted);
+  font-size: 12px;
+}
+.assembly-roster-person .assembly-coef-value {
+  font-size: 13px;
+}
+.assembly-detail-hero {
+  display: flex;
+  align-items: center;
+  gap: clamp(10px, 1.2cqw, 22px);
+  margin: 10px;
+  padding: 14px;
+  border: 1px solid #e7effc;
+  border-radius: 11px;
+  background: linear-gradient(110deg, #eaf2ff, #f6f9ff);
 }
 .assembly-detail-heading {
   display: flex;
+  flex: 0 1 24%;
   align-items: center;
   gap: 10px;
-  padding: 14px 15px 11px;
+  min-width: 0;
+}
+.assembly-detail-heading > div:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .assembly-detail-heading h2 {
   margin: 0;
-  font-size: 17px;
+  font-size: clamp(21px, 2.1cqw, 31px);
+  line-height: 1.16;
 }
 .assembly-detail-heading p {
   margin: 3px 0 0;
   color: var(--assembly-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
-.assembly-detail-active {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  margin-left: auto;
-  padding: 5px 8px;
-  border-radius: 99px;
-  color: #147c52;
-  background: var(--assembly-green-soft);
-  font-size: 10px;
-  font-weight: 700;
-  white-space: nowrap;
-}
-.assembly-detail-active i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--assembly-green);
+.assembly-detail-heading .assembly-review-pill {
+  margin-top: 5px;
 }
 .assembly-detail-tabs {
   display: flex;
@@ -6497,9 +6735,10 @@ td small {
 }
 .assembly-detail-tabs button {
   flex: 1;
-  padding: 10px 6px;
+  padding: 12px 8px;
   border-radius: 0;
   border-bottom: 2px solid transparent;
+  font-size: 13px;
 }
 .assembly-detail-tabs button:hover {
   background: #f8faff;
@@ -6512,72 +6751,49 @@ td small {
 }
 .assembly-employee-kpis {
   display: grid;
+  flex: 1;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 7px;
-  padding: 12px;
-}
-.assembly-employee-kpis > div {
-  display: grid;
-  align-content: start;
-  gap: 4px;
   min-width: 0;
-  min-height: 78px;
-  padding: 9px;
-  border: 1px solid #e8edf4;
-  border-radius: 9px;
-  background: #fcfdff;
 }
-.assembly-employee-kpis svg {
-  color: var(--assembly-blue);
+.assembly-employee-kpis .assembly-kpi {
+  gap: 7px;
+  padding-inline: clamp(7px, 0.8cqw, 14px);
+  border-color: #d5e2f4;
 }
-.assembly-employee-kpis small {
-  color: var(--assembly-muted);
-  font-size: 9px;
-  line-height: 1.25;
+.assembly-employee-kpis .assembly-kpi-icon {
+  flex-basis: 22px;
+  width: 22px;
+  height: 24px;
+  background: transparent;
 }
-.assembly-employee-kpis strong {
-  color: var(--assembly-text);
-  font-size: 17px;
-  font-variant-numeric: tabular-nums;
-}
-.assembly-employee-kpis em {
-  color: #8492a7;
-  font-size: 9px;
-  font-style: normal;
-}
-.assembly-employee-kpis .is-green svg {
-  color: var(--assembly-green);
-}
-.assembly-employee-kpis .is-violet svg {
-  color: var(--assembly-violet);
-}
-.assembly-employee-kpis .is-indigo svg {
-  color: var(--assembly-indigo);
+.assembly-employee-kpis .assembly-kpi-copy strong {
+  font-size: clamp(21px, 2cqw, 29px);
 }
 .assembly-detail-section-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 0 13px 8px;
+  padding: 3px 16px 10px;
 }
 .assembly-detail-section-heading h3 {
   margin: 0;
-  font-size: 13px;
+  font-size: 17px;
 }
 .assembly-detail-section-heading p {
   margin: 2px 0 0;
   color: var(--assembly-muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 .assembly-detail-section-heading > span {
   color: var(--assembly-muted);
-  font-size: 10px;
+  font-size: 12px;
+  white-space: nowrap;
 }
 .assembly-detail-note {
-  margin: 0 12px 9px;
-  color: #7889a0;
-  font-size: 10px;
+  margin: 0 16px 10px;
+  color: var(--assembly-muted);
+  font-size: 12px;
   line-height: 1.45;
 }
 .assembly-detail-table-scroll {
@@ -6587,68 +6803,63 @@ td small {
   border-bottom: 1px solid #edf1f6;
 }
 .assembly-detail-table {
-  width: 920px;
-  min-width: 920px;
-  table-layout: fixed;
+  width: 100%;
+  min-width: 760px;
   border-collapse: separate;
   border-spacing: 0;
-  font-size: 10px;
-}
-.assembly-detail-table th:nth-child(1),
-.assembly-detail-table td:nth-child(1) {
-  width: 100px;
-}
-.assembly-detail-table th:nth-child(2),
-.assembly-detail-table td:nth-child(2) {
-  width: 92px;
-}
-.assembly-detail-table th:nth-child(3),
-.assembly-detail-table td:nth-child(3) {
-  width: 94px;
-}
-.assembly-detail-table th:nth-child(4),
-.assembly-detail-table td:nth-child(4) {
-  width: 150px;
-}
-.assembly-detail-table th:nth-child(5),
-.assembly-detail-table td:nth-child(5) {
-  width: 150px;
-}
-.assembly-detail-table th:nth-child(6),
-.assembly-detail-table td:nth-child(6) {
-  width: 54px;
-}
-.assembly-detail-table th:nth-child(7),
-.assembly-detail-table td:nth-child(7) {
-  width: 78px;
-}
-.assembly-detail-table th:nth-child(8),
-.assembly-detail-table td:nth-child(8) {
-  width: 58px;
-}
-.assembly-detail-table th:nth-child(9),
-.assembly-detail-table td:nth-child(9) {
-  width: 144px;
+  font-size: 13px;
 }
 .assembly-detail-table thead th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  padding: 8px 7px;
+  min-width: 0;
+  padding: 10px 9px;
   border-bottom: 1px solid #e5ebf3;
-  color: #6d7e98;
-  background: #f8fafd;
+  color: var(--assembly-muted);
+  background: #f3f7fb;
   text-align: left;
-  font-size: 9px;
+  font-size: 12px;
 }
 .assembly-detail-table tbody td {
-  max-width: 160px;
+  max-width: 240px;
   overflow-wrap: anywhere;
   white-space: normal;
-  padding: 8px 7px;
+  padding: 11px 9px;
   border-bottom: 1px solid #edf1f6;
   color: #283b56;
   vertical-align: top;
+  font-variant-numeric: tabular-nums;
+}
+.assembly-event-table time,
+.assembly-event-table details > summary,
+.assembly-norm-value,
+.assembly-event-table td:nth-child(3),
+.assembly-event-table td:nth-child(6),
+.assembly-event-table td:nth-child(8) {
+  white-space: nowrap;
+}
+.assembly-event-table td:nth-child(2) {
+  min-width: 110px;
+}
+.assembly-operation {
+  display: inline-block;
+  padding: 3px 7px;
+  border-radius: 6px;
+  color: var(--assembly-muted);
+  background: #f3f7fb;
+  font-weight: 650;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+.assembly-operation.is-cut {
+  color: var(--assembly-green);
+  background: var(--assembly-green-soft);
+}
+.assembly-operation.is-assembly {
+  color: var(--assembly-violet);
+  background: var(--assembly-violet-soft);
+}
+.assembly-operation.is-packing {
+  color: var(--primary-pressed);
+  background: var(--assembly-blue-soft);
 }
 .assembly-detail-table tbody tr:last-child td {
   border-bottom: 0;
@@ -6716,21 +6927,27 @@ td small {
 .assembly-norms-view {
   padding: 12px 0;
 }
+.assembly-history-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+}
 .assembly-history-filters {
   display: flex;
+  flex-wrap: wrap;
   gap: 9px;
-  padding: 0 12px 10px;
+  padding: 0 16px 12px;
 }
 .assembly-history-filters label {
   display: grid;
-  flex: 1;
   gap: 4px;
-  min-width: 0;
+  min-width: 150px;
   color: var(--assembly-muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 .assembly-history-filters select {
-  height: 34px;
+  height: 36px;
 }
 .assembly-show-more {
   display: block;
@@ -6822,32 +7039,6 @@ td small {
 .assembly-norms-view .assembly-detail-note {
   margin-top: 9px;
 }
-.assembly-detail-empty {
-  display: grid;
-  justify-items: center;
-  gap: 7px;
-  padding: 40px 20px;
-  color: var(--assembly-muted);
-  text-align: center;
-}
-.assembly-detail-empty strong {
-  color: var(--assembly-text);
-  font-size: 14px;
-}
-.assembly-detail-empty span {
-  max-width: 230px;
-  font-size: 11px;
-  line-height: 1.4;
-}
-.assembly-detail-empty-icon {
-  display: grid;
-  place-items: center;
-  width: 46px;
-  height: 46px;
-  border-radius: 13px;
-  color: var(--assembly-blue);
-  background: var(--assembly-blue-soft);
-}
 .sr-only {
   position: absolute;
   width: 1px;
@@ -6856,47 +7047,67 @@ td small {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
 }
-@media (max-width: 1450px) {
+@container (max-width: 1120px) {
   .assembly-filter-row {
     gap: 7px;
   }
   .assembly-select-wrap {
     min-width: 150px;
   }
-  .assembly-toolbar-actions {
-    margin-left: 0;
+  .assembly-roster-person {
+    gap: 7px;
+    padding-inline: 6px;
   }
-  .assembly-kpi {
-    gap: 8px;
-    padding: 11px 9px;
-  }
-  .assembly-master-detail {
-    grid-template-columns: minmax(0, 1fr) minmax(380px, 0.92fr);
+  .assembly-roster-person .assembly-avatar {
+    flex-basis: 29px;
+    width: 29px;
+    height: 29px;
   }
 }
-@media (max-width: 1120px) {
-  .assembly-kpis {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
+@container (max-width: 960px) {
   .assembly-master-detail {
     grid-template-columns: minmax(0, 1fr);
   }
-  .assembly-team-panel {
+  .assembly-roster {
     position: static;
-    max-height: none;
   }
-  .assembly-detail-panel {
-    position: static;
-    max-height: none;
+  .assembly-roster .assembly-search {
+    max-width: 340px;
   }
-  .assembly-team-table-scroll {
-    max-height: 55vh;
+  .assembly-roster-list {
+    display: flex;
+    overflow: auto;
+    max-height: none;
+    gap: 5px;
+  }
+  .assembly-roster-list li {
+    flex: 0 0 auto;
+    max-width: 230px;
+  }
+  .assembly-roster-list li + li {
+    border-top: 0;
+  }
+  .assembly-roster-person {
+    background: #f7f9fc;
   }
 }
-@media (max-width: 700px) {
-  .assembly-analytics {
-    gap: 10px;
+@container (max-width: 790px) {
+  .assembly-kpis {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    row-gap: 6px;
   }
+  .assembly-kpis > .assembly-kpi:nth-child(4) {
+    border-inline-start: 0;
+  }
+  .assembly-detail-hero {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .assembly-detail-heading {
+    flex-basis: auto;
+  }
+}
+@container (max-width: 580px) {
   .assembly-toolbar {
     padding: 10px;
   }
@@ -6929,6 +7140,7 @@ td small {
   }
   .assembly-toolbar-actions {
     flex: 1 1 100%;
+    margin-left: 0;
   }
   .assembly-toolbar-actions .assembly-button {
     flex: 1;
@@ -6938,10 +7150,10 @@ td small {
   }
   .assembly-kpis {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 7px;
+    padding-block: 8px;
   }
   .assembly-kpi {
-    min-height: 72px;
+    min-height: 58px;
     padding: 9px;
   }
   .assembly-kpi-icon {
@@ -6952,20 +7164,31 @@ td small {
   .assembly-kpi-copy strong {
     font-size: 18px;
   }
-  .assembly-kpi:last-child {
+  .assembly-kpis > .assembly-kpi:nth-child(even) {
+    border-inline-start: 1px solid var(--metric-divider);
+  }
+  .assembly-kpis > .assembly-kpi:nth-child(odd),
+  .assembly-employee-kpis > .assembly-kpi:nth-child(3) {
+    border-inline-start: 0;
+  }
+  .assembly-kpis > .assembly-kpi:last-child {
     grid-column: 1 / -1;
   }
-  .assembly-team-table-scroll {
-    max-height: 62vh;
+  .assembly-team-table thead th:first-child,
+  .assembly-team-table tbody th {
+    position: sticky;
+    inset-inline-start: 0;
+    z-index: 1;
+    border-inline-end: 1px solid var(--assembly-border);
+  }
+  .assembly-team-table tbody th {
+    background: #fff;
   }
   .assembly-table-foot {
     flex-direction: column;
   }
   .assembly-employee-kpis {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .assembly-detail-active {
-    padding: 4px 6px;
   }
   .assembly-mini-breakdowns {
     grid-template-columns: minmax(0, 1fr);
@@ -7035,13 +7258,6 @@ td small {
 .assembly-review-pill.is-clear {
   color: #13764e;
   background: #e7f7ef;
-}
-.assembly-detail-active.is-review {
-  color: #855a0c;
-  background: #fff2d2;
-}
-.assembly-detail-active.is-review i {
-  background: #d59417;
 }
 .assembly-source-breakdown {
   display: grid;
@@ -7123,11 +7339,6 @@ td small {
   background: #f3f7fc;
   font-size: 10px;
   line-height: 1.4;
-}
-.assembly-employee-kpis strong.is-split {
-  font-size: 11px;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
 }
 .assembly-review-pill.is-source {
   color: #315e9c;

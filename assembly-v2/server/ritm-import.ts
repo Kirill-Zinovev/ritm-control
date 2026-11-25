@@ -10,6 +10,7 @@ type Previous = Position & {
   store: string;
   destination: string;
   originShipmentId: string;
+  catalogBindingRetired: number;
 };
 const storeNumber = (v: string): string | null => {
   const m = v.trim().match(/^(?:магазин\s*)?([1-9]\d*)$/iu);
@@ -37,7 +38,10 @@ export async function prepareRitmImport(
     "Повторяются исходные ID РИТМ.",
   );
   const previous = await store.all<Previous>(
-    `select p.*,s.external_id group_external_id,s.store,s.destination,s.origin_shipment_id from av2_positions p join av2_supplies s on s.id=p.supply_id where s.origin_shipment_id=?`,
+    `select p.*,s.external_id group_external_id,s.store,s.destination,s.origin_shipment_id,
+      json_extract(c.data,'$.retiredIdentity') is not null catalog_binding_retired
+      from av2_positions p join av2_supplies s on s.id=p.supply_id
+      left join av2_catalog_products c on c.entry_id=p.catalog_entry_id where s.origin_shipment_id=?`,
     [source.shipmentId],
   );
   const byPosition = new Map(previous.map((p) => [p.externalId, p]));
@@ -124,9 +128,10 @@ export async function prepareRitmImport(
           .filter((v): v is string => !!v),
       ),
     ];
-    let shop = explicit || (shops.length === 1 ? shops[0] : null);
+    const retainedShop = old?.catalogBindingRetired ? storeNumber(old.store) : null;
+    let shop = explicit || retainedShop || (shops.length === 1 ? shops[0] : null);
     const scopeConflict = !!old && !!shop && old.store !== shop;
-    if (explicit && matches.length && !scoped.length) {
+    if (explicit && explicit !== retainedShop && matches.length && !scoped.length) {
       shop = null;
       warn(
         `${p.sku}: магазин РИТМ расходится со справочником. Добавление в короб заблокировано.`,

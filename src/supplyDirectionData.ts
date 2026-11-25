@@ -1,5 +1,6 @@
 import type { LiveOrder } from "./livePrinting";
 import { supplyMarketplace } from "./liveSupplyMarketplace";
+import { assemblyPackingTotal, supplyPrinted } from "./liveSupplyProgress";
 
 export type DirectionJob = {
   id: string;
@@ -14,6 +15,11 @@ export type SupplyDirection = {
   marketplace: string | null;
   jobs: DirectionJob[];
 };
+export type DirectionProgressField =
+  | "printed"
+  | "assemblyMachineCut"
+  | "assemblyManualCut"
+  | "packed";
 const cities: [string, RegExp][] = [
   ["Москва", /(?:^|[^А-ЯЁA-Z0-9])(?:МОСКВА|МОСКВЫ|МСК)(?=$|[^А-ЯЁA-Z0-9])/u],
   [
@@ -60,34 +66,37 @@ export function orderStore(order: LiveOrder): string {
 }
 export function directionProgress(
   orders: LiveOrder[],
-  field: "packed" | "assemblyMachineCut" | "assemblyManualCut",
+  field: DirectionProgressField,
 ) {
   let plan = 0,
     done = 0,
     known = 0;
-  for (const order of orders) {
-    if (!Number.isFinite(order.quantity) || order.quantity <= 0) continue;
-    plan += order.quantity;
-    const value = order[field];
-    if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
-      done += Math.min(value, order.quantity);
-      known++;
-    } else if (
-      field === "packed" &&
-      typeof order.packedConfirmed === "number" &&
-      Number.isFinite(order.packedConfirmed) &&
-      order.packedConfirmed > 0
-    ) {
-      done += Math.min(order.packedConfirmed, order.quantity);
+  if (field === "packed") {
+    const packing = assemblyPackingTotal(orders);
+    plan = packing.plan;
+    done = packing.total ?? 0;
+    known = packing.known;
+  } else {
+    for (const order of orders) {
+      if (!Number.isFinite(order.quantity) || order.quantity <= 0) continue;
+      plan += order.quantity;
+      const value = field === "printed" ? supplyPrinted(order) : order[field];
+      if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+        done += Math.min(value, order.quantity);
+        known++;
+      }
     }
   }
   const complete = orders.length > 0 && known === orders.length;
+  const percentLimit = field === "printed" && done < plan ? 99 : 100;
   return {
     plan,
     done,
     known,
     complete,
-    percent: complete && plan > 0 ? Math.round((done / plan) * 100) : null,
+    percent: complete && plan > 0
+      ? Math.min(percentLimit, Math.round((done / plan) * 100))
+      : null,
     lowerPercent: !complete && plan > 0 && done > 0 ? Math.floor((done / plan) * 100) : null,
   };
 }

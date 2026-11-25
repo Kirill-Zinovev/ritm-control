@@ -1,8 +1,10 @@
 import { CloudError, readJson } from "./access.js";
 
 const COOKIE = "__Host-ritm_session";
+const OWNER_COOKIE = "__Host-ritm_owner_session";
 const SESSION_MS = 12 * 60 * 60 * 1000;
 const ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
+const OWNER_ATTEMPT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const LOCK_MS = 15 * 60 * 1000;
 const MAX_FAILURES = 5;
 // Cloudflare Workers Web Crypto rejects PBKDF2 iteration counts above 100,000.
@@ -39,6 +41,20 @@ const AUTH_SCHEMA = [
     failure_count INTEGER NOT NULL DEFAULT 0,
     locked_until INTEGER NOT NULL DEFAULT 0
   )`,
+  `CREATE TABLE IF NOT EXISTS ritm_owner_pin_credentials (
+    owner_id TEXT PRIMARY KEY NOT NULL,
+    username TEXT NOT NULL UNIQUE,
+    pin_salt TEXT NOT NULL,
+    pin_hash TEXT NOT NULL,
+    attempt_window_started_at INTEGER NOT NULL DEFAULT 0,
+    attempt_count INTEGER NOT NULL DEFAULT 0
+  )`,
+  `CREATE TABLE IF NOT EXISTS ritm_owner_pin_sessions (
+    token_hash TEXT PRIMARY KEY NOT NULL,
+    owner_id TEXT NOT NULL REFERENCES ritm_owner_pin_credentials(owner_id) ON DELETE CASCADE,
+    expires_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS ritm_owner_pin_sessions_owner ON ritm_owner_pin_sessions(owner_id)`,
 ];
 
 export async function ensureAuthSchema(db) {
@@ -74,11 +90,11 @@ function randomBytes(length) {
   return crypto.getRandomValues(new Uint8Array(length));
 }
 
-function parseCookie(request) {
+function parseCookie(request, name = COOKIE) {
   const value = request.headers.get("cookie") || "";
   for (const part of value.split(";")) {
     const split = part.trim().indexOf("=");
-    if (split < 0 || part.slice(0, split).trim() !== COOKIE) continue;
+    if (split < 0 || part.slice(0, split).trim() !== name) continue;
     const token = part.slice(split + 1).trim();
     return /^[A-Za-z0-9_-]{40,50}$/.test(token) ? token : null;
   }
@@ -90,8 +106,9 @@ function parseSessionToken(request) {
   return bearer || parseCookie(request);
 }
 
-function sessionCookie(token, maxAge = SESSION_MS / 1000) {
-  return `${COOKIE}=${token}; Path=/; Max-Age=${Math.max(0, Math.floor(maxAge))}; HttpOnly; Secure; SameSite=Lax`;
+function sessionCookie(token, maxAge = SESSION_MS / 1000, name = COOKIE) {
+  const sameSite = name === OWNER_COOKIE ? "Strict" : "Lax";
+  return `${name}=${token}; Path=/; Max-Age=${Math.max(0, Math.floor(maxAge))}; HttpOnly; Secure; SameSite=${sameSite}`;
 }
 
 export function clearSessionCookie() {
@@ -142,7 +159,7 @@ export function createTemporaryPin() {
 }
 
 async function hashPin(pin, salt = randomBytes(16)) {
-  const key = await crypto.subtle.importKey("raw", textEncoder.encode(requirePin(pin)), "PBKDF2", false, ["deriveBits"]);
+  const key = await crypto.subtle.importKey("raw", textEncoder.encode(pin), "PBKDF2", false, ["deriveBits"]);
   const result = new Uint8Array(await crypto.subtle.deriveBits(
     { name: "PBKDF2", salt, iterations: PBKDF2_ITERATIONS, hash: "SHA-256" },
     key,
@@ -184,15 +201,96 @@ export async function getManagerSession(request, db, now = Date.now()) {
   return { role: "manager", id: row.id, username: row.username, displayName: row.display_name, mustChangePin: row.must_change_pin === 1 };
 }
 
+function isRitmOwnerId(id, bindings) {
+  const owners = String(bindings.RITM_OWNER_USER_IDS || "").split(",").map((value) => value.trim()).filter(Boolean);
+  return !!id && owners.includes(id);
+}
+
 export function ritmOwnerAccount(request, bindings) {
   const id = request.headers.get("oai-authenticated-user-id");
-  const owners = String(bindings.RITM_OWNER_USER_IDS || "").split(",").map((value) => value.trim()).filter(Boolean);
-  return id && owners.includes(id) ? id : null;
+  return isRitmOwnerId(id, bindings) ? id : null;
+}
+
+function ownerPinKey(bindings) {
+  const key = bindings.RITM_OWNER_PIN_KEY;
+  return typeof key === "string" && key.length >= 32 ? key : null;
+}
+
+function requireOwnerPinKey(bindings) {
+  const key = ownerPinKey(bindings);
+  if (!key) throw new CloudError("owner_pin_unavailable", "Вход владельца по PIN пока недоступен.");
+  return key;
+}
+
+function ownerPinValue(pin, key) {
+  return key + ":" + pin;
+}
+
+function ownerTokenHash(token, key) {
+  return sha256("ritm-owner-session:" + key + ":" + token);
+}
+
+async function getOwnerPinSession(request, bindings, now) {
+  const token = parseCookie(request, OWNER_COOKIE);
+  const key = ownerPinKey(bindings);
+  if (!token || !key) return null;
+  const { DB: db } = bindings;
+  await ensureAuthSchema(db);
+  const row = await db.prepare(`SELECT u.owner_id,u.username FROM ritm_owner_pin_sessions s
+    JOIN ritm_owner_pin_credentials u ON u.owner_id=s.owner_id
+    WHERE s.token_hash=? AND s.expires_at>?`).bind(await ownerTokenHash(token, key), now).first();
+  if (!isRitmOwnerId(row?.owner_id, bindings)) return null;
+  return { role: "owner", id: row.owner_id, displayName: "Кирилл", username: row.username, mustChangePin: false };
+}
+
+export async function readOwnerPinSettings(bindings, ownerId) {
+  const { DB: db } = bindings;
+  await ensureAuthSchema(db);
+  const row = await db.prepare("SELECT username FROM ritm_owner_pin_credentials WHERE owner_id=?").bind(ownerId).first();
+  return { username: row?.username ?? null, available: !!ownerPinKey(bindings) };
+}
+
+export async function saveOwnerPin(bindings, ownerId, input) {
+  const key = requireOwnerPinKey(bindings);
+  const username = normalizeUsername(input?.username);
+  const pin = input?.pin;
+  if (typeof pin !== "string" || !/^\d{4}$/.test(pin))
+    throw new CloudError("pin_invalid", "PIN владельца должен содержать ровно 4 цифры.", 400);
+  if (/^(\d)\1{3}$/.test(pin) || "0123456789012".includes(pin) || "9876543210987".includes(pin))
+    throw new CloudError("owner_pin_too_simple", "Выберите четыре цифры без простого повтора или последовательности.", 400);
+  const encoded = await hashPin(ownerPinValue(pin, key));
+  const { DB: db } = bindings;
+  await ensureAuthSchema(db);
+  const [saved] = await db.batch([
+    db.prepare(`INSERT INTO ritm_owner_pin_credentials(owner_id,username,pin_salt,pin_hash)
+      SELECT ?,?,?,? WHERE NOT EXISTS
+        (SELECT 1 FROM ritm_owner_pin_credentials WHERE username=? AND owner_id<>?)
+      ON CONFLICT(owner_id) DO UPDATE SET username=excluded.username,pin_salt=excluded.pin_salt,
+        pin_hash=excluded.pin_hash,attempt_window_started_at=0,attempt_count=0`)
+      .bind(ownerId, username, encoded.salt, encoded.hash, username, ownerId),
+    db.prepare(`DELETE FROM ritm_owner_pin_sessions WHERE owner_id=? AND EXISTS
+      (SELECT 1 FROM ritm_owner_pin_credentials WHERE owner_id=? AND pin_salt=?)`)
+      .bind(ownerId, ownerId, encoded.salt),
+  ]);
+  if (saved.meta?.changes !== 1) throw new CloudError("login_taken", "Этот логин владельца уже используется.", 409);
+  return { username, available: true };
+}
+
+export async function removeOwnerPin(bindings, ownerId) {
+  const { DB: db } = bindings;
+  await ensureAuthSchema(db);
+  await db.batch([
+    db.prepare("DELETE FROM ritm_owner_pin_sessions WHERE owner_id=?").bind(ownerId),
+    db.prepare("DELETE FROM ritm_owner_pin_credentials WHERE owner_id=?").bind(ownerId),
+  ]);
+  return { username: null, available: !!ownerPinKey(bindings) };
 }
 
 export async function resolvePrincipal(request, bindings, now = Date.now()) {
   const owner = ritmOwnerAccount(request, bindings);
   if (owner) return { role: "owner", id: owner, displayName: "Кирилл", username: null, mustChangePin: false };
+  const ownerSession = await getOwnerPinSession(request, bindings, now);
+  if (ownerSession) return ownerSession;
   if (request.headers.has("cookie") || request.headers.has("authorization")) {
     const manager = await getManagerSession(request, bindings.DB, now);
     if (manager) return manager;
@@ -201,16 +299,52 @@ export async function resolvePrincipal(request, bindings, now = Date.now()) {
   return id ? { role: "unrecognized", id, displayName: null, username: null, mustChangePin: false } : null;
 }
 
-export async function loginWithPin(request, db, now = Date.now()) {
-  assertSameOrigin(request);
+async function loginOwnerWithPin(bindings, username, pin, now) {
+  const key = requireOwnerPinKey(bindings);
+  const { DB: db } = bindings;
   await ensureAuthSchema(db);
+  const attemptCutoff = now - OWNER_ATTEMPT_WINDOW_MS;
+  // Reserve an attempt before checking the PIN so simultaneous requests share the same limit.
+  const user = await db.prepare(`UPDATE ritm_owner_pin_credentials SET
+    attempt_count=CASE WHEN attempt_window_started_at<=? THEN 1 ELSE attempt_count+1 END,
+    attempt_window_started_at=CASE WHEN attempt_window_started_at<=? THEN ? ELSE attempt_window_started_at END
+    WHERE username=? AND (attempt_window_started_at<=? OR attempt_count<?)
+    RETURNING owner_id,pin_salt,pin_hash`)
+    .bind(attemptCutoff, attemptCutoff, now, username, attemptCutoff, MAX_FAILURES).first();
+  if (!user) {
+    const existing = await db.prepare("SELECT owner_id FROM ritm_owner_pin_credentials WHERE username=?").bind(username).first();
+    if (isRitmOwnerId(existing?.owner_id, bindings))
+      throw new CloudError("login_rate_limited", "Слишком много попыток. Попробуйте позже или сбросьте PIN через ChatGPT.", 429);
+  }
+  if (!user || !isRitmOwnerId(user.owner_id, bindings) || !await verifyPin(ownerPinValue(pin, key), user.pin_salt, user.pin_hash))
+    throw new CloudError("login_invalid", "Неверный логин или PIN.", 401);
+
+  const token = encode64url(randomBytes(32));
+  const [created] = await db.batch([
+    db.prepare(`INSERT INTO ritm_owner_pin_sessions(token_hash,owner_id,expires_at)
+      SELECT ?,owner_id,? FROM ritm_owner_pin_credentials WHERE owner_id=? AND pin_salt=?`)
+      .bind(await ownerTokenHash(token, key), now + SESSION_MS, user.owner_id, user.pin_salt),
+    db.prepare("UPDATE ritm_owner_pin_credentials SET attempt_count=0,attempt_window_started_at=0 WHERE owner_id=? AND pin_salt=?")
+      .bind(user.owner_id, user.pin_salt),
+    db.prepare("DELETE FROM ritm_owner_pin_sessions WHERE expires_at<=?").bind(now),
+  ]);
+  if (created.meta?.changes !== 1) throw new CloudError("login_invalid", "Данные входа изменились. Войдите снова.", 401);
+  const response = Response.json({ ok: true, role: "owner" }, { headers: { "cache-control": "no-store" } });
+  return setCookie(response, sessionCookie(token, SESSION_MS / 1000, OWNER_COOKIE));
+}
+
+export async function loginWithPin(request, bindings, now = Date.now()) {
+  assertSameOrigin(request);
   const input = await readJson(request, 2048).catch((error) => {
     if (error instanceof CloudError) throw error;
     return null;
   });
   if (!input || typeof input !== "object") throw new CloudError("invalid_json", "Не удалось прочитать запрос.", 400);
   const username = normalizeUsername(input.username);
+  if (typeof input.pin === "string" && /^\d{4}$/.test(input.pin)) return loginOwnerWithPin(bindings, username, input.pin, now);
   const pin = requirePin(input.pin);
+  const { DB: db } = bindings;
+  await ensureAuthSchema(db);
   const limit = await db.prepare("SELECT window_started_at,failure_count,locked_until FROM ritm_manager_login_limits WHERE username=?").bind(username).first();
   const isLocked = limit?.locked_until > now;
   const user = await db.prepare("SELECT id,username,display_name,pin_salt,pin_hash,must_change_pin,status FROM ritm_manager_users WHERE username=?").bind(username).first();
@@ -241,14 +375,21 @@ export async function loginWithPin(request, db, now = Date.now()) {
   return setCookie(response, sessionCookie(token));
 }
 
-export async function logoutManager(request, db) {
+export async function logoutWithPin(request, bindings) {
   assertSameOrigin(request);
   const token = parseSessionToken(request);
-  if (token) {
+  const ownerToken = parseCookie(request, OWNER_COOKIE);
+  const key = ownerPinKey(bindings);
+  const { DB: db } = bindings;
+  if (token || (ownerToken && key)) {
     await ensureAuthSchema(db);
-    await db.prepare("DELETE FROM ritm_manager_sessions WHERE token_hash=?").bind(await sha256(token)).run();
+    const sessions = [];
+    if (token) sessions.push(db.prepare("DELETE FROM ritm_manager_sessions WHERE token_hash=?").bind(await sha256(token)));
+    if (ownerToken && key) sessions.push(db.prepare("DELETE FROM ritm_owner_pin_sessions WHERE token_hash=?").bind(await ownerTokenHash(ownerToken, key)));
+    await db.batch(sessions);
   }
-  return setCookie(Response.json({ ok: true }, { headers: { "cache-control": "no-store" } }), clearSessionCookie());
+  const response = setCookie(Response.json({ ok: true }, { headers: { "cache-control": "no-store" } }), clearSessionCookie());
+  return ownerToken ? setCookie(response, sessionCookie("", 0, OWNER_COOKIE)) : response;
 }
 
 export async function changeManagerPin(request, db, principal, now = Date.now()) {

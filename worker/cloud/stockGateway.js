@@ -1,12 +1,10 @@
-import {createHash} from 'node:crypto';
 import {CloudError} from './access.js';
 
-// Compare configured deployment URLs without exposing them in the public repository.
-const dryRunEndpointHashes={
-  box:'70f0f6636209043196b63b2f70f9056434952ea805fc711e7868994e06f65a35',
-  roll:'c3d240d0cd2cadb6d14e347f90dfe64e3732e320e1aea09b0c0cda972fc28fbd',
+const dryRunEndpoints={
+  box:'https://script.google.com/macros/s/AKfycbxBEbaad2mnuTuv1Ldd3oAM0blx05XYQPOa7EQ4JKv7CdyzYY4Wqxq580Xw6P26g-2a9w/exec',
+  roll:'https://script.google.com/macros/s/AKfycbyR9BY0_SUzNiGPsK-E-Y7tF7bX3z1JSzp1lnaV1sOycmUtj8Cmf25Ak9ERO6msmCni/exec',
 };
-export const stockGatewaySupportsDryRun=(department,url)=>typeof url==='string'&&!!dryRunEndpointHashes[department]&&createHash('sha256').update(url).digest('hex')===dryRunEndpointHashes[department];
+export const stockGatewaySupportsDryRun=(department,url)=>!!dryRunEndpoints[department]&&url===dryRunEndpoints[department];
 
 // A gateway executes inside the same Apps Script lock as employees' actions.
 // A lost response is deliberately treated as an uncertain write by the caller.

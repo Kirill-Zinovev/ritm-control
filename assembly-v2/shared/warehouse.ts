@@ -38,3 +38,7 @@ export interface WarehousePage {
   itemPage: number;
   summary?: { qty: number; openCount: number };
 }
+export interface WarehouseNumberPreview {
+  cartons: Pick<WarehouseCarton, "id" | "label" | "market" | "store" | "state">[];
+  issues: { label: string; reason: "missing" | "ambiguous" }[];
+}

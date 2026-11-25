@@ -60,3 +60,14 @@
 .stock-recovery details { margin: 10px 0; color: #374f70; }
 .stock-recovery summary { cursor: pointer; color: #175bcc; font-weight: 600; }
 .stock-recovery ul { margin: 10px 0; padding-left: 20px; }
+.stock-history-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.stock-completion-feedback { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; padding: 12px 16px; margin: 0 0 12px; border: 1px solid var(--border); border-radius: 10px; background: #f2f6fb; }
+.stock-completion-feedback p { margin: 4px 0 0; color: var(--muted); }
+.stock-completion-feedback ul { margin: 6px 0 0; padding-inline-start: 18px; }
+.stock-close-review { color: var(--text); }
+.stock-close-review ul { list-style: none; margin: 0; padding: 0; max-height: 45vh; overflow: auto; border: 1px solid var(--border); border-radius: 9px; }
+.stock-close-review li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; }
+.stock-close-review li + li { border-top: 1px solid var(--border); }
+.stock-close-review small { display: block; color: var(--muted); margin-top: 3px; }
+.stock-close-actions { justify-content: flex-end; margin-top: 16px; }
+@media (max-width: 600px) { .stock-history-heading { flex-wrap: wrap; } }

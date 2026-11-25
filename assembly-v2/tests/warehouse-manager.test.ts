@@ -1,11 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import ExcelJS from "exceljs";
 import {openDatabase} from "../server/local-db";
 import {bootstrap} from "./fixtures";
 import {readWarehouse} from "../server/warehouse";
 import {api} from "../server/api";
 import {warehouseWorkbook} from "../src/exports/excel";
 import {positionCatalogJoin,effectiveCatalogData} from "../server/catalog-store";
+import type { WarehouseNumberPreview, WarehousePage } from "../shared/warehouse";
 
 test("warehouse manager filters and complete Excel include open/closed reserve cartons and more than 30 items without changing stock",async t=>{
  const db=await openDatabase();t.after(()=>db.sqlite.close());const f=await bootstrap(db),at=new Date().toISOString();
@@ -42,6 +44,55 @@ test("warehouse manager filters and complete Excel include open/closed reserve c
  assert.deepEqual(db.sqlite.prepare('select * from av2_warehouse_receipts').all(),before);
  await assert.rejects(read('?export='+encodeURIComponent('["missing"]')),/не найдена/);
  assert.throws(()=>warehouseWorkbook([{...result.cartons.find(b=>b.id==='a')!,items:[]}],at),/не полностью/);
+});
+
+test("список складских коробов находит точные номера и выгружает реальный состав за пределами одной страницы", async t => {
+  const db = await openDatabase();
+  t.after(() => db.sqlite.close());
+  const { employee } = await bootstrap(db);
+  const at = new Date().toISOString();
+  const addBox = db.sqlite.prepare("insert into av2_warehouse_cartons(id,label,market,store,state,created_at) values(?,?,?,?,?,?)");
+  addBox.run("a-open", "1скл1", "OZON", "1", "open", at);
+  addBox.run("b-closed", "2скл6", "WB", "2", "closed", at);
+  addBox.run("c-prefix", "1скл10", "OZON", "1", "open", at);
+  addBox.run("d-duplicate", "2скл40", "WB", "2", "open", at);
+  addBox.run("e-duplicate", "2СКЛ40", "OZON", "2", "closed", at);
+  addBox.run("f-other", "3скл5", "OZON", "3", "closed", at);
+  const addReceipt = db.sqlite.prepare(`insert into av2_warehouse_receipts
+    (id,carton_id,sku,name,search,qty,employee_id,employee,supply,comment,actor,created_at) values(?,?,?,?,?,?,?,?,?,?,?,?)`);
+  addReceipt.run("r1", "a-open", "0000123", "Первый товар", "0000123", 42, employee.id, employee.name, "На склад", "", "test", at);
+  addReceipt.run("r2", "b-closed", "DEMO(OZ)", "Второй товар", "DEMO", 11, employee.id, employee.name, "На склад", "", "test", at);
+  const revision = await db.revision();
+
+  const lookup = (input: string) => new Request("https://local/api/warehouse/number-preview", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ numbers: input }),
+  });
+  const numbers = " 2СКЛ6\n1скл1, 1СКЛ1; 1скл 2скл40 9скл9";
+  assert.equal((await api(lookup(numbers), db, "collector", "collector")).status, 403);
+  const matched = await api(lookup(numbers), db, "manager", "manager");
+  assert.equal(matched.status, 200);
+  const preview = await matched.json() as WarehouseNumberPreview;
+  assert.deepEqual(preview.cartons.map(box => [box.label, box.market, box.state]), [
+    ["2скл6", "WB", "closed"], ["1скл1", "OZON", "open"],
+  ]);
+  assert.deepEqual(preview.issues, [
+    { label: "1скл", reason: "missing" },
+    { label: "2скл40", reason: "ambiguous" },
+    { label: "9скл9", reason: "missing" },
+  ]);
+  const selection = new URLSearchParams({ export: JSON.stringify(preview.cartons.map(box => box.id)) });
+  const response = await api(new Request(`https://local/api/warehouse?${selection}`), db, "manager", "manager");
+  assert.equal(response.status, 200);
+  const exported = await response.json() as WarehousePage;
+  const bytes = await warehouseWorkbook(exported.cartons, at).xlsx.writeBuffer();
+  const reopened = new ExcelJS.Workbook();
+  await reopened.xlsx.load(bytes);
+  const composition: unknown[][] = [];
+  reopened.getWorksheet("Состав")!.eachRow((row, index) => {
+    if (index > 1) composition.push([row.getCell("A").value, row.getCell("D").value, row.getCell("F").value]);
+  });
+  assert.deepEqual(composition.sort(), [["1скл1", "0000123", 42], ["2скл6", "DEMO(OZ)", 11]]);
+  assert.equal(await db.revision(), revision);
 });
 
 test("indexed catalog lookup matches resolved catalog for imported, managed, reference and absent cards",async t=>{

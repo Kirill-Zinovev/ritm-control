@@ -1,5 +1,5 @@
 import { labelArticle } from "../shared/labels";
-import { catalogDetail, catalogEntryWithStore, catalogLabelTargets, requireCatalog as check } from './catalog-store';
+import { catalogDetail, catalogEntryWithStore, catalogLabelTargets, requireCatalog as check, selectableCatalog } from './catalog-store';
 import { catalogKey, digest, photoAllowed } from '../shared/catalog';
 import { isCatalogMedia, productFields, type ManagedProduct } from '../shared/catalog-editor';
 import type { SqlStore, Statement } from './database';
@@ -18,6 +18,17 @@ type LabelAttachment = {
   inputKey: string;
   revision: number;
 };
+
+const cardSearch = (product: ManagedProduct) => catalogKey(
+  [product.sku, ...product.aliases, product.name, product.barcode, product.kind, product.machine].join(' '),
+);
+function saveCard(product: ManagedProduct, actor: string, now: string) {
+  return q(`insert into av2_catalog_products(entry_id,market,store,sku,search,machine,review,data,revision,actor,updated_at)
+    values(?,?,?,?,?,?,?,?,?,?,?) on conflict(entry_id) do update set search=excluded.search,machine=excluded.machine,
+    review=excluded.review,data=excluded.data,revision=excluded.revision,actor=excluded.actor,updated_at=excluded.updated_at`,
+    product.id, product.market, product.store, product.sku, cardSearch(product), product.machine, product.issues.length ? 1 : 0,
+    JSON.stringify(product), product.editRevision ?? 0, actor, now);
+}
 
 export async function catalogAttachLabelsPlan(store: SqlStore, payload: Record<string, unknown>, actor: string, now: string) {
   const { importId, entries } = payload;
@@ -77,12 +88,17 @@ export async function catalogSavePlan(store: SqlStore, payload: Record<string, u
   const before = await catalogDetail(store, meta.activeCatalogId, sourceId) as (ManagedProduct | null);
   check(payload.create ? !before : !!before, payload.create ? 'Такой товар уже есть. Откройте его карточку.' : 'Карточка не найдена. Обновите справочник.');
   check(payload.revision === (before?.editRevision || 0), 'Карточка изменена в другом окне. Обновите её перед сохранением.');
-  const assigningStore = sourceId !== entryId;
-  if (assigningStore) {
-    check(!payload.create && before?.store === '' && sourceId === JSON.stringify([input.market, '', sku]),
-      'Артикул, маркетплейс и уже указанный магазин определяют товар. Для другого товара создайте отдельную карточку.');
-    check(shop === '1' || shop === '2', 'Выберите магазин 1 или 2.');
+  const identityChanged = sourceId !== entryId;
+  const sameScope = before?.market === input.market && before.store === shop;
+  const assigningStore = identityChanged && before?.store === '' && before.market === input.market && before.sku === sku;
+  if (identityChanged) {
+    check(before && !payload.create, 'Карточка не найдена. Обновите справочник.');
+    check(shop === before.store || shop === '1' || shop === '2', 'Выберите магазин 1 или 2.');
+    const existing = await store.all(`select entry_id from ${selectableCatalog} where import_id=? and entry_id=?`, [meta.activeCatalogId, entryId]);
+    check(!existing.length, 'Карточка с таким артикулом уже есть в этом магазине. Откройте её для сверки.');
   }
+  const [previousTarget] = identityChanged || payload.create
+    ? await store.all<{revision:number}>('select revision from av2_catalog_products where entry_id=?', [entryId]) : [];
   const fields = Object.fromEntries(productFields.map(([key]) => [
     key, key === 'printExtension' ? clean(input[key] ?? before?.[key] ?? '', 32).toUpperCase() : clean(input[key], 4000),
   ]));
@@ -96,12 +112,13 @@ export async function catalogSavePlan(store: SqlStore, payload: Record<string, u
     check(!value || assigningStore && value === before?.[field] || Number(value.replace(',', '.')) > 0 && Number(value.replace(',', '.')) <= 10000000, 'Листы и кратность должны быть положительными числами.');
   }
   check(Array.isArray(input.aliases) && input.aliases.length <= 100 && input.aliases.every(a => typeof a === 'string' && a.length <= 300), 'Проверьте связанные артикулы.');
-  const aliases = [...new Set([sku, labelArticle(sku,input.market), ...input.aliases.map(catalogKey)].filter(Boolean))];
-  const newAliases = assigningStore ? aliases : aliases.filter(a => !before?.aliases.includes(a));
+  const previousSku = identityChanged && sameScope ? before.sku : '';
+  const aliases = [...new Set([sku, labelArticle(sku,input.market), previousSku, labelArticle(previousSku,input.market), ...input.aliases.map(catalogKey)].filter(Boolean))];
+  const newAliases = identityChanged ? aliases : aliases.filter(a => !before?.aliases.includes(a));
   if (newAliases.length) {
     const conflicts = await store.all<{ alias: string }>(`select alias from av2_resolved_catalog_aliases
-      where import_id=? and market=? and store=? and entry_id<>? and alias in(select value from json_each(?)) limit 1`,
-      [meta.activeCatalogId, input.market, shop, entryId, JSON.stringify(newAliases)]);
+      where import_id=? and market=? and store=? and entry_id not in (?,?) and alias in(select value from json_each(?)) limit 1`,
+      [meta.activeCatalogId, input.market, shop, entryId, sourceId, JSON.stringify(newAliases)]);
     check(!conflicts.length, `Артикул ${conflicts[0]?.alias || ''} уже связан с другим товаром этого магазина.`);
   }
   const workNorms: ManagedProduct['workNorms'] = {};
@@ -112,7 +129,7 @@ export async function catalogSavePlan(store: SqlStore, payload: Record<string, u
   }
   const photoUrl = clean(input.photoUrl ?? '', 2048) || null;
   check(!photoUrl || photoAllowed(photoUrl) || isCatalogMedia(photoUrl), 'Загрузите фото файлом или укажите ссылку на фото WB.');
-  const labelSha = input.labelSha ?? null;
+  const labelSha = identityChanged && input.labelSha === before?.labelSha ? null : input.labelSha ?? null;
   check(labelSha === null || typeof labelSha === 'string' && /^[a-f0-9]{64}$/.test(labelSha), 'Проверьте файл этикетки.');
   const hashes = [...new Set([isCatalogMedia(photoUrl || '') ? photoUrl!.split('=')[1] : null, labelSha].filter((s): s is string => !!s))];
   if (hashes.length) {
@@ -129,27 +146,26 @@ export async function catalogSavePlan(store: SqlStore, payload: Record<string, u
     unitsPerBox: units, capacitySource: assigned && units === assigned.unitsPerBox ? assigned.capacitySource : units === null ? 'review' : 'user',
     photoId: before?.photoId || null, photoUrl, labelSha, workNorms,
     issues: assigned?.issues ?? (units === null ? ['Вместимость короба не задана'] : []),
-    rows: before?.rows || [], editRevision: (before?.editRevision || 0) + 1, updatedAt: now,
+    rows: before?.rows || [], editRevision: Math.max(before?.editRevision ?? 0, previousTarget?.revision ?? 0) + 1, updatedAt: now,
   } as ManagedProduct;
-  const search = catalogKey([sku, ...aliases, product.name, product.barcode, product.kind, product.machine].join(' '));
+  const search = cardSearch(product);
   const matches = `select p.id from av2_positions p join av2_supplies s on s.id=p.supply_id
-    where s.market=? and s.store=? and (p.catalog_entry_id=? or upper(p.sku) in(select value from json_each(?))
-      ${assigningStore ? 'or (p.catalog_import_id=? and p.catalog_entry_id=?)' : ''})`;
-  const matchArgs = [input.market, shop, entryId, JSON.stringify(aliases), ...(assigningStore ? [meta.activeCatalogId, sourceId] : [])];
+    where s.market=? and s.store=? and (p.catalog_entry_id in (?,?) or upper(p.sku) in(select value from json_each(?)))`;
+  const matchArgs = [input.market, shop, entryId, sameScope || assigningStore ? sourceId : entryId, JSON.stringify(aliases)];
   const [count] = await store.all<{ n: number }>(`select count(*) n from av2_positions where id in(${matches})`, matchArgs);
   const statements: Statement[] = [
     ...(assignment?.statements ?? []),
-    q(`insert into av2_catalog_products(entry_id,market,store,sku,search,machine,review,data,revision,actor,updated_at)
-      values(?,?,?,?,?,?,?,?,?,?,?) on conflict(entry_id) do update set search=excluded.search,machine=excluded.machine,
-      review=excluded.review,data=excluded.data,revision=excluded.revision,actor=excluded.actor,updated_at=excluded.updated_at`,
-      entryId, input.market, shop, sku, search, product.machine, product.issues.length ? 1 : 0, JSON.stringify(product), product.editRevision!, actor, now),
+    ...(identityChanged && before && !assigningStore
+      ? [saveCard({ ...before, aliases: [], retiredIdentity: true }, actor, now)]
+      : []),
+    saveCard(product, actor, now),
     q(`insert into av2_quality_repairs(id,kind,entity_id,before,after,evidence,actor,created_at) values(?,'catalog.edit',?,?,?,?,?,?)`,
       crypto.randomUUID(), entryId + ':' + product.editRevision, JSON.stringify(before), JSON.stringify(product), 'Редактор справочника', actor, now),
     q(`update av2_positions set name=?,barcode=?,units_per_box=?,catalog_import_id=?,catalog_entry_id=? where id in(${matches})`,
       product.name, product.barcode, units, meta.activeCatalogId, entryId, ...matchArgs),
   ];
   // Recalculate capacity only for cartons not reserved/sent. Quantities and work are immutable here.
-  if (units !== before?.unitsPerBox) for (const table of ['av2_allocations', 'av2_legacy_allocations'])
+  if (identityChanged || units !== before?.unitsPerBox) for (const table of ['av2_allocations', 'av2_legacy_allocations'])
     statements.push(q(`update ${table} set units_per_box=? where removed_at is null and position_id in(${matches})
       and carton_id in(select id from av2_cartons where dispatch_id is null)`, units, ...matchArgs));
   statements.push(q(`update av2_warehouse_receipts set name=?,search=? where voided_at is null and upper(sku) in(select value from json_each(?))

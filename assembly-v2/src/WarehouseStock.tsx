@@ -12,6 +12,7 @@ import { LabelDialog } from "./LabelDialog";
 import { ProductPhoto } from "./ProductPhoto";
 import { useDirty, useDraftNavigation } from "./DraftGuard";
 import { WarehouseCompositionPreview, WarehouseOverview, WarehousePageCheck } from "./WarehouseOverview";
+import { downloadWarehouseCartons, WarehouseNumberExport } from "./WarehouseNumberExport";
 
 export function WarehouseStock({
   workspace: w,
@@ -44,16 +45,14 @@ export function WarehouseStock({
   const [expanded, setExpanded] = useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [exportError,setExportError]=useState("");
+  const [exportByNumber, setExportByNumber] = useState(false);
   async function downloadSelected(all=false){
     if(!all&&!selected.size)return;
     setDownloading(true);setExportError("");
     try{
       const params=new URLSearchParams({export:all?"all":JSON.stringify([...selected])});
       if(all){params.set("market",market);params.set("store",shop);params.set("state",status);params.set("q",query)}
-      const fresh=await request<WarehousePage>(`/api/warehouse?${params}`);
-      const {warehouseWorkbook,downloadWorkbook}=await import("./exports/excel");
-      const at=new Date().toISOString();
-      await downloadWorkbook(warehouseWorkbook(fresh.cartons,at),`Запас-на-складе-${at.slice(0,10)}.xlsx`);
+      await downloadWarehouseCartons(params);
     }catch(e){setExportError((e as Error).message)}finally{setDownloading(false)}
   }
   async function move(source:{box:WarehouseCarton;item:WarehouseReceipt}, target:string){
@@ -287,6 +286,7 @@ export function WarehouseStock({
           { label: "Открытых коробов", value: loading ? null : data?.summary?.openCount ?? null },
         ]} actions={<>
           {historyButton}
+          <Button disabled={downloading || w.busy} onClick={() => setExportByNumber(true)}>Скачать по номерам</Button>
           <Button disabled={downloading || loading || !data?.total || w.busy} onClick={() => void downloadSelected(true)}>
             <Download size={17} />
             {downloading ? "Готовим Excel…" : filtered ? "Скачать короба по фильтру" : "Скачать все короба"}
@@ -406,6 +406,7 @@ export function WarehouseStock({
           onChange={setPage}
         />
       ) : null}
+      {exportByNumber && manager && <WarehouseNumberExport onClose={() => setExportByNumber(false)} />}
       {moving ? <Dialog title="Переместить товар" kicker={`Из короба ${moving.box.label}`} onClose={()=>{if(!w.busy)setMoving(null);}} busy={w.busy}><div className="stack">
         <strong>{moving.item.sku} · {number(moving.item.qty)} шт.</strong><p>Укажите количество для переноса. Остаток останется в исходном коробе. Работа и кэф сохранятся.</p>
         <Field label="Количество для переноса, шт." inputMode="numeric" value={moveQty} disabled={w.busy} onChange={e=>setMoveQty(e.target.value)}/>

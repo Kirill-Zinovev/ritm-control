@@ -1,7 +1,8 @@
 import { validateLabelPrint } from "../src/label-print";
 import { catalogDetail, resolveCatalogPositions } from "../server/catalog-store";
 import { labelsApi } from "../server/labels-api";
-import type { ManagedProduct } from "../shared/catalog-editor";
+import { catalogArticleForMarket, type ManagedProduct } from "../shared/catalog-editor";
+import { prepareRitmImport } from "../server/ritm-import";
 import { bootstrap } from "./fixtures";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -164,6 +165,21 @@ async function context() {
   };
   return { db, call, files, upload };
 }
+
+test("ссылка из отгрузки открывает карточку по артикулу, магазину и маркетплейсу", async (t) => {
+  const c = await context();
+  t.after(() => c.db.sqlite.close());
+  const entries = [entry("WB", "1"), entry("WB", "2"), entry("OZON", "2")];
+  await c.upload(await bundle(entries));
+  for (const original of entries) {
+    const sku = original.market === "OZON" ? "SKU-A(OZ)" : "EXPLICIT-ALIAS";
+    const result = await c.call("/entry?" + new URLSearchParams({ sku, market: original.market, store: original.store }));
+    assert.equal(result.status, 200);
+    assert.equal(result.value.id, original.id);
+  }
+  assert.equal((await c.call("/entry?sku=SKU-A&market=OZON&store=1")).status, 404);
+  assert.equal((await c.call("/entry?sku=SKU-A&market=WB")).status, 409);
+});
 
 test("suggests exact article families and finds templates beyond the first page", async (t) => {
   const c = await context();
@@ -781,6 +797,86 @@ test("редактор: фото и этикетка сохраняются, д�
   const stockLabel=await labelsApi(new Request('https://assembly.test/api/labels?receipt='+receipt),c.db.store,c.files,'collector','worker');assert.equal((await stockLabel.json() as {items:{imageUrl:string}[]}).items[0].imageUrl,media.url);
 });
 
+test("редактор сохраняет исправленный артикул и историю, а поставка находится по исходному артикулу", async t => {
+  const c = await context();
+  t.after(() => c.db.sqlite.close());
+  const original = entry();
+  const conflict = {...entry(), id: JSON.stringify(['OZON','1','BUSY(OZ)']), sku: 'BUSY(OZ)', aliases: ['BUSY(OZ)','BUSY']};
+  const first = await bundle([original, conflict]);
+  await c.upload(first);
+  const f = await bootstrap(c.db);
+  c.db.sqlite.prepare("update av2_positions set sku=?,catalog_import_id=?,catalog_entry_id=? where id=?")
+    .run(original.sku, first.id, original.id, f.a.id);
+  const save = (product: ManagedProduct, revision: number, id = original.id) => c.db.command('catalog.save',
+    {id, revision, importId: first.id, product}, crypto.randomUUID(), 'manager');
+  await save({...original, workNorms:{packing:100}}, 0);
+  await f.cmd('work.save', {positionId:f.a.id, employeeId:f.employee.id, operation:'packing', qty:10});
+  await f.cmd('allocation.add', {positionId:f.a.id, qty:10, newCarton:true});
+  const facts = c.db.sqlite.prepare('select * from av2_work').all();
+  const cartons = c.db.sqlite.prepare('select * from av2_cartons').all();
+  await assert.rejects(save({...original, sku:conflict.sku}, 1), /уже есть/);
+  await assert.rejects(save({...original, sku:'BUSY'}, 1), /уже связан/);
+
+  const renamed = {...original, sku:'SKU-C(OZ)', name:'Исправленное название', aliases:[], workNorms:{packing:100}};
+  const renamedId = JSON.stringify(['OZON','1',renamed.sku]);
+  assert.equal((await save(renamed, 1)).entryId, renamedId);
+  assert.equal(await catalogDetail(c.db.store, first.id, original.id), null);
+  const position = c.db.sqlite.prepare('select sku,catalog_entry_id from av2_positions where id=?').get(f.a.id);
+  assert.equal(position?.sku, original.sku);
+  assert.equal(position?.catalog_entry_id, renamedId);
+  assert.deepEqual(c.db.sqlite.prepare('select * from av2_work').all(), facts);
+  assert.deepEqual(c.db.sqlite.prepare('select * from av2_cartons').all(), cartons);
+  assert.equal(c.db.sqlite.prepare('select qty from av2_allocations').get()?.qty, 10);
+  const history = (await c.call(`/history?id=${encodeURIComponent(renamedId)}`)).value.items as {after: ManagedProduct}[];
+  assert.deepEqual(history.map(h => h.after.sku), [renamed.sku,original.sku]);
+
+  const second = await bundle([{...original, name:'Следующий импорт'}, conflict]);
+  await c.upload(second);
+  assert.equal(await catalogDetail(c.db.store, second.id, original.id), null);
+  assert.equal((await c.call('?q=SKU-A')).value.total, 1);
+  const found = await resolveCatalogPositions(c.db.store, {...fixture, positions:[{...fixture.positions[0], sku:original.sku}]});
+  assert.equal(found.get(original.sku)?.entry.id, renamedId);
+  assert.equal(catalogArticleForMarket(' abc.a1234(wb) ', 'OZON'), 'ABC.A1234(OZ)');
+  assert.equal(catalogArticleForMarket(' abc.a1234(OZ)(OZ) ', 'WB'), 'ABC.A1234');
+});
+
+test("смена магазина в карточке сохраняет старую поставку и нормы при обновлении из РИТМ", async t => {
+  const c = await context();
+  t.after(() => c.db.sqlite.close());
+  const original = entry();
+  const first = await bundle([original]);
+  await c.upload(first);
+  const f = await bootstrap(c.db);
+  const shipmentId = 'RITM-SUPPLY-00000000-0000-4000-8000-000000000001';
+  const positionId = shipmentId + '|uid:test|' + original.sku;
+  c.db.sqlite.prepare('update av2_supplies set origin_shipment_id=? where id=?').run(shipmentId, f.supply.id);
+  c.db.sqlite.prepare('update av2_positions set sku=?,external_id=?,catalog_import_id=?,catalog_entry_id=? where id=?')
+    .run(original.sku, positionId, first.id, original.id, f.a.id);
+  const save = (product: ManagedProduct, revision: number) => c.db.command('catalog.save',
+    {id:original.id, revision, importId:first.id, product}, crypto.randomUUID(), 'manager');
+  await save({...original, workNorms:{packing:100}}, 0);
+  const position = c.db.sqlite.prepare('select * from av2_positions where id=?').get(f.a.id);
+  await save({...original, store:'2', unitsPerBox:160, workNorms:{packing:150}}, 1);
+  assert.equal((await c.call('?store=1')).value.total, 0);
+  assert.equal((await c.call('?store=2')).value.total, 1);
+  assert.deepEqual(c.db.sqlite.prepare('select * from av2_positions where id=?').get(f.a.id), position);
+  await f.cmd('work.save', {positionId:f.a.id, employeeId:f.employee.id, operation:'packing', qty:10});
+  assert.equal(c.db.sqlite.prepare('select coefficient from av2_work').get()?.coefficient, '0.1');
+
+  const incoming = {positionId, sku:original.sku, name:original.name, quantity:500, sourceId:'roll-printing',
+    sheetId:10, row:5, rawUid:'test', store:'', storeStatus:'missing'} as const;
+  for (const p of [incoming, {...incoming, store:'1', storeStatus:'matched'} as const]) {
+    const {groups, issues} = await prepareRitmImport(c.db.store, {
+      shipmentId, title:fixture.title, market:'OZON', locked:false, positions:[p],
+    });
+    const result = groups[0].positions.find(row => row.externalId===positionId);
+    assert.equal(groups[0].store, '1');
+    assert.equal(result?.sourceActive, true);
+    assert.equal(result?.ready, true);
+    assert.deepEqual(issues, []);
+  }
+});
+
 test('менеджер назначает пустой магазин без дублей, а новый импорт сохраняет назначение', async t => {
   const c = await context();
   t.after(() => c.db.sqlite.close());
@@ -805,13 +901,13 @@ test('менеджер назначает пустой магазин без д�
   assert.equal((await send({ ...missing, store: '1' }, 'collector')).status, 403);
   assert.equal((await send({ ...missing, store: '3' }, 'manager')).status, 409);
   assert.equal((await send({ ...missing, store: '2' }, 'manager')).status, 409);
-  assert.equal((await send({ ...otherStore, store: '1' }, 'owner', otherStore.id)).status, 409);
   assert.equal((await c.call('?store=2')).value.total, 1);
   assert.ok(await catalogDetail(c.db.store, first.id, missing.id));
 
   const response = await send({ ...missing, store: '1' }, 'manager');
   const result = await response.json();
   assert.equal(response.status, 200, JSON.stringify(result));
+  assert.equal((await send({ ...otherStore, store: '1' }, 'owner', otherStore.id)).status, 409);
   const assignedId = entry().id;
   const assigned = await catalogDetail(c.db.store, first.id, assignedId);
   assert.equal(assigned?.store, '1');

@@ -1,5 +1,5 @@
 import { buildMachineWorkload, resolveMachine } from "./machineWorkloadData";
-import { rollPrinted, rollCut } from "./liveSupplyProgress";
+import { printingUnitConversion, rollPrinted, rollCut } from "./liveSupplyProgress";
 import type { LivePrinting, LiveOrder } from "./livePrinting";
 import type { LiveAssembly } from "./liveAssembly";
 import type {
@@ -137,17 +137,7 @@ export function forecastInput(
     urgent: boolean,
   ) => {
     const identity = `${o.spreadsheetId || o.sourceId}:${o.sheetId}:${o.rawUid || o.uid || o.row}`;
-    const sourceXerox = /^(xerox|ксерокс|x|х)$/i.test(
-      (o.sourceMachine || o.machine)?.trim() || "",
-    );
-    const factor = sourceXerox
-      ? o.sheetsInProduct &&
-        o.multiplicity &&
-        o.sheetsInProduct > 0 &&
-        o.multiplicity > 0
-        ? o.sheetsInProduct / o.multiplicity
-        : null
-      : 1;
+    const { xerox: sourceXerox, factor } = printingUnitConversion(o);
     // Zero physical output is zero pieces even when a Xerox conversion is missing.
     // Positive sheet output still requires the confirmed conversion factor.
     const unconfirmedExcess = (key: "planningPrinted" | "planningCut") =>

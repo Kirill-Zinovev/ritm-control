@@ -6,18 +6,21 @@ import {
   ExternalLink,
   LockKeyhole,
   Package,
+  Printer,
   Scissors,
   Search,
   Settings2,
 } from "lucide-react";
 import { Button, Empty } from "./ui";
 import { num } from "./model";
+import { formatPrintQuantity } from "./liveSupplyProgress";
 import {
   buildSupplyDirections,
   directionProgress,
   directionJobReady,
   orderStore,
   type DirectionJob,
+  type DirectionProgressField,
 } from "./supplyDirectionData";
 import type { LiveOrder } from "./livePrinting";
 type Props = {
@@ -26,6 +29,12 @@ type Props = {
   onOpenJob: (id: string) => void;
   onShowJobs: () => void;
 };
+const directionStages = [
+  { field: "printed", label: "Печать", Icon: Printer },
+  { field: "assemblyMachineCut", label: "Резка на станке", Icon: Scissors },
+  { field: "assemblyManualCut", label: "Ручная резка", Icon: Scissors },
+  { field: "packed", label: "Упаковка", Icon: Package },
+] as const;
 function Market({ name }: { name: string | null }) {
   return (
     <span className={`direction-market ${name === "WB" ? "wb" : ""}`}>
@@ -39,23 +48,29 @@ function Progress({
   missing = false,
 }: {
   orders: LiveOrder[];
-  field: "packed" | "assemblyMachineCut" | "assemblyManualCut";
+  field: DirectionProgressField;
   missing?: boolean;
 }) {
   const p = directionProgress(orders, field);
+  const stage = directionStages.find((item) => item.field === field);
+  const shownDone = field === "printed" ? formatPrintQuantity(p.done) : num(p.done);
   return (
-    <div className={`direction-progress ${field}`}>
+    <div
+      className={`direction-progress ${field}`}
+      title={field === "printed" ? "Годные листы Xerox пересчитаны в штуки по данным позиции." : undefined}
+    >
+      <small className="direction-progress-label">{stage?.label}</small>
       <span>
         <strong>
           {p.known || p.done > 0
-            ? `${p.complete && !missing ? "" : "≥ "}${num(p.done)}`
+            ? `${p.complete && !missing ? "" : "≥ "}${shownDone}`
             : "—"}
         </strong>{" "}
         / {num(p.plan)} шт.
         <b>
           {p.percent !== null && !missing
             ? `${p.percent}%`
-            : field === "packed" && p.lowerPercent !== null && !missing
+            : (field === "printed" || field === "packed") && p.lowerPercent !== null && !missing
               ? `≥ ${p.lowerPercent}%`
               : "Нет полных данных"}
         </b>
@@ -232,13 +247,10 @@ export function SupplyDirections({
             </strong>
           </div>
           <div className="direction-stage-summary">
-            {(
-              ["assemblyMachineCut", "assemblyManualCut", "packed"] as const
-            ).map((field, i) => (
-              <div key={field}>
+            {directionStages.map(({ field, label, Icon }) => (
+              <div key={field} className={field}>
                 <h3>
-                  {i === 2 ? <Package size={18} /> : <Scissors size={18} />}{" "}
-                  {["Резка на станке", "Ручная резка", "Упаковка"][i]}
+                  <Icon size={18} /> {label}
                 </h3>
                 <Progress orders={orders} field={field} missing={missing} />
               </div>
@@ -288,6 +300,7 @@ export function SupplyDirections({
             <div className="direction-job-heading">
               <span>Задание</span>
               <span>План</span>
+              <span>Печать</span>
               <span>Резка на станке</span>
               <span>Упаковка</span>
               <span>Статус</span>
@@ -336,6 +349,11 @@ export function SupplyDirections({
                       {num(job.orders.reduce((sum, o) => sum + o.quantity, 0))}{" "}
                       шт.
                     </strong>
+                    <Progress
+                      orders={job.orders}
+                      field="printed"
+                      missing={job.missingPositions > 0}
+                    />
                     <Progress
                       orders={job.orders}
                       field="assemblyMachineCut"

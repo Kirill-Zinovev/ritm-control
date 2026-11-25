@@ -3,10 +3,24 @@ import assert from "node:assert/strict";
 import {
   availableOperations,
   boxCapacity,
+  boxingBlockedReason,
   isFinished,
   readiness,
 } from "../shared/assembly";
-import type { Position } from "../shared/model";
+import type { Position, Supply } from "../shared/model";
+
+test("по позиции без магазина подсказка различает заполненный справочник и отсутствующие данные", () => {
+  const held = { ready: false, sourceActive: false, storeNeedsReview: true, unitsPerBox: null,
+    catalog: { store: "2", unitsPerBox: 108 } } as Position;
+  const supply = { market: "OZON", store: "Не подтверждён", sourceActive: true } as Supply;
+  const guidance = boxingBlockedReason(held, supply);
+  assert.match(guidance, /уже указан магазин 2, 108 шт./);
+  assert.match(guidance, /Подключение → Требуют проверки/);
+  assert.match(boxingBlockedReason({ ...held, catalog: null }, supply), /поле «Магазин»/);
+  assert.match(boxingBlockedReason(held, { ...supply, sourceLocked: true }), /откройте её замок в РИТМ/);
+  assert.match(boxingBlockedReason({ ...held, sourceActive: true, ready: true, storeNeedsReview: false },
+    { ...supply, store: "2" }), /укажите тип и вместимость короба/);
+});
 
 test("full mixed cartons are not suggested because of floating point residue", () => {
   assert.equal(boxCapacity(0.9999999999999999, 100), 0);

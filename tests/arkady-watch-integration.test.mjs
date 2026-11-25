@@ -62,7 +62,7 @@ test('a mixed stock upload produces one native completion after every member is 
   const store=new CloudStore(db,{now:()=>Date.parse('2026-11-07T12:00:00Z')}),scope=await store.scope();
   const boxId='SYNTHETIC_STOCK_BOX_000000000',rollId='SYNTHETIC_STOCK_ROLL_000000000';
   const bindings={RITM_GOOGLE_STOCK_BOX_PRINTING_ID:boxId,RITM_GOOGLE_STOCK_ROLL_PRINTING_ID:rollId,RITM_ASSEMBLY_SYNC_SECRET:'a'.repeat(64)};
-  scope.meta('bitrixNotificationConfig',await encryptBitrixConfig(bindings,{RITM_BITRIX_WEBHOOK_URL:'https://kaleidoskop.bitrix24.ru/rest/1/testhook0001/',RITM_BITRIX_BOT_TOKEN:'fictional-client-key',RITM_BITRIX_BOT_ID:'5768',RITM_BITRIX_BOX_CHAT:'chat1',RITM_BITRIX_ROLL_CHAT:'chat2'}));
+  scope.meta('bitrixNotificationConfig',await encryptBitrixConfig(bindings,{RITM_BITRIX_WEBHOOK_URL:'https://kaleidoskop.bitrix24.ru/rest/1/fixtureWebhookToken1/',RITM_BITRIX_BOT_TOKEN:'fictional-client-key',RITM_BITRIX_BOT_ID:'5768',RITM_BITRIX_BOX_CHAT:'chat1',RITM_BITRIX_ROLL_CHAT:'chat2'}));
   const cell=value=>({userEnteredValue:typeof value==='number'?{numberValue:value}:typeof value==='boolean'?{boolValue:value}:{stringValue:value}});
   const source=(sheetId,entries)=>{
     const rowData=Array.from({length:entries.length+4},()=>({values:[]}));rowData[3].values[4]=cell('Артикул');rowData[3].values[15]=cell('Кол-во');

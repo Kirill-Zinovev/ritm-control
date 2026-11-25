@@ -12,13 +12,33 @@ import type {
 } from "../shared/model";
 import type { SqlStore, Statement } from "./database";
 import { effectiveWorkNorms, type ShiftNorm } from "../shared/work-norm";
-import { positionCatalogJoin } from "./catalog-store";
+import { catalogCartonCapacity, catalogForPositionScope, positionCatalogJoin, positionWorkCatalogSql } from "./catalog-store";
 import { groupDirections } from "../shared/directions";
 import type { RitmSchedule } from "../shared/ritm";
+import type { ManagedProduct } from "../shared/catalog-editor";
+import { positionNeedsStoreReviewSql } from "./position-search";
 
 type CartonRow = Omit<Snapshot["cartons"][number], "items" | "fill" | "qty">;
 type DispatchRow = Omit<Dispatch, "cartonIds"> & { cartonIds: string };
 type RosterRow = Omit<Supply, "schedule"> & { schedule?: string | null };
+type PositionRow = Omit<Position, "team" | "catalog" | "ready" | "sourceActive" | "storeNeedsReview"> & {
+  ready: number;
+  sourceActive: number;
+  storeNeedsReview: number;
+  positionStore: Supply["store"];
+  positionMarket: Supply["market"];
+  workCatalog: string | null;
+};
+
+function positionProgress(positions: readonly Pick<Position, "plan" | "packing">[]) {
+  const progress = { plan: 0, packed: 0 };
+  for (const position of positions) {
+    progress.plan += position.plan;
+    progress.packed += position.packing;
+  }
+  return progress;
+}
+
 // Catalog, connection settings and journal need names and filters, not every
 // carton composition and production position. Keep this read in one transaction.
 export async function readDirectorySnapshot(store: SqlStore): Promise<Snapshot> {
@@ -116,8 +136,8 @@ export async function readWorkspaceSnapshot(
   const positionArg = directions ? JSON.stringify(memberIds) : supplyId;
   const scope = scopeOnly
     ? ` and exists(select 1 from av2_supply_city_scopes ss join av2_carton_city_scopes cc on cc.id=c.id
-        where ss.id=${selected} and ${cartonScopeSql('cc','ss')})` : "";
-  const scopeArgs = scopeOnly ? [supplyId] : [];
+        where ss.id ${positionSelection} and ${cartonScopeSql('cc','ss')})` : "";
+  const scopeArgs = scopeOnly ? [positionArg] : [];
   const currentCartons = `select c.id from av2_production_cartons c left join av2_dispatches d on d.id=c.dispatch_id where (d.state is null or d.state<>'sent') ${scope} order by c.created_at desc,c.id desc limit 500`;
   const query = (
     sql: string,
@@ -137,8 +157,10 @@ export async function readWorkspaceSnapshot(
     query(
       `select p.*,coalesce(t.cut,0) cut,coalesce(t.assembly,0) assembly,coalesce(t.packing,0) packing,coalesce(t.boxed,0) boxed,(select coalesce(sum(r.qty),0) from av2_warehouse_receipts r where r.position_id=p.id) warehouse_qty
       ,coalesce(json_extract(pc.value,'$.photoUrl'),(select o.url from av2_photo_overrides o where o.sku=upper(p.sku)),(select sp.url from av2_source_photos sp where sp.position_id=p.external_id and sp.sku=p.sku)) photo_url
-      ,json_object('kind',json_extract(pc.value,'$.kind'),'boxType',json_extract(pc.value,'$.boxType'),'machine',json_extract(pc.value,'$.machine'),'packaging',json_extract(pc.value,'$.packaging'),'size',json_extract(pc.value,'$.size'),'photoId',json_extract(pc.value,'$.photoId'),'capacitySource',json_extract(pc.value,'$.capacitySource')) catalog,case when pc.value is not null then pc.value else null end work_catalog
-      from av2_positions p left join av2_position_totals t on t.position_id=p.id ${positionCatalogJoin()} where p.supply_id ${positionSelection} order by p.sku,p.id ${directions ? "" : "limit 500"}`,
+      ,case when ${positionNeedsStoreReviewSql} then 1 else 0 end store_needs_review,
+      s.store position_store,s.market position_market,
+      ${positionWorkCatalogSql(false, true)} work_catalog
+      from av2_positions p join av2_supplies s on s.id=p.supply_id left join av2_position_totals t on t.position_id=p.id ${positionCatalogJoin("p", "pc", true)} where p.supply_id ${positionSelection} order by p.sku,p.id ${directions ? "" : "limit 500"}`,
       positionArg,
     ),
     query(
@@ -197,43 +219,60 @@ export async function readWorkspaceSnapshot(
       );
     throw Error("Состав направления обновляется. Повторите загрузку.");
   }
+
+  // Keep the live plan and store reviews in the working direction. The journal
+  // and carton contents still carry the recorded facts for retired positions.
+  const includeArchivedPositions = !directions || chosenSource?.sourceActive === false;
+  const positionRows = rows<PositionRow>(2);
+  const positions = includeArchivedPositions
+    ? positionRows
+    : positionRows.filter((p) => p.sourceActive || p.storeNeedsReview);
+  const selectedProgress = directions
+    ? positionProgress(positions.filter((p) => p.supplyId === meta.selectedSupplyId))
+    : { plan: meta.plan, packed: meta.packed };
   return {
     ...(directions ? { sourceSupplies: originalSupplies } : {}),
     cartonScope: scopeOnly ? "supply" : "all",
     revision: meta.revision,
-    progress: directions
-      ? {
-          plan: rows<{ plan: number }>(2).reduce((n, p) => n + p.plan, 0),
-          packed: rows<{ packing: number }>(2).reduce(
-            (n, p) => n + p.packing,
-            0,
-          ),
-        }
-      : { plan: meta.plan, packed: meta.packed },
+    progress: directions ? positionProgress(positions) : selectedProgress,
     selectedSupplyId: meta.selectedSupplyId,
     // Selected metrics also remain present for an already-open v1 browser.
     supplies: (directions ? navigationGroups : readRoster(rows<RosterRow>(1)))
       .map((s) =>
         s.id === meta.selectedSupplyId
-          ? { ...s, plan: meta.plan, packed: meta.packed }
+          ? { ...s, ...selectedProgress }
           : s,
       ),
-    positions: rows<
-      Omit<Position, "team" | "catalog"> & {
-        catalog: string;
-        workCatalog: string | null;
-      }
-    >(2).map(({ workCatalog, ...p }) => ({
-      ...p,
-      workNorms: effectiveWorkNorms(
-        workCatalog ? JSON.parse(workCatalog) : null,
-        shiftNorms,
-      ),
-      catalog: p.catalogEntryId ? JSON.parse(p.catalog) : null,
-      ready: !!p.ready,
-      sourceActive: !!p.sourceActive,
-      team: contributions.filter((t) => t.positionId === p.id),
-    })),
+    positions: positions.map(({ workCatalog, positionStore, positionMarket, ...p }) => {
+      const card: (ManagedProduct & Record<string, unknown> & { lookupImportId?: string }) | null =
+        workCatalog ? JSON.parse(workCatalog) : null;
+      const confirmedCard = catalogForPositionScope(card, { store: positionStore, market: positionMarket }, p.barcode);
+      return {
+        ...p,
+        name: (p.sourceActive || p.storeNeedsReview) && card?.name ? card.name : p.name,
+        barcode: p.barcode || confirmedCard?.barcode || "",
+        unitsPerBox: p.unitsPerBox ?? catalogCartonCapacity(confirmedCard),
+        photoUrl: card?.photoUrl || p.photoUrl,
+        photoCatalogImportId: card?.lookupImportId !== p.catalogImportId ? card?.lookupImportId : undefined,
+        workNorms: effectiveWorkNorms(card, shiftNorms),
+        catalog: card ? {
+          kind: card.kind,
+          boxType: card.boxType,
+          machine: card.machine,
+          packaging: card.packaging,
+          size: card.size,
+          photoId: card.photoId,
+          capacitySource: card.capacitySource,
+          labelSha: card.labelSha,
+          store: card.store,
+          unitsPerBox: card.unitsPerBox,
+        } : null,
+        ready: !!p.ready,
+        sourceActive: !!p.sourceActive,
+        storeNeedsReview: Boolean(p.storeNeedsReview),
+        team: contributions.filter((t) => t.positionId === p.id),
+      };
+    }),
     works: rows<Work>(4).map((w) => ({ ...w, canceled: !!w.canceled })),
     employees: rows<Employee>(5).map((e) => ({ ...e, active: !!e.active })),
     cartons: rows<CartonRow>(6).map((b) => {

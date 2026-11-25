@@ -45,8 +45,8 @@ export async function readWorkloadCatalog(bindings, orders, stockOrders, fetcher
       const entries = (await Promise.all(batches)).flat();
       const equipment = market === "OZON" ? "Станок" : "Вид станка по умолчанию";
       return [market, [
-        ["Артикул", "", "Магазин", equipment, "Название товара", "Фото", "В коробке"],
-        ...entries.map(entry => [entry.article, "", entry.store, entry.machine, entry.name, entry.photoUrl, entry.unitsPerBox]),
+        ["Артикул", "", "Магазин", equipment, "Название товара", "Фото", "В коробке", "Тип короба"],
+        ...entries.map(entry => [entry.article, "", entry.store, entry.machine, entry.name, entry.photoUrl, entry.unitsPerBox, entry.boxType]),
       ]];
     } catch {
       return [market, null];

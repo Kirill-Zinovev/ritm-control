@@ -185,6 +185,7 @@ export function Modal({
   onClose,
   title,
   description,
+  className,
   onCloseAutoFocus,
   children,
 }: {
@@ -192,6 +193,7 @@ export function Modal({
   onClose: () => void;
   title: string;
   description?: string;
+  className?: string;
   onCloseAutoFocus?: () => void;
   children: ReactNode;
 }) {
@@ -205,7 +207,7 @@ export function Modal({
       <Dialog.Portal>
         <Dialog.Overlay className="modal-overlay" />
         <Dialog.Content
-          className="modal-content"
+          className={className ? `modal-content ${className}` : "modal-content"}
           onCloseAutoFocus={onCloseAutoFocus ? (event) => { event.preventDefault(); onCloseAutoFocus(); } : undefined}
           aria-describedby={description ? "modal-description" : undefined}
         >

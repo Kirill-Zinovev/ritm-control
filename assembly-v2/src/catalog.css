@@ -366,15 +366,23 @@
 .is-catalog .catalog-editor-footer > span { font-size: 11px; }
 .is-catalog .catalog-editor-footer > span:empty { display: none; }
 .is-catalog .catalog-editor-footer .primary { flex: 1; order: -1; }
-.catalog-editor-footer .button.catalog-wb-create {
+.catalog-editor-footer .button.catalog-pair-create {
   justify-content: center;
   border-color: transparent;
-  background: linear-gradient(105deg, #a51a98, #7819bd);
   color: #fff;
   font-weight: 700;
 }
-.catalog-editor-footer .button.catalog-wb-create:hover:enabled {
+.catalog-editor-footer .button.catalog-pair-create.is-wb {
+  background: linear-gradient(105deg, #a51a98, #7819bd);
+}
+.catalog-editor-footer .button.catalog-pair-create.is-wb:hover:enabled {
   background: linear-gradient(105deg, #911689, #6612a6);
+}
+.catalog-editor-footer .button.catalog-pair-create.is-ozon {
+  background: #005bff;
+}
+.catalog-editor-footer .button.catalog-pair-create.is-ozon:hover:enabled {
+  background: #0049d6;
 }
 
 @media (max-width: 1230px) {

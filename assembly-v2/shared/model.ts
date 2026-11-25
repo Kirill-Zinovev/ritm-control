@@ -33,9 +33,11 @@ export interface TeamRow {
 }
 export interface Position {
   photoUrl?: string | null;
+  photoCatalogImportId?: string;
   workNorms?:import('./work-norm').WorkNorms;
   warehouseQty?: number;
   sourceActive?: boolean;
+  storeNeedsReview?: boolean;
   catalogImportId?: string | null;
   catalogEntryId?: string | null;
   catalog?: {
@@ -45,6 +47,9 @@ export interface Position {
     packaging: string;
     size: string;
     photoId: string | null;
+    labelSha?: string | null;
+    store?: string;
+    unitsPerBox?: number | null;
     capacitySource: string;
   } | null;
   id: string;

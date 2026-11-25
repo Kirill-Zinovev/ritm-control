@@ -10,10 +10,12 @@ import {
 import {
   ROLL_PRINTING_SHEET_ID,
   ROLL_PRINTING_SHEET,
+  marketplaceForSupply,
 } from "../worker/printing.js";
 import { privateGoogleSource } from "../worker/privateGoogleConfig.js";
 import { xeroxPlanRounding, xeroxSheetCount } from "./xeroxQuantity.js";
 import { quantityRounding } from "./quantityRounding.js";
+import { selectSupplyCatalogEntries, supplyCatalogShop } from "./productionCatalogSheet.js";
 
 export const CATALOG_ID = privateGoogleSource("catalogId");
 export const DEPARTMENTS = Object.freeze({
@@ -81,16 +83,11 @@ export function machineDepartment(machine) {
 }
 
 export function shipmentMarketplace(name) {
-  const text = String(name).toUpperCase();
-  const ozon = /(?:^|[^\p{L}\p{N}])OZON(?=$|[^\p{L}\p{N}])/u.test(text);
-  const wb = /(?:^|[^\p{L}\p{N}])WB(?=$|[^\p{L}\p{N}])/u.test(text);
-  return ozon === wb ? null : ozon ? "OZON" : "WB";
+  return marketplaceForSupply(name) || null;
 }
 
 export function routeAssemblyCatalogLines(lines, entries, name, {stock = false} = {}) {
-  const shopMatches = [...String(name).matchAll(/(?:магазин\s*([12])(?!\d)|(?<!\d)([12])\s*(?:[-‑–]\s*)?(?:й|ый)?\s*магазин)/giu)];
-  const shops = new Set(shopMatches.map(match => match[1] || match[2]));
-  const selectedShop = shops.size === 1 ? [...shops][0] : "";
+  const selectedShop = supplyCatalogShop(name);
   const index = new Map();
   for (const entry of entries) {
     const matches = index.get(entry.article) || [];
@@ -101,9 +98,7 @@ export function routeAssemblyCatalogLines(lines, entries, name, {stock = false} 
   const unique = (entries, key) => new Set(entries.map(entry => validValue(entry[key])));
   return lines.map(line => {
     const candidates = index.get(line.article.trim().normalize("NFC").toUpperCase()) || [];
-    const scoped = selectedShop ? candidates.filter(entry => entry.store === selectedShop) : candidates;
-    const primary = scoped.filter(entry => entry.primary);
-    const matches = primary.length ? primary : scoped;
+    const matches = selectSupplyCatalogEntries(candidates, selectedShop);
     const skip = issue => ({ ...line, machine: "", department: null, issue });
     if (!matches.length) return skip(selectedShop
       ? "Артикул не найден в справочнике Assembly для указанного магазина"
@@ -849,7 +844,7 @@ export class ProductionSupplyService {
   }
   async routedLines(payload) {
     const marketplace = shipmentMarketplace(payload.name);
-    if (payload.action === "create" && this.createCatalog) {
+    if (this.createCatalog) {
       if (!marketplace) fail("supply_marketplace_unknown", "В названии поставки укажите ровно один маркетплейс: OZON или WB.");
       return routeAssemblyCatalogLines(payload.lines, await this.createCatalog(marketplace, payload.lines.map(line => line.article)), payload.name);
     }

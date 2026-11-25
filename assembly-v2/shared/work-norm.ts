@@ -50,3 +50,16 @@ export const savedCoefficient = (
   operation: Operation,
   qty: number,
 ) => (norms[operation] ? qty / norms[operation]! : null);
+
+export function missingWorkNormReason(
+  catalog: Record<string, unknown> | null,
+  shifts: ShiftNorm[],
+  operation: Operation,
+) {
+  if (!catalog) return "catalog";
+  const norm = effectiveWorkNorms(catalog, shifts);
+  if (norm[operation]) return "ready";
+  if (typeof catalog.kind !== "string" || !catalog.kind.trim()) return "kind";
+  if (operation === "cut" && !norm.multiplier) return "sheets";
+  return "norm";
+}

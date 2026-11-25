@@ -2,9 +2,18 @@ import type { SqlStore, Statement } from "./database";
 import type { CatalogEntry } from "../shared/catalog";
 import { catalogKey, digest, cleanCatalogText, duplicateCapacity } from "../shared/catalog";
 import { effectiveWorkNorms, type ShiftNorm } from "../shared/work-norm";
-import { catalogEntryWithStore, catalogSourceStoreUpdates, requireCatalog as check, effectiveCatalogData } from "./catalog-store";
+import {
+  catalogEntryWithStore,
+  catalogSourceStoreUpdates,
+  effectiveCatalogData,
+  findCatalogAliases,
+  positionCatalogJoin,
+  positionWorkCatalogSql,
+  requireCatalog as check,
+  selectableCatalog,
+} from "./catalog-store";
 import { enqueueCancellation, enqueueNormRepair } from "./ritm-outbox";
-import { ritmShipmentId } from "../shared/ritm";
+import { ritmShipmentId, unconfirmedStoreArticle, type RitmIssue, type RitmSupply } from "../shared/ritm";
 
 const q = (sql: string, ...args: (string | number | null)[]): Statement => ({ sql, args });
 const string = (value: unknown, max = 500): string => {
@@ -27,7 +36,8 @@ export async function qualityPlan(
   const one = async <T>(sql: string, args: (string | number | null)[], message: string): Promise<T> => {
     const row = (await store.all<T>(sql, args))[0]; check(row, message); return row;
   };
-  const reason = string(payload.reason, 1000);
+  const catalogApply = action === "catalog.applyWorkNorms";
+  const reason = catalogApply ? "Подтверждено в карточке справочника" : string(payload.reason, 1000);
   const audit = (kind: string, entity: string, before: unknown, after: unknown, evidence: unknown) => {
     const id = crypto.randomUUID();
     statements.push(q("insert into av2_quality_repairs(id,kind,entity_id,\"before\",\"after\",evidence,actor,created_at) values(?,?,?,?,?,?,?,?)",
@@ -44,7 +54,7 @@ export async function qualityPlan(
     check(before.store===''&&await digest(JSON.stringify(before.rows))===payload.sourceRowsDigest,'Исходная карточка изменилась.');
     check(!(await store.all('select entry_id from av2_catalog_products where entry_id=?',[entryId])).length,'Карточка уже отредактирована. Сначала сверите изменения.');
     const after=catalogEntryWithStore(before,shop);
-    check(!(await store.all('select entry_id from av2_resolved_catalog_entries where import_id=? and entry_id=?',[importId,after.id])).length,'Карточка этого магазина уже существует. Откройте её для сверки.');
+    check(!(await store.all(`select entry_id from ${selectableCatalog} where import_id=? and entry_id=?`,[importId,after.id])).length,'Карточка этого магазина уже существует. Откройте её для сверки.');
     check(!(await store.all(`select alias from av2_resolved_catalog_aliases where import_id=? and market=? and store=? and alias in(select value from json_each(?)) limit 1`,[importId,before.market,shop,JSON.stringify(before.aliases)])).length,'В магазине уже есть связанный артикул. Нужна сверка.');
     const positions=await store.all<{id:string;shop:string;market:string}>(`select p.id,s.store shop,s.market from av2_positions p join av2_supplies s on s.id=p.supply_id where p.catalog_import_id=? and p.catalog_entry_id=?`,[importId,entryId]);
     check(positions.every(p=>p.shop===shop && p.market===before.market),'Карточка связана с другим магазином или маркетплейсом в поставке. Нужна сверка.');
@@ -55,8 +65,8 @@ export async function qualityPlan(
   if (action === "quality.repairEmptyCapacityDuplicates") {
     const [active] = await store.all<{id:string}>("select active_catalog_id id from av2_meta where id=1");
     check(active?.id === payload.importId, "Справочник изменился. Повторите проверку.");
-    const entries = await store.all<{id:string;data:string}>("select id,data from av2_resolved_catalog_entries where import_id=? and json_extract(data,'$.unitsPerBox') is null and json_array_length(data,'$.rows')>1",[active.id]);
-    const [count] = await store.all<{n:number}>("select count(*) n from av2_resolved_catalog_entries where import_id=?",[active.id]);
+    const entries = await store.all<{id:string;data:string}>(`select id,data from ${selectableCatalog} where import_id=? and json_extract(data,'$.unitsPerBox') is null and json_array_length(data,'$.rows')>1`,[active.id]);
+    const [count] = await store.all<{n:number}>(`select count(*) n from ${selectableCatalog} where import_id=?`,[active.id]);
     const repaired:unknown[]=[];const unresolved:string[]=[];
     for (const row of entries) {
       const e=JSON.parse(row.data) as CatalogEntry, resolved=duplicateCapacity(e.rows,e.market);
@@ -84,6 +94,89 @@ export async function qualityPlan(
     check(row.coefficient === null, "У записи уже сохранён коэффициент. Изменение остановлено.");
     return row;
   };
+
+  if (action === "quality.confirmPositionStore") {
+    const shipmentId = string(payload.shipmentId);
+    const sku = catalogKey(string(payload.sku, 300));
+    check(ritmShipmentId(shipmentId), "Выберите исходную поставку РИТМ.");
+    const link = await one<{ payload: string; issues: string; sourceRevision: number }>(
+      "select payload,issues,source_revision from av2_ritm_links where shipment_id=?", [shipmentId],
+      "Сначала обновите поставку из РИТМ.",
+    );
+    const source = JSON.parse(link.payload) as RitmSupply & { confirmedDeleted?: boolean };
+    check(source.shipmentId === shipmentId && !source.confirmedDeleted &&
+      (source.market === "OZON" || source.market === "WB") &&
+      source.locked === false && Array.isArray(source.positions), "Поставка должна быть открыта для сборки в РИТМ.");
+    const issues = JSON.parse(link.issues) as RitmIssue[];
+    const isIssue = (issue: RitmIssue) => issue.shipmentId === shipmentId &&
+      catalogKey(unconfirmedStoreArticle(issue.message) || "") === sku;
+    check(issues.some(isIssue), "Нет актуальной ошибки привязки этого артикула. Обновите поставку.");
+
+    const unresolved = await store.all<{
+      id: string; supplyId: string; externalId: string; sku: string; plan: number; name: string;
+      barcode: string; unitsPerBox: number | null; catalogImportId: string | null; catalogEntryId: string | null;
+      destination: string; ready: number; sourceActive: number;
+    }>(`select p.id,p.supply_id,p.external_id,p.sku,p.plan,p.name,p.barcode,p.units_per_box,
+          p.catalog_import_id,p.catalog_entry_id,s.destination,p.ready,p.source_active
+        from av2_positions p join av2_supplies s on s.id=p.supply_id
+        where s.origin_shipment_id=? and s.market=? and s.store='Не подтверждён'
+          and s.is_demo=0 and p.source_active=p.ready`, [shipmentId, source.market]);
+    const matches = unresolved.filter(p => catalogKey(p.sku) === sku);
+    check(matches.length === 1, "Нужна одна позиция с этим артикулом и неподтверждённым магазином.");
+    const [before] = matches;
+    const incoming = source.positions.find(p => p.positionId === before.externalId);
+    check(incoming && catalogKey(incoming.sku) === sku && incoming.quantity === before.plan,
+      "Артикул или план в РИТМ изменился. Обновите состав.");
+    const reportedStore = incoming.store.trim().match(/^(?:магазин\s*)?([1-9]\d*)$/iu)?.[1];
+    check(incoming.storeStatus === "matched" ? !!reportedStore :
+      !incoming.store.trim() && ["missing", "unknown"].includes(incoming.storeStatus),
+      "Магазин по данным РИТМ спорный. Сначала проверьте источник.");
+
+    const aliases = await findCatalogAliases(store, source.market, [sku], reportedStore ?? null);
+    const primary = aliases.filter(row => row.isPrimary);
+    const cards = new Map((primary.length ? primary : aliases).map(row => {
+      const entry = JSON.parse(row.data) as CatalogEntry;
+      return [entry.id, {entry, importId: row.importId}];
+    }));
+    check(cards.size === 1, `Нужна одна карточка ${source.market} для артикула и подтверждённого магазина.`);
+    const [{entry, importId}] = cards.values();
+    check(/^[1-9]\d*$/.test(entry.store) && entry.barcode.trim() && entry.boxType.trim() &&
+      entry.unitsPerBox !== null && Number.isSafeInteger(entry.unitsPerBox) && entry.unitsPerBox > 0,
+      `В карточке ${source.market} подтвердите магазин, штрихкод, тип и вместимость короба.`);
+    check(!before.barcode || before.barcode === entry.barcode, "Штрихкод позиции расходится со справочником.");
+    const targets = await store.all<{id: string}>(
+      `select id from av2_supplies where origin_shipment_id=? and market=? and store=?
+        and destination=? and source_active=1 and is_demo=0`,
+      [shipmentId, source.market, entry.store, before.destination],
+    );
+    check(targets.length === 1, "Однозначное активное направление этого магазина не найдено.");
+    const [target] = targets;
+    check(!(await store.all(`select p.id from av2_positions p join av2_supplies s on s.id=p.supply_id
+      where s.origin_shipment_id=? and p.external_id=? and p.id<>? limit 1`,
+      [shipmentId, before.externalId, before.id])).length, "Эта исходная позиция уже есть в другом направлении.");
+    const activity = await one<{ placed: number; workElsewhere: number; works: number }>(
+      `select (exists(select 1 from av2_all_allocations where position_id=?) or
+          exists(select 1 from av2_warehouse_receipts where position_id=?)) placed,
+        exists(select 1 from av2_work where position_id=? and supply_id is not ?) work_elsewhere,
+        (select count(*) from av2_work where position_id=?) works`,
+      [before.id, before.id, before.id, before.supplyId, before.id], "Не удалось проверить историю позиции.",
+    );
+    check(!activity.placed && !activity.workElsewhere, "У позиции есть история коробов, склада или другого направления. Требуется сверка.");
+
+    const after = {supplyId: target.id, store: entry.store, catalogImportId: importId,
+      catalogEntryId: entry.id, barcode: entry.barcode, unitsPerBox: entry.unitsPerBox, ready: 1, sourceActive: 1};
+    audit("position.confirmStore", before.id, before, after, {shipmentId, sourceRevision: link.sourceRevision, works: activity.works});
+    statements.push(
+      q(`update av2_positions set supply_id=?,catalog_import_id=?,catalog_entry_id=?,barcode=?,units_per_box=?,
+          name=?,ready=1,source_active=1 where id=?`,
+        target.id, importId, entry.id, entry.barcode, entry.unitsPerBox, entry.name || before.name, before.id),
+      q("update av2_work set supply_id=? where position_id=? and supply_id=?", target.id, before.id, before.supplyId),
+      q("update av2_supplies set source_active=0 where id=? and not exists(select 1 from av2_positions where supply_id=? and source_active=1)",
+        before.supplyId, before.supplyId),
+      q("update av2_ritm_links set issues=? where shipment_id=?", JSON.stringify(issues.filter(i => !isIssue(i))), shipmentId),
+    );
+    return { statements, result: {positionId: before.id, store: entry.store, updatedWorks: activity.works} };
+  }
 
   if (action === "quality.resolveStores") {
     check(Array.isArray(payload.positions) && payload.positions.length > 0 && payload.positions.length <= 20, "Выберите от 1 до 20 позиций.");
@@ -146,14 +239,34 @@ export async function qualityPlan(
     return { statements, result: { repaired: seen.size, references: references.size } };
   }
 
-  if (action === "quality.repairNorms") {
+  if (action === "quality.repairNorms" || catalogApply) {
     check(Array.isArray(payload.workIds) && payload.workIds.length > 0 && payload.workIds.length <= 50, "Выберите от 1 до 50 записей.");
+    const activeCard = catalogApply ? await one<{data:string; importId:string; entryId:string}>(
+      `select ${effectiveCatalogData()} data,e.import_id,e.entry_id
+        from ${selectableCatalog} e
+        where e.import_id=(select active_catalog_id from av2_meta where id=1) and e.entry_id=?`,
+      [string(payload.entryId)], "Карточка изменилась. Откройте её заново.",
+    ) : null;
+    if (activeCard) {
+      const revision = (JSON.parse(activeCard.data) as { editRevision?: number }).editRevision ?? 0;
+      check(payload.revision === revision, "Карточку изменили. Откройте её заново и проверьте норму.");
+    }
     const shifts = await store.all<{ data: string; sourceHash: string }>("select data,source_hash from av2_shift_norms");
     const norms = shifts.map(s => JSON.parse(s.data) as ShiftNorm);
     const seen = new Set<string>();
     for (const id of payload.workIds) {
       const row = await work(id); check(!seen.has(row.id), "Запись повторяется."); seen.add(row.id);
-      const entries = await store.all<{ data: string; importId: string; entryId: string }>(row.catalogEntryId && row.catalogImportId ?
+      if (activeCard) {
+        const source = await one<{catalog:string|null}>(
+          `select ${positionWorkCatalogSql(true)} catalog from av2_positions p
+            join av2_supplies s on s.id=p.supply_id ${positionCatalogJoin()} where p.id=?`,
+          [row.positionId], "Позиция не найдена.",
+        );
+        const card = source.catalog ? JSON.parse(source.catalog) as CatalogEntry : null;
+        check((row.catalogEntryId || card?.id) === activeCard.entryId,
+          `${row.sku}: проверьте магазин и карточку операции.`);
+      }
+      const entries = activeCard ? [activeCard] : await store.all<{ data: string; importId: string; entryId: string }>(row.catalogEntryId && row.catalogImportId ?
         `select ${effectiveCatalogData()} data,e.import_id,e.entry_id from av2_resolved_catalog_entries e where e.import_id=? and e.entry_id=?` :
         `select distinct ${effectiveCatalogData()} data,e.import_id,e.entry_id from av2_resolved_catalog_aliases a join av2_resolved_catalog_entries e on e.import_id=a.import_id and e.entry_id=a.entry_id where a.import_id=(select active_catalog_id from av2_meta where id=1) and a.market=? and a.alias=?`,
         row.catalogEntryId && row.catalogImportId ? [row.catalogImportId,row.catalogEntryId] : [row.market,catalogKey(row.sku)]);

@@ -1,11 +1,13 @@
 import { catalogKey, type CatalogDetail, type CatalogEntry } from './catalog';
-import type { Operation } from './model';
+import type { Market, Operation } from './model';
+import { ozonArticle } from './ozon-shipment';
 
 export type ManagedProduct = CatalogEntry & {
   editRevision?: number;
   updatedAt?: string;
   workNorms?: Partial<Record<Operation, number | null>>;
   labelSha?: string | null;
+  retiredIdentity?: true;
 };
 export type ManagedDetail = CatalogDetail & ManagedProduct;
 export type CatalogFamilyCard = Pick<ManagedDetail, 'id' | 'sku' | 'market' | 'store' | 'name'>;
@@ -16,6 +18,10 @@ export interface CatalogFamilyMatches {
 export function catalogFamilyKey(sku: string) {
   const family = catalogKey(sku).split('.')[0];
   return /^[\p{L}\p{N}_-]{2,60}$/u.test(family) ? family : '';
+}
+export function catalogArticleForMarket(sku: string, market: Market) {
+  const base = catalogKey(sku).replace(/(?:\s*\((?:OZ|WB)\))+$/u, '').trimEnd();
+  return base && market === 'OZON' ? ozonArticle(base) : base;
 }
 export const productFields = [
   ['name', 'Название товара'], ['barcode', 'Штрихкод'], ['kind', 'Вид для расчёта выработки'],

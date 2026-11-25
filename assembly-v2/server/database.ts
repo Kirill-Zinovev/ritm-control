@@ -1,10 +1,12 @@
-import { positionCatalogJoin } from "./catalog-store";
+import { catalogCartonCapacity, catalogForPositionScope, positionCatalogJoin, positionWorkCatalogSql } from "./catalog-store";
+import type { ManagedProduct } from "../shared/catalog-editor";
 import { sameCartonScope } from "../shared/carton-scope";
+import { cartonMergeFingerprint, checkCartonMerge, type CartonMergeReceipt } from "../shared/carton-merge";
+import { planCartonTransfers, type MergeAllocation } from "./carton-merge";
 import { catalogAttachLabelsPlan, catalogSavePlan } from "./catalog-editor";
 import { searchPositions } from "./position-search";
 import type {
   Carton,
-  CartonItem,
   Dispatch,
   Employee,
   ExportSnapshot,
@@ -19,14 +21,14 @@ import { readWorkspaceSnapshot, readDirectorySnapshot } from "./snapshot";
 import {
   catalogActivationPlan,
   resolveCatalogPositions,
-  effectiveCatalogData,
+  selectableCatalog,
 } from "./catalog-store";
 import { catalogKey, digest, photoAllowed } from "../shared/catalog";
 import { prepareRitmImport } from "./ritm-import";
 import { ritmShipmentId, type RitmSupply } from "../shared/ritm";
 import { nextCartonLabel } from "../shared/carton-number";
-import { cancelWarehouseWorkPlan, readWarehouse, warehousePlan } from "./warehouse";
-import { ozonShipments } from "./ozon-shipments";
+import { cancelWarehouseWorkPlan, previewWarehouseNumbers, readWarehouse, warehousePlan } from "./warehouse";
+import { marketplaceShipments } from "./marketplace-shipments";
 import { readDispatchHistoryDetail, readDispatchHistoryPage } from "./dispatch-history";
 import { planDeparture, readPreparedDispatches } from "./dispatch-departure";
 import { readWorkHistory } from "./work-history";
@@ -36,7 +38,7 @@ import { enqueueWork, enqueueCancellation } from "./ritm-outbox";
 import { ritmCartonDispatchPlan } from "./ritm-warehouse";
 import { qualityPlan } from "./quality";
 import { cancelPacking } from "./cancel-packing";
-import { placementAmounts } from "../shared/assembly";
+import { isCartonOverCapacity, placementAmounts, type CartonFitConfirmation } from "../shared/assembly";
 import {
   effectiveWorkNorms,
   savedCoefficient,
@@ -113,25 +115,29 @@ export function createDatabase(store: SqlStore): Database {
       )[0]?.revision ?? 0
     );
   }
-  async function loadCartons(ids: string[], ozonCatalog = false): Promise<Carton[]> {
+  async function loadCartons(ids: string[], marketCatalog?: Carton["market"]):
+    Promise<(Omit<Carton, "items"> & { items: MergeAllocation[] })[]> {
     if (!ids.length) return [];
     const parameter = JSON.stringify(ids);
-    const sameOzonStore = "json_extract(pc.value,'$.market')='OZON' and json_extract(pc.value,'$.store')=s.store";
-    const productFields = ozonCatalog
-      ? `coalesce(case when ${sameOzonStore} then nullif(trim(json_extract(pc.value,'$.sku')),'') end,p.sku) sku,
-        p.name,coalesce(case when ${sameOzonStore} then nullif(trim(json_extract(pc.value,'$.barcode')),'') end,p.barcode) barcode`
-      : "p.sku,p.name,p.barcode";
+    const sameStore = `json_extract(pc.value,'$.market')='${marketCatalog}' and json_extract(pc.value,'$.store')=s.store`;
+    const sku = marketCatalog === "OZON"
+      ? `coalesce(case when ${sameStore} then nullif(trim(json_extract(pc.value,'$.sku')),'') end,p.sku) sku`
+      : "p.sku";
+    const barcode = marketCatalog
+      ? `coalesce(case when ${sameStore} then nullif(trim(json_extract(pc.value,'$.barcode')),'') end,p.barcode) barcode`
+      : "p.barcode";
+    const productFields = `${sku},p.name,${barcode}`;
     const [boxes, items] = await Promise.all([
       all<CartonRow>(
         "select c.*,d.state dispatch_state from av2_production_cartons c left join av2_dispatches d on d.id=c.dispatch_id where c.id in (select value from json_each(?)) order by c.label",
         [parameter],
       ),
-      all<CartonItem & { cartonId: string }>(
-        `select a.id,a.carton_id,a.position_id,p.supply_id,s.title supply,coalesce(s.origin_shipment_id,s.external_id) external_supply_id,p.external_id external_position_id,${productFields},p.catalog_import_id,json_extract(pc.value,'$.photoId') photo_id,a.qty,a.units_per_box from av2_all_allocations a join av2_positions p on p.id=a.position_id join av2_supplies s on s.id=p.supply_id ${positionCatalogJoin()} where a.carton_id in (select value from json_each(?)) and a.removed_at is null order by a.created_at,a.id`,
+      all<MergeAllocation & { cartonId: string }>(
+        `select a.id,a.carton_id,a.position_id,p.supply_id,s.title supply,coalesce(s.origin_shipment_id,s.external_id) external_supply_id,p.external_id external_position_id,${productFields},p.catalog_import_id,json_extract(pc.value,'$.photoId') photo_id,a.qty,a.units_per_box,a.legacy from av2_all_allocations a join av2_positions p on p.id=a.position_id join av2_supplies s on s.id=p.supply_id ${positionCatalogJoin()} where a.carton_id in (select value from json_each(?)) and a.removed_at is null order by a.created_at,a.id`,
         [parameter],
       ),
     ]);
-    const contents = new Map<string, CartonItem[]>();
+    const contents = new Map<string, MergeAllocation[]>();
     for (const item of items) {
       const content = contents.get(item.cartonId) ?? [];
       content.push(item);
@@ -180,19 +186,24 @@ export function createDatabase(store: SqlStore): Database {
   }
   const snapshot = (supplyId: string | null, scopeOnly = false, directions = false, directory = false) =>
     directory ? readDirectorySnapshot(store) : readWorkspaceSnapshot(store, supplyId, scopeOnly, directions);
-  const ozon = ozonShipments(store, (ids) => loadCartons(ids, true));
+  const ozon = marketplaceShipments(store, (ids) => loadCartons(ids, "OZON"), "OZON");
+  const wb = marketplaceShipments(store, (ids) => loadCartons(ids, "WB"), "WB");
   async function plan(
     action: string,
     payload: Record<string, unknown>,
     actor: string,
     rev: number,
+    fitConfirmation?: unknown,
   ): Promise<{ statements: Statement[]; result: Record<string, unknown> }> {
     const sql: Statement[] = [];
     const now = new Date().toISOString();
     if (action === "ozon.prepare" || action === "ozon.assign")
       return ozon.plan(action, payload, actor, rev, now);
+    if (action === "wb.prepare" || action === "wb.assign" || action === "wb.generate")
+      return wb.plan(action, payload, actor, rev, now);
     if (action === "dispatch.send")
-      return planDeparture(store, payload, actor, rev, now, loadCartons, ozon.splitDeparture);
+      return planDeparture(store, payload, actor, rev, now, loadCartons,
+        (market, ...args) => (market === "WB" ? wb : ozon).splitDeparture(...args));
     let result: Record<string, unknown> = {};
     const add = (query: string, ...args: (string | number | null)[]) =>
       sql.push(statement(query, ...args));
@@ -257,7 +268,7 @@ export function createDatabase(store: SqlStore): Database {
     };
     if (action === "catalog.save") return catalogSavePlan(store,payload,actor,now);
     if (action === "catalog.attachLabels") return catalogAttachLabelsPlan(store,payload,actor,now);
-    if (action.startsWith("quality."))
+    if (action.startsWith("quality.") || action === "catalog.applyWorkNorms")
       return qualityPlan(store, action, payload, actor, now);
     if (action === "legacy.restore")
       return legacyRestorePlan(store, payload, actor, now);
@@ -290,7 +301,7 @@ export function createDatabase(store: SqlStore): Database {
       return {statements: sql, result: {sku, photoUrl: url}};
     }
     if(action==="catalog.correctKind") {
-      const entry=await one<{market:string;store:string;sku:string}>("select market,store,sku from av2_resolved_catalog_entries where import_id=(select active_catalog_id from av2_meta where id=1) and entry_id=?",[text(payload.entryId,"Карточка")],"Карточка не найдена в действующем справочнике.");
+      const entry=await one<{market:string;store:string;sku:string}>(`select market,store,sku from ${selectableCatalog} where import_id=(select active_catalog_id from av2_meta where id=1) and entry_id=?`,[text(payload.entryId,"Карточка")],"Карточка не найдена в действующем справочнике.");
       const kind=text(payload.kind,"Вид товара"),reason=text(payload.reason,"Основание",500);
       await one("select type_key from av2_shift_norms where type_key=?",[workTypeKey(kind)],"Для этого вида не подтверждены нормы.");
       add("insert into av2_catalog_kind_overrides(id,market,store,sku,kind,reason,actor,created_at) values(?,?,?,?,?,?,?,?) on conflict(market,store,sku) do update set kind=excluded.kind,reason=excluded.reason,actor=excluded.actor,created_at=excluded.created_at",JSON.stringify([entry.market,entry.store,entry.sku]),entry.market,entry.store,entry.sku,kind,reason,actor,now);
@@ -315,12 +326,15 @@ export function createDatabase(store: SqlStore): Database {
       const destination = payload.excessDestination ?? "box";
       assert(destination === "box" || destination === "stock", "Выберите, куда направить излишек.");
       const { shipmentQty: shipment, warehouseQty: excess } = placementAmounts(qty, row.plan - row.assigned, destination);
+      assert(payload.fitConfirmation === undefined || shipment > 0,
+        "Количество для короба изменилось. Обновите данные и проверьте размещение ещё раз.");
       const shipmentPlan = shipment
         ? await plan(
             "allocation.add",
             { ...payload, qty: shipment },
             actor,
             rev,
+            payload.fitConfirmation,
           )
         : null;
       const stockPlan = excess
@@ -748,25 +762,21 @@ export function createDatabase(store: SqlStore): Database {
           "В короб можно сразу добавить только упаковку.",
         );
         const workId = id();
-        const catalog =
-          p.catalogImportId && p.catalogEntryId
-            ? (
-                await all<{ data: string }>(
-                  `select ${effectiveCatalogData()} data from av2_resolved_catalog_entries e where import_id=? and entry_id=?`,
-                  [p.catalogImportId, p.catalogEntryId],
-                )
-              )[0]
-            : null;
-        const norms = (
-          await all<{ data: string }>("select data from av2_shift_norms")
-        ).map((n) => JSON.parse(n.data) as ShiftNorm);
+        const [normSource] = await all<{ data: string | null; shifts: string }>(
+          `select ${positionWorkCatalogSql()} data,
+            (select json_group_array(json(data)) from av2_shift_norms) shifts
+            from av2_positions p join av2_supplies s on s.id=p.supply_id
+            ${positionCatalogJoin("p", "pc", true)} where p.id=?`,
+          [p.id],
+        );
+        const catalog = normSource?.data
+          ? JSON.parse(normSource.data) as Record<string, unknown>
+          : null;
         const effective = effectiveWorkNorms(
-            catalog ? JSON.parse(catalog.data) : null,
-            norms,
-          ),
-          operation = String(
-            payload.operation,
-          ) as import("../shared/model").Operation;
+          catalog,
+          JSON.parse(normSource?.shifts ?? "[]") as ShiftNorm[],
+        );
+        const operation = String(payload.operation) as import("../shared/model").Operation;
         const workNorm = effective[operation],
           coefficient = savedCoefficient(effective, operation, qty);
         add(
@@ -783,7 +793,8 @@ export function createDatabase(store: SqlStore): Database {
           workNorm === null ? null : String(workNorm),
           coefficient === null ? null : String(coefficient),
         );
-        sql.push(enqueueWork(workId, now));
+        const workKind = typeof catalog?.kind === "string" ? catalog.kind : null;
+        sql.push(enqueueWork(workId, now, workKind));
         increment(p.id, String(payload.operation), qty, employee);
       }
       let allocatedCarton: Carton | null = null;
@@ -810,9 +821,30 @@ export function createDatabase(store: SqlStore): Database {
           sameCartonScope(box, supply),
           "У короба другой маркетплейс, магазин или склад назначения.",
         );
+        let unitsPerBox = p.unitsPerBox;
+        if (unitsPerBox === null) {
+          const currentCatalog = `select ${positionWorkCatalogSql(false, true)}
+            from av2_positions p join av2_supplies s on s.id=p.supply_id ${positionCatalogJoin("p", "pc", true)}
+            where p.id=?`;
+          const [row] = await all<{ data: string | null }>(`select (${currentCatalog}) data`, [p.id]);
+          const card: (ManagedProduct & { lookupImportId?: string }) | null = row?.data ? JSON.parse(row.data) : null;
+          const matched = catalogForPositionScope(card, supply, p.barcode);
+          const catalogUnits = catalogCartonCapacity(matched);
+          if (matched?.lookupImportId && catalogUnits) {
+            unitsPerBox = catalogUnits;
+            // Materialize a missing norm together with the allocation. Recheck the
+            // selected card even for commands that use the per-row commit guards.
+            add(`update av2_positions set units_per_box=?,
+              barcode=coalesce(nullif(barcode,''),?),
+              catalog_import_id=case when catalog_entry_id is null then ? else catalog_import_id end,
+              catalog_entry_id=coalesce(catalog_entry_id,?)
+              where id=? and units_per_box is null and (${currentCatalog})=?`,
+              unitsPerBox, matched.barcode || "", matched.lookupImportId, matched.id, p.id, p.id, row.data);
+          }
+        }
         assert(
-          p.unitsPerBox && p.unitsPerBox > 0,
-          "Не задана норма вместимости товара.",
+          unitsPerBox && unitsPerBox > 0,
+          "Не задана норма вместимости товара. Укажите тип и вместимость короба в справочнике.",
         );
         const totals = (
           await all<{ packing: number; boxed: number }>(
@@ -831,17 +863,42 @@ export function createDatabase(store: SqlStore): Database {
           !box.capacityUnknown,
           "В старом коробе есть товар без подтверждённой вместимости. Выберите другой короб.",
         );
+        const fillAfter = box.fill + qty / unitsPerBox;
+        const overCapacity = isCartonOverCapacity(fillAfter);
+        if (fitConfirmation !== undefined) {
+          assert(fitConfirmation && typeof fitConfirmation === "object" && !Array.isArray(fitConfirmation),
+            "Проверьте, что товар физически помещается, и подтвердите укладку ещё раз.");
+          const confirmation = fitConfirmation as Partial<CartonFitConfirmation>;
+          const fingerprint = payload.newCarton === true ? null : await cartonMergeFingerprint(box);
+          assert(
+            confirmation.shipmentQty === qty && confirmation.unitsPerBox === unitsPerBox &&
+              confirmation.cartonFingerprint === fingerprint,
+            "Состав короба, количество или норма изменились. Обновите данные и проверьте размещение ещё раз.",
+          );
+        }
         assert(
-          box.fill + qty / p.unitsPerBox <= 1 + 1e-9,
-          "Количество превышает свободное место в коробе.",
+          !overCapacity || fitConfirmation !== undefined,
+          "Количество превышает свободное место в коробе. Подтвердите, что товар физически помещается.",
         );
+        const allocationId = id();
+        if (overCapacity) {
+          // Placement uses the revision guard, so the confirmed composition
+          // stays current through the transaction that records the allocation.
+          add(
+            `insert into av2_quality_repairs(id,kind,entity_id,"before","after",evidence,actor,created_at)
+              values(?,'allocation.fit-confirmed',?,?,?,?,?,?)`,
+            id(), allocationId, JSON.stringify({ fill: box.fill }),
+            JSON.stringify({ cartonId: box.id, positionId: p.id, qty, unitsPerBox, fill: fillAfter }),
+            "Подтверждена физическая вместимость короба", actor, now,
+          );
+        }
         add(
           "insert into av2_allocations(id,carton_id,position_id,qty,units_per_box,created_at,actor) values(?,?,?,?,?,?,?)",
-          id(),
+          allocationId,
           box.id,
           p.id,
           qty,
-          p.unitsPerBox,
+          unitsPerBox,
           now,
           actor,
         );
@@ -918,6 +975,59 @@ export function createDatabase(store: SqlStore): Database {
         id: work.employeeId,
         name: employeeName,
       });
+    } else if (action === "carton.merge") {
+      const sourceId = text(payload.sourceCartonId, "Исходный короб");
+      const targetId = text(payload.cartonId, "Короб-получатель");
+      const boxes = await loadCartons([sourceId, targetId]);
+      const source = boxes.find(box => box.id === sourceId);
+      const target = boxes.find(box => box.id === targetId);
+      assert(source && target, "Один из коробов недоступен. Обновите список и выберите короба заново.");
+      const skus = payload.skus;
+      const quantities = payload.quantities;
+      assert(skus === undefined || Array.isArray(skus), "Выберите артикулы для переноса.");
+      assert(quantities === undefined || (Array.isArray(quantities) && skus === undefined),
+        "Проверьте список артикулов и количество для переноса.");
+      let selection = skus === undefined ? undefined
+        : new Map<string, number | null>(skus.map(sku => [catalogKey(text(sku, "Артикул")), null]));
+      if (quantities !== undefined) {
+        selection = new Map();
+        for (const entry of quantities) {
+          assert(entry && typeof entry === "object", "Проверьте артикул и количество.");
+          const sku = catalogKey(text(entry.sku, "Артикул"));
+          assert(!selection.has(sku), `Артикул ${sku} указан для переноса дважды.`);
+          selection.set(sku, integer(entry.qty, `Количество для ${sku}`));
+        }
+      }
+      const merge = checkCartonMerge(source, target, selection);
+      if (!merge.allowed) throw new Error(merge.message);
+      const [sourceFingerprint, targetFingerprint] = await Promise.all([
+        cartonMergeFingerprint(source, !!selection), cartonMergeFingerprint(target, !!selection),
+      ]);
+      assert(payload.sourceFingerprint === sourceFingerprint && payload.targetFingerprint === targetFingerprint,
+        "Состав коробов изменился. Обновите список и заново проверьте, что товар помещается.");
+      assert(!merge.requiresFitConfirmation || payload.fitConfirmed === true,
+        "Заполнение по норме больше 100%. Подтвердите, что весь состав помещается в короб физически.");
+
+      const transfer = await planCartonTransfers(store, merge.moves, source.id, target.id, actor, now);
+      sql.push(...transfer.statements);
+      const receipt: CartonMergeReceipt = {
+        sourceCartonId: source.id, targetCartonId: target.id,
+        sourceLabel: source.label, targetLabel: target.label,
+        movedQty: merge.movedQty, qty: merge.qty, fill: merge.fill,
+        sourceRemaining: merge.sourceRemaining,
+        fitConfirmed: merge.requiresFitConfirmation,
+      };
+      // One indexed marker per carton lets RITM prefer its current v2 contents
+      // even when every moved line originally came from the archived system.
+      for (const box of boxes)
+        add(`insert into av2_quality_repairs(id,kind,entity_id,before,after,evidence,actor,created_at)
+          values(?,'carton.merge',?,?,?,?,?,?) on conflict(kind,entity_id) do nothing`,
+          id(), box.id, JSON.stringify({ qty: box.qty, fill: box.fill }),
+          JSON.stringify(receipt), "Слияние коробов", actor, now);
+      result = {
+        ...receipt,
+        items: transfer.items,
+      };
     } else if (action === "carton.close") {
       const box = await carton(text(payload.cartonId, "Короб"));
       assert(
@@ -1036,12 +1146,14 @@ export function createDatabase(store: SqlStore): Database {
   }
   return {
     ozon,
+    wb,
     preparedDispatches: () => readPreparedDispatches(store),
     dispatchHistory: {
       page: (page, query) => readDispatchHistoryPage(store, page, query),
       detail: (shipmentId) => readDispatchHistoryDetail(store, shipmentId),
     },
     warehouse: (url: URL) => readWarehouse(store, url),
+    warehouseNumberPreview: (numbers) => previewWarehouseNumbers(store, numbers),
     workHistory: (url: URL) => readWorkHistory(store, url),
     searchPositions: (url: URL) => searchPositions(store, url),
     snapshot,

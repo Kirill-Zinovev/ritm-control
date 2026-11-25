@@ -26,7 +26,7 @@ function canOpenScreen(view: string, role: AccessRole) {
   if (!screens.some(([id]) => id === view)) return false;
   if (role === "owner") return true;
   return role === "manager"
-    ? !["assembly", "setup"].includes(view)
+    ? view !== "setup"
     : ["assembly", "work"].includes(view);
 }
 
@@ -58,12 +58,37 @@ function Application() {
       history.replaceState(null, "", url);
     });
   }
-  const onLearning = canOpenScreen("learning", role) ? () => navigate("learning") : undefined;
+  const availableScreens = screens.filter(([id]) => canOpenScreen(id, role));
   if (view === "assembly") {
+    const sidebarNavigation = (
+      <>
+        {role === "collector" ? (
+          <Button onClick={() => navigate("work")} disabled={w.busy}>
+            Выработка
+          </Button>
+        ) : (
+          <details className="review-navigation">
+            <summary>Управление</summary>
+            <nav aria-label="Другие разделы">
+              {availableScreens.filter(([id]) => id !== "assembly" && id !== "learning").map(([id, label]) => (
+                <button type="button" key={id} disabled={w.busy} onClick={() => navigate(id)}>
+                  {id === "cartons" ? "Все короба" : label}
+                </button>
+              ))}
+            </nav>
+          </details>
+        )}
+        {canOpenScreen("learning", role) && (
+          <Button onClick={() => navigate("learning")} disabled={w.busy}>
+            Обучение с Аркадием
+          </Button>
+        )}
+      </>
+    );
     return w.state && w.state.cartonScope !== "directory" ? (
-      <Collector workspace={w} navigate={navigate} onLearning={onLearning} />
+      <Collector workspace={w} navigate={navigate} sidebarNavigation={sidebarNavigation} />
     ) : (
-      <CollectorLoading workspace={w} onLearning={onLearning} />
+      <CollectorLoading workspace={w} sidebarNavigation={sidebarNavigation} />
     );
   }
   return (
@@ -74,16 +99,16 @@ function Application() {
       <header className="header">
         <a
           className="brand"
-          href={role==='manager'?'?view=catalog':'?view=assembly'}
+          href="?view=assembly"
           onClick={(e) => {
             e.preventDefault();
-            navigate(role==='manager'?'catalog':'assembly');
+            navigate("assembly");
           }}
         >
           RITM <span>Сборка</span>
         </a>
         <nav className="navigation" aria-label="Разделы RITM Сборка">
-          {screens.filter(([id]) => canOpenScreen(id, role)).map(([id, label]) => (
+          {availableScreens.map(([id, label]) => (
             <button
               key={id}
               type="button"
@@ -142,18 +167,7 @@ function Application() {
         >
           <Catalog workspace={w} />
         </Suspense>
-      ) : (
-        <>
-          <Collector workspace={w} navigate={navigate} onLearning={onLearning} />
-          {!w.state.supplies.length ? (
-            <div className="empty-action">
-              <Button primary onClick={() => navigate("setup")}>
-                Добавить сотрудников и поставку
-              </Button>
-            </div>
-          ) : null}
-        </>
-      )}
+      ) : null}
       <footer>RITM Сборка · управление производством</footer>
     </div>
   );

@@ -1,10 +1,14 @@
 import {warehouseWorkQty} from "./warehouse-splits";
 import type { SqlStore, Statement } from "./database";
 import type { Work } from "../shared/model";
-import { effectiveCatalogData, positionCatalogJoin } from "./catalog-store";
+import { missingWorkNormReason, type ShiftNorm } from "../shared/work-norm";
+import { effectiveCatalogData, positionCatalogJoin, positionWorkCatalogSql } from "./catalog-store";
 const workRows = `
   select w.id,w.position_id,w.employee_id,w.employee_name employee,w.operation,w.qty,w.norm,w.coefficient,w.created_at,p.sku,p.name,s.title supply,w.supply_id,s.is_demo,case when c.id is null then 0 else 1 end canceled,c.reason cancel_reason,'supply' scope,
-    (select json_extract(e.data,'$.kind') from av2_resolved_catalog_entries e where e.import_id=p.catalog_import_id and e.entry_id=p.catalog_entry_id limit 1) product_type,
+    coalesce(
+      (select json_extract(e.data,'$.kind') from av2_resolved_catalog_entries e where e.import_id=p.catalog_import_id and e.entry_id=p.catalog_entry_id limit 1),
+      (select json_extract(o.payload,'$.productType') from av2_ritm_work_outbox o where o.id='av2:'||w.id)
+    ) product_type,
     p.external_id source_position_id,coalesce(s.origin_shipment_id,s.external_id) source_supply_id
   from av2_work w join av2_positions p on p.id=w.position_id join av2_supplies s on s.id=w.supply_id left join av2_corrections c on c.work_id=w.id
   union all
@@ -49,6 +53,34 @@ export async function readRitmWorkReport(store: SqlStore, url: URL) {
     },
   ]);
   const events = rows.slice(0, reportPageSize);
+  const missing = events.filter(row => row.scope === "supply" && row.coefficient === null);
+  if (missing.length) {
+    const [details, norms] = await store.readBatch([
+      {
+        sql: `select w.id,s.market,s.store,${positionWorkCatalogSql(true)} catalog
+          from av2_work w join av2_positions p on p.id=w.position_id
+          join av2_supplies s on s.id=w.supply_id ${positionCatalogJoin()}
+          where w.id in (select value from json_each(?))`,
+        args: [JSON.stringify(missing.map(row => row.id))],
+      },
+      { sql: "select data from av2_shift_norms", args: [] },
+    ]);
+    const shifts = norms.map(row => JSON.parse(String(row.data)) as ShiftNorm);
+    const byId = new Map(details.map(row => [row.id, row]));
+    for (const event of missing) {
+      const source = byId.get(event.id);
+      if (!source) continue;
+      const candidate = source.catalog ? JSON.parse(String(source.catalog)) as Record<string, unknown> : null;
+      const catalog = candidate?.retiredIdentity ? null : candidate;
+      const reason = missingWorkNormReason(catalog, shifts, event.operation as Work["operation"]);
+      event.normIssue = {
+        reason: event.norm !== null && catalog ? "ready" : reason,
+        market: source.market,
+        store: catalog?.store || source.store,
+        hasCard: !!catalog,
+      };
+    }
+  }
   const last = events.at(-1);
   return {
     ok: true, schemaVersion: 1, revision: proof[0].revision, events,

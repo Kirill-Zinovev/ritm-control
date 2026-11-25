@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { openDatabase } from "../server/local-db";
 import { syncRitm, ritmApi } from "../server/ritm-api";
+import { readWorkHistory } from "../server/work-history";
 import type { RitmFeed, RitmSupply, RitmPosition } from "../shared/ritm";
 import type { CatalogEntry } from "../shared/catalog";
 import type { Snapshot } from "../shared/model";
@@ -446,6 +447,18 @@ test("source plan reduction and removed row preserve saved facts, carton norm, f
   assert.equal(removed.packing, 10);
   assert.equal(s.cartons[0].items[0].qty, 10);
   assert.equal(s.cartons[0].items[0].unitsPerBox, 100);
+  const direction = (await c.db.snapshot(group.id, true, true)) as Snapshot;
+  assert.deepEqual(
+    direction.positions.map((x) => x.id),
+    s.positions.filter((x) => x.id !== p.id).map((x) => x.id),
+  );
+  assert.deepEqual(direction.progress, { plan: 5, packed: 0 });
+  assert.equal(direction.cartons[0].items[0].qty, 10);
+  const history = await readWorkHistory(
+    c.db.store,
+    new URL(`https://test/api/work-history?supply=${group.id}`),
+  );
+  assert.ok(history.items.some((work) => work.positionId === p.id && work.qty === 10));
   await assert.rejects(
     c.cmd("allocation.add", { positionId: p.id, cartonId: carton, qty: 1 }),
     /готовность/,

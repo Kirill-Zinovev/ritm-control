@@ -4,6 +4,7 @@ import { callAssemblyV2 } from "./assemblyV2Transport.js";
 
 const source = "RITM Сборка";
 const operationNames = { cut: "Станочная резка", assembly: "Ручная резка", packing: "Упаковка" };
+const normReasons = new Set(["catalog", "kind", "sheets", "norm", "ready"]);
 const dayAt = new Intl.DateTimeFormat("en-CA", {
   timeZone: "Europe/Moscow", year: "numeric", month: "2-digit", day: "2-digit",
 });
@@ -17,12 +18,18 @@ function reportEvent(row) {
       (norm !== null && (!Number.isFinite(norm) || norm <= 0)) ||
       (coefficient !== null && (!Number.isFinite(coefficient) || coefficient < 0)))
     return null;
+  const issue = row.normIssue;
+  const normIssue = coefficient === null && normReasons.has(issue?.reason) &&
+    ["OZON", "WB"].includes(issue.market)
+    ? { reason: issue.reason, market: issue.market,
+        store: /^[1-9]\d*$/.test(issue.store) ? String(issue.store) : "", hasCard: issue.hasCard === true }
+    : undefined;
   return {
     eventId: row.id, idempotencyKey: row.id, employeeId: row.employeeId, employee: row.employee,
     shipmentId: row.supplyId, shipmentName: row.supply, positionId: row.positionId,
     directionId: "", article: row.sku, operationId: row.operation, operation: operationNames[row.operation],
     quantity: row.qty, createdAt: row.createdAt, date: dayAt.format(new Date(timestamp)),
-    norm, coefficient, productType: row.productType || "", source,
+    norm, coefficient, productType: row.productType || "", source, normIssue,
   };
 }
 

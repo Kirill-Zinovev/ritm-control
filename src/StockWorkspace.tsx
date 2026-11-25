@@ -3,6 +3,7 @@ import { ArrowRight, Box, ClipboardCheck, ExternalLink, FileSpreadsheet, ImageOf
 import { Button, Field, Notice } from './ui';
 import { parseSupplyWorkbook, type SupplyImportLine } from './supplySpreadsheet';
 import { runStockRequest } from './stockRecovery';
+import StockTaskHistory from './StockTaskHistory';
 import './stockWorkspace.css';
 
 type Destination = 'warehouse' | 'urgent';
@@ -10,8 +11,6 @@ type RoundingDirection = 'down' | 'up';
 type RoundingChoice = { direction: RoundingDirection; quantity: number; newQuantity: number; sheets: number };
 type Change = SupplyImportLine & { department: 'roll' | 'box' | null; action: 'insert' | 'increase' | 'skip'; previousQuantity?: number; newQuantity?: number; issue?: string | null; photoUrl?: string; rounding?: {choices: RoundingChoice[]} };
 type Preview = { fingerprint: string; changes: Change[] };
-type HistoryEntry = {id:string;date:string;manager:string|null;destination:Destination;department:'box'|'roll';article:string;quantity:number;print:'done'|'partial'|'not_started'|'unknown';cut:'done'|'partial'|'not_started'|'unknown';status?:'closed';closedAt?:string};
-const statusLabel:Record<HistoryEntry['print'],string>={done:'Готово',partial:'Частично',not_started:'Не начато',unknown:'Нет данных'};
 type Pending = { operationId:string; input:{destination:Destination;lines:SupplyImportLine[]; rounding?:{article:string;direction:RoundingDirection}[]}; expectedFingerprint:string };
 type RecoveryStep = {department:'roll'|'box';status:string;plan?:{entries?:SupplyImportLine[]}};
 type RecoveryOperation = {status:string;message?:string;steps?:RecoveryStep[]};
@@ -40,15 +39,7 @@ export default function StockWorkspace(){
   const [pending,setPending]=useState<Pending|null>(pendingState.value);
   const [recovery,setRecovery]=useState<RecoveryOperation|null>(null);
   const recoveryStarted=useRef(false);
-  const [history,setHistory]=useState<HistoryEntry[]>([]),[historyLoading,setHistoryLoading]=useState(true),[historyError,setHistoryError]=useState('');
-  async function loadHistory(){setHistoryLoading(true);setHistoryError('');try{const response=await fetch('/api/stocks/history',{credentials:'same-origin'});const data=await response.json() as {ok:boolean;entries?:HistoryEntry[];message?:string};if(!response.ok||!data.ok)throw new Error(data.message||'Не удалось загрузить историю.');setHistory(data.entries||[]);}catch(error){setHistoryError(error instanceof Error?error.message:'Не удалось загрузить историю.');}finally{setHistoryLoading(false);}}
-  async function closeTask(item:HistoryEntry){
-    if(!window.confirm(`Закрыть задание ${item.article}? Весь текущий план артикула будет убран из рабочего листа, история и выработка сохранятся.`))return;
-    setBusy(true);setHistoryError('');
-    try{const data=await request<{operation:{status:string;message?:string}}>('/api/stocks/close',{entryId:item.id,operationId:crypto.randomUUID()});if(data.operation.status!=='verified')throw new Error(data.operation.message||'Результат закрытия не подтверждён.');await loadHistory();}
-    catch(error){setHistoryError(error instanceof Error?error.message:'Не удалось закрыть задание.');}finally{setBusy(false);}
-  }
-  useEffect(()=>{void loadHistory();},[]);
+  const [historyRevision,setHistoryRevision]=useState(0);
   const [checkedInput,setCheckedInput]=useState<{destination:Destination;lines:SupplyImportLine[]}|null>(null);
   const [rounding, setRounding] = useState(() => new Map<string, RoundingDirection>());
   const needsRounding = preview?.changes.filter(row => row.rounding) || [];
@@ -81,7 +72,7 @@ export default function StockWorkspace(){
         setMessage(result.message||result.operation?.message||'Запись не отправлена. Проверьте список заново.');
       }else if(result.operation?.status==='verified'){
         setPending(null);setRecovery(null);sessionStorage.removeItem('ritm:stock-pending');setPreview(null);setText('');
-        setMessage('Запасы добавлены и проверены.');void loadHistory();
+        setMessage('Запасы добавлены и проверены.');setHistoryRevision(value=>value+1);
       }
     }catch(error){setMessage((error instanceof Error?error.message:'Ответ не получен.')+' Сохранённый запрос требует проверки; не создавайте новый.');}
     finally{setBusy(false);}
@@ -152,8 +143,6 @@ export default function StockWorkspace(){
       {!busy&&!preview&&<Button onClick={()=>void save()}>Проверить сохранение</Button>}
     </div>}
     {message&&<Notice tone="warning">{message}</Notice>}
-    <section className="stock-history" aria-labelledby="stock-history-title"><div className="stock-history-heading"><div><h3 id="stock-history-title">История заданий</h3><p>Добавления и завершения за последние 7 дней · готовность по общему плану артикула</p></div><Button disabled={historyLoading} onClick={()=>void loadHistory()}>{historyLoading?'Обновляем…':'Обновить'}</Button></div>
-    {historyError&&<Notice tone="warning">{historyError}</Notice>}{historyLoading&&!history.length?<p>Загружаем историю…</p>:history.length===0?<p>За последние 7 дней подтверждённых добавлений нет.</p>:<div className="stock-table-wrap"><table><thead><tr><th>Дата</th><th>Менеджер</th><th>Артикул</th><th>Назначение / участок</th><th>Добавлено</th><th>Печать</th><th>Порезка</th><th>Задание</th></tr></thead><tbody>{history.map(item=><tr key={item.id}><td>{new Intl.DateTimeFormat('ru-RU',{dateStyle:'short',timeStyle:'short',timeZone:'Europe/Moscow'}).format(new Date(item.date))}</td><td>{item.manager||'Не указан'}</td><td><strong>{item.article}</strong></td><td>{item.destination==='urgent'?'Срочные 2 этаж':'Запасы склад'} · {item.department==='box'?'Бокс':'Рулонная печать'}</td><td>{item.quantity} шт.</td><td><span className={`stock-history-status stock-history-status--${item.print}`}>{statusLabel[item.print]}</span></td><td><span className={`stock-history-status stock-history-status--${item.cut}`}>{statusLabel[item.cut]}</span></td><td>{item.status==='closed'?<>Завершено {item.closedAt&&new Intl.DateTimeFormat('ru-RU',{dateStyle:'short',timeStyle:'short',timeZone:'Europe/Moscow'}).format(new Date(item.closedAt))}</>:item.print==='done'&&item.cut==='done'?<Button disabled={busy||historyLoading} onClick={()=>void closeTask(item)}>Закрыть задание</Button>:'—'}</td></tr>)}</tbody></table></div>}
-    <p className="stock-history-note">Если артикул добавляли несколько раз, закрывается весь текущий план. История работы сохраняется. «Нет данных» означает, что связать запись с текущей строкой или проверить готовность не удалось.</p></section>
+    <StockTaskHistory blocked={busy} setBusy={setBusy} revision={historyRevision} />
   </section>;
 }

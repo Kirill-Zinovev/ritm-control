@@ -11,7 +11,11 @@ import { boxPositionKey, useBoxPositionRemoval } from "./BoxPositionRemoval";
 import { startWriterStatusPolling } from "./writerStatusPolling";
 import { recoverableSupply } from "./supplyAutoRecovery";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FileSpreadsheet } from "lucide-react";
+import { SupplyRoutingReview, type RoutingPreview, type RoundingDirection } from "./SupplyRoutingReview";
+import "./supplyCreation.css";
 import {
+  ArrowLeft,
   ArrowSquareOut,
   CheckCircle,
   DownloadSimple,
@@ -44,9 +48,11 @@ import {
   linkedAssemblyBoxSummary,
   observedTotal,
   plannedAreaTotal,
+  formatPrintQuantity,
   rollCut,
   rollPrinted,
-  rollPrintRemaining,
+  supplyPrinted,
+  supplyPrintRemaining,
   type AssemblyBoxLink,
 } from "./liveSupplyProgress";
 import { Button, DataTable, Empty, Field, Modal, Search } from "./ui";
@@ -117,9 +123,6 @@ type SheetSummary = {
   cut: number | null;
   cutObservedOrders: number;
   cutMissingOrders: number;
-  packed: number | null;
-  packedObservedOrders: number;
-  packedMissingOrders: number;
   remainingPrint: number | null;
 };
 type WriterState = {
@@ -186,29 +189,6 @@ type Operation = {
   department?: "roll" | "box" | null;
 };
 const supplyPositionKey = (order: LiveOrder) => `${order.sourceId}:${boxPositionKey(order)}`;
-type RoundingDirection = "down" | "up";
-type RoutingPreview = {
-  id: string;
-  input: string;
-  blocked: boolean;
-  acceptedRows: number;
-  skippedRows: number;
-  lines: {
-    article: string;
-    extension?: string | null;
-    quantity: number;
-    machine: string;
-    department: string | null;
-    issue: string | null;
-    rounding?: { choices: { direction: RoundingDirection; quantity: number; sheets?: number }[] };
-    xeroxSheets?: number;
-    xeroxIssue?: string;
-    rollMultiplicity?: number;
-    rollIssue?: string;
-    roundingDirection?: RoundingDirection;
-  }[];
-  departments: { id: string; name: string; rows: number; quantity: number }[];
-};
 type Props = {
   live: LivePrinting | null;
   loading: boolean;
@@ -230,11 +210,6 @@ function buildSummaries(live: LivePrinting | null): SheetSummary[] {
       );
       const cut = observedTotal(orders.map(rollCut));
       const area = plannedAreaTotal(orders);
-      const packed = observedTotal(
-        orders.map((order) =>
-          typeof order.packed === "number" ? order.packed : null,
-        ),
-      );
       return {
         sheet,
         orders,
@@ -243,14 +218,11 @@ function buildSummaries(live: LivePrinting | null): SheetSummary[] {
         areaKnown: area.observed > 0 && area.missing === 0,
         areaObservedOrders: area.observed,
         areaMissingOrders: area.missing,
-        printed: completeTotal(orders.map(rollPrinted)),
+        printed: completeTotal(orders.map(supplyPrinted)),
         cut: cut.total,
         cutObservedOrders: cut.observed,
         cutMissingOrders: cut.missing,
-        packed: packed.total,
-        packedObservedOrders: packed.observed,
-        packedMissingOrders: packed.missing,
-        remainingPrint: completeTotal(orders.map(rollPrintRemaining)),
+        remainingPrint: completeTotal(orders.map(supplyPrintRemaining)),
       };
     });
 }
@@ -281,7 +253,7 @@ function stagePercent(value: number | null | undefined, plan: number | null | un
 
 function stagePercentLabel(value: number | null, partial = false) {
   if (value === null) return "—";
-  return `${partial ? "≥" : ""}${num(Math.round(value))}%`;
+  return partial ? `≥ ${num(Math.floor(value))}%` : `${num(Math.round(value))}%`;
 }
 
 function observedStageText(
@@ -292,7 +264,7 @@ function observedStageText(
   const amount =
     metric.total === null
       ? "нет данных"
-      : `${num(metric.total)}${plan === null ? "" : ` / ${num(plan)}`} шт.`;
+      : `${formatPrintQuantity(metric.total)}${plan === null ? "" : ` / ${num(plan)}`} шт.`;
   return metric.missing > 0
     ? `${amount} · данные по ${num(metric.observed)} из ${num(positions)} позиций`
     : amount;
@@ -337,7 +309,7 @@ function StageMeter({
       aria-valuemin={0}
       aria-valuemax={plan}
       aria-valuenow={Math.min(value, plan)}
-      aria-valuetext={`${num(Math.round(percent))}% · ${num(value)} из ${num(plan)} шт.`}
+      aria-valuetext={`${formatPrintQuantity(percent)}% · ${formatPrintQuantity(value)} из ${num(plan)} шт.`}
     >
       <span style={{ width: `${Math.min(100, percent)}%` }} />
       {percent > 100 && (
@@ -372,9 +344,11 @@ function LinkedBoxStageProgress({
           <strong>Бокс</strong>
           <small>{stageName}</small>
         </span>
-        <span className="live-supply-linked-stage-column" aria-label={`Столбец ${column}`}>
-          {column}
-        </span>
+        {column === "S" && (
+          <span className="live-supply-linked-stage-column" aria-label={`Столбец ${column}`}>
+            {column}
+          </span>
+        )}
         {percent !== null && (
           <b className="live-supply-linked-stage-percent">
             {stagePercentLabel(percent, metric.missing > 0)}
@@ -385,7 +359,7 @@ function LinkedBoxStageProgress({
         <strong>
           {metric.total === null
             ? "Нет данных"
-            : `${num(metric.total)}${plan === null ? "" : ` / ${num(plan)}`} шт.`}
+            : `${formatPrintQuantity(metric.total)}${plan === null ? "" : ` / ${num(plan)}`} шт.`}
         </strong>
         {metric.missing > 0 && (
           <small>
@@ -413,13 +387,14 @@ function SupplyOverviewStage({ label, value, plan, partial = false, tone }: {
   tone: "blue" | "orange" | "violet";
 }) {
   const percent = stagePercent(value, plan);
+  const formatValue = tone === "blue" ? formatPrintQuantity : num;
   return (
     <div className={`supply-overview-stage tone-${tone}`}>
       <div className="supply-overview-stage-label">
         {tone === "blue" ? <Printer size={17} /> : tone === "orange" ? <Scissors size={17} /> : <Package size={17} />}
         <span>{label}</span>
       </div>
-      <strong>{value === null ? "Нет данных" : `${partial ? "≥ " : ""}${num(value)}${plan === null ? "" : ` / ${num(plan)}`} шт.`}</strong>
+      <strong>{value === null ? "Нет данных" : `${partial ? "≥ " : ""}${formatValue(value)}${plan === null ? "" : ` / ${num(plan)}`} шт.`}</strong>
       {value !== null && plan !== null && percent !== null ? (
         <>
           <StageMeter value={value} plan={plan} label={label} tone={tone} />
@@ -535,6 +510,7 @@ function ExcelItemsField({
   exporting,
   canExport,
   readOnly,
+  split = false,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -548,78 +524,97 @@ function ExcelItemsField({
   exporting: boolean;
   canExport: boolean;
   readOnly: boolean;
+  split?: boolean;
 }) {
+  const fileDisabled = importing || exporting || downloading || readOnly;
+  const upload = (
+    <label className={`button secondary supply-file-picker${fileDisabled ? " disabled" : ""}`}>
+      <UploadSimple size={17} aria-hidden="true" />
+      {importing ? "Читаю Excel…" : "Загрузить Excel"}
+      <input
+        aria-label="Загрузить Excel со списком товаров"
+        type="file"
+        accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        disabled={fileDisabled}
+        onChange={(event) => {
+          onFile(event.currentTarget.files?.[0] || null);
+          event.currentTarget.value = "";
+        }}
+      />
+    </label>
+  );
+  const download = (
+    <Button type="button" kind={split ? "ghost" : "secondary"} disabled={fileDisabled} onClick={onTemplate}>
+      <DownloadSimple size={16} aria-hidden="true" />
+      {downloading ? "Готовлю шаблон…" : "Скачать шаблон"}
+    </Button>
+  );
+  const exportList = (
+    <Button type="button" kind={split ? "ghost" : "secondary"} disabled={fileDisabled || !canExport} onClick={onExport}>
+      <DownloadSimple size={16} aria-hidden="true" />
+      {exporting ? "Готовлю Excel…" : "Выгрузить список"}
+    </Button>
+  );
+  const fileHelp = <small className="supply-file-help">.xlsx · до 2 МБ · до 500 товаров</small>;
+  const loadedFile = fileName && (
+    <div className="supply-file-name" role="status">
+      {split ? <FileSpreadsheet size={17} aria-hidden="true" /> : <CheckCircle size={16} aria-hidden="true" />}
+      <span>{fileName}</span>
+    </div>
+  );
+  const editor = (
+    <textarea
+      id="supply-items"
+      className="resize-none"
+      rows={5}
+      style={{ resize: "none" }}
+      value={value}
+      aria-invalid={!!error}
+      aria-describedby={error ? "supply-items-note supply-items-error" : "supply-items-note"}
+      readOnly={readOnly}
+      placeholder={"ST0021.A7447; 500\nST0043.A2180; 300"}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  );
+  const errorMessage = error && (
+    <small id="supply-items-error" className="error-text" role="alert">{error}</small>
+  );
+
+  if (split) return (
+    <section className="supply-create-composition" aria-label="Состав поставки">
+      <h3>Состав поставки</h3>
+      <div className="supply-create-items">
+        <div className="supply-create-upload">
+          {upload}
+          {loadedFile}
+          {fileHelp}
+          {download}
+        </div>
+        <div className="supply-create-editor">
+          <div className="supply-create-editor-heading">
+            <label htmlFor="supply-items">Артикулы и количество</label>
+            {exportList}
+          </div>
+          {editor}
+          <small id="supply-items-note" className="supply-items-note">Один товар на строку в формате «артикул; количество».</small>
+          {errorMessage}
+        </div>
+      </div>
+    </section>
+  );
+
   return (
     <div className="field">
-      <label htmlFor="supply-items">
-        Артикулы и количество · одна строка на товар
-      </label>
+      <label htmlFor="supply-items">Артикулы и количество · одна строка на товар</label>
       <div className="supply-items-editor">
-        <div className="supply-items-tools">
-          <label
-            className={`button secondary supply-file-picker ${readOnly ? "disabled" : ""}`}
-          >
-            <UploadSimple size={17} />
-            {importing ? "Читаю Excel…" : "Загрузить Excel"}
-            <input
-              aria-label="Загрузить Excel со списком товаров"
-              type="file"
-              accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-              disabled={importing || exporting || downloading || readOnly}
-              onChange={(event) => {
-                onFile(event.currentTarget.files?.[0] || null);
-                event.currentTarget.value = "";
-              }}
-            />
-          </label>
-          <Button
-            type="button"
-            disabled={exporting || downloading || readOnly || !canExport}
-            onClick={onExport}
-          >
-            <DownloadSimple size={17} />
-            {exporting ? "Готовлю Excel…" : "Выгрузить список"}
-          </Button>
-          <Button
-            type="button"
-            disabled={downloading || exporting || readOnly}
-            onClick={onTemplate}
-          >
-            <DownloadSimple size={17} />
-            {downloading ? "Готовлю шаблон…" : "Скачать шаблон"}
-          </Button>
-          <span className="supply-file-help">
-            .xlsx · до 2 МБ · до 500 товаров
-          </span>
-        </div>
-        {fileName && (
-          <div className="supply-file-name" role="status">
-            <CheckCircle size={16} />
-            <span>{fileName}</span>
-          </div>
-        )}
-        <textarea
-          id="supply-items"
-          className="resize-none"
-          rows={5}
-          style={{ resize: "none" }}
-          value={value}
-          aria-invalid={!!error}
-          aria-describedby={error ? "supply-items-error" : undefined}
-          readOnly={readOnly}
-          placeholder={"ST0021.A7447; 500\nST0043.A2180; 300"}
-          onChange={(event) => onChange(event.target.value)}
-        />
-        <small className="supply-items-note">
-          Можно загрузить Excel или вставить строки в поле. Перед записью
-          проверьте состав.
+        <div className="supply-items-tools">{upload}{exportList}{download}{fileHelp}</div>
+        {loadedFile}
+        {editor}
+        <small id="supply-items-note" className="supply-items-note">
+          Можно загрузить Excel или вставить строки в поле. Перед записью проверьте состав.
         </small>
       </div>
-      {error && (
-        <small id="supply-items-error" className="error-text" role="alert">
-          {error}
-        </small>
-      )}
+      {errorMessage}
     </div>
   );
 }
@@ -713,6 +708,7 @@ export function LiveSuppliesWorkspace({
   const [routingPreview, setRoutingPreview] = useState<RoutingPreview | null>(
     null,
   );
+  const supplyDialogBody = useRef<HTMLDivElement>(null);
   const [recoveryError, setRecoveryError] = useState("");
   const operationId = useRef("");
   const autoRecovery = useRef(new Map<string, number>());
@@ -865,7 +861,7 @@ export function LiveSuppliesWorkspace({
     : null;
   const selectedBoxPrintedProgress = selectedBox
     ? observedTotal([
-        ...selectedBox.orders.map(rollPrinted),
+        ...selectedBox.orders.map(supplyPrinted),
         ...Array.from({ length: selectedBox.missingPositions }, () => null),
       ])
     : null;
@@ -898,23 +894,20 @@ export function LiveSuppliesWorkspace({
           missing: selected.areaMissingOrders,
         }
       : { total: null, observed: 0, missing: 0 };
-  const selectedAssemblyPacking = selectedBox
-    ? assemblyPackingTotal(selectedAssemblyOrders, selectedBox.missingPositions)
-    : selected
-      ? {
-          total: selected.packed,
-          observed: selected.packedObservedOrders,
-          missing: selected.packedMissingOrders,
-        }
-      : { total: null, observed: 0, missing: 0 };
+  const selectedAssemblyPacking = assemblyPackingTotal(
+    selectedAssemblyOrders,
+    selectedBox?.missingPositions,
+  );
+  const packingTotal = live?.packing?.status === "unavailable" ? null : selectedAssemblyPacking.total;
+  const packingPartial = selectedAssemblyPacking.missing > 0 ||
+    selectedAssemblyPacking.known < selectedAssemblyPacking.observed;
+  const packingRecorded = selectedAssemblyPacking.recorded;
+  const packedOverPlan = packingTotal !== null && packingRecorded !== null ? packingRecorded - packingTotal : 0;
   const printPercent = selected
     ? stagePercent(selected.printed, selected.planned)
     : null;
   const cutPercent = selected ? stagePercent(selected.cut, selected.planned) : null;
-  const packingPercent = selected
-    ? stagePercent(selectedAssemblyPacking.total, selectedAssemblyPlan)
-    : null;
-  const packingPartial = selectedAssemblyPacking.missing > 0;
+  const packingPercent = stagePercent(packingTotal, selectedAssemblyPlan);
   const packingCheckedAt = stageCheckedAt(live?.packing?.checkedAt);
   useEffect(() => {
     setOnlyMissingArea(false);
@@ -1327,13 +1320,32 @@ export function LiveSuppliesWorkspace({
   });
   const pendingRounding = previewLines.some(line => line.rounding && !line.roundingDirection);
   const plannedRows = roundedLines.filter(line => line.department && line.plannedQuantity > 0);
-  const skippedRows = roundedLines.length - plannedRows.length;
+  const createReview = dialog === "create" && !needsPreview;
+  const dialogReadOnly = busy || (!!operation && operation.status !== "failed");
   // Routing reads the catalog. Creating a shipment allocates fresh sheets and
   // validates them on the server independently of the reporting snapshot.
   const formAvailable = dialog === "create" || needsPreview ? routingAvailable : canWrite;
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!dialog || (!appendTarget && dialog === "append")) return;
+  const formDisabled = dialogReadOnly || importing || downloading || exporting;
+  const checkingRouting = busy && !operation;
+  useEffect(() => {
+    supplyDialogBody.current?.scrollTo({ top: 0 });
+  }, [createReview, dialog, formError]);
+
+  const editSupplyDraft = () => {
+    setFormError("");
+    setNotice("");
+    setRoutingPreview(null);
+  };
+  const chooseSupplyRounding = (article: string, roundingDirection: RoundingDirection) => {
+    setRoutingPreview(current => current?.input === routingInputKey ? {
+      ...current,
+      lines: current.lines.map(line => line.article === article && line.rounding?.choices.some(choice => choice.direction === roundingDirection)
+        ? { ...line, roundingDirection }
+        : line),
+    } : current);
+  };
+  const submit = async (recheck = false) => {
+    if (!dialog || formDisabled || (!appendTarget && dialog === "append")) return;
     if (!formAvailable) {
       setFormError(
         writer?.reason || "Запись недоступна до проверки источника.",
@@ -1366,7 +1378,7 @@ export function LiveSuppliesWorkspace({
     setFormError("");
     setNotice("");
     const inputKey = routingInputKey;
-    if (!routingPreview || routingPreview.input !== inputKey) {
+    if (recheck || !routingPreview || routingPreview.input !== inputKey) {
       try {
         const response = await fetch("/api/roll-supplies/preview", {
           method: "POST",
@@ -1388,8 +1400,20 @@ export function LiveSuppliesWorkspace({
           }),
         });
         const value = await readRollSupplyResponse(response);
-        setRoutingPreview({ ...value.preview, input: inputKey });
+        const next = value.preview as Omit<RoutingPreview, "input">;
+        setRoutingPreview(current => {
+          if (!recheck || current?.input !== inputKey) return { ...next, input: inputKey };
+          const previous = new Map(current.lines.map(line => [line.article, line]));
+          const lines = next.lines.map(line => {
+            const prior = previous.get(line.article);
+            const sameOptions = prior?.roundingDirection && prior.machine === line.machine && prior.department === line.department && prior.store === line.store
+              && JSON.stringify(prior.rounding?.choices) === JSON.stringify(line.rounding?.choices);
+            return sameOptions ? { ...line, roundingDirection: prior.roundingDirection } : line;
+          });
+          return { ...next, lines, input: inputKey };
+        });
       } catch (cause) {
+        if (recheck) setRoutingPreview(null);
         setFormError(
           cause instanceof Error
             ? cause.message
@@ -2230,17 +2254,17 @@ export function LiveSuppliesWorkspace({
                       {selectedBox
                         ? "Напечатано · рулон"
                         : selected.sheet.sourceId === "box-printing"
-                          ? "Напечатано · готовность R"
+                          ? "Напечатано · бокс"
                           : "Напечатано · T/X"}
                     </small>
                     <strong>
                       {selected.printed === null
                         ? "Нет данных"
-                        : `${num(selected.printed)} шт.`}
+                        : `${formatPrintQuantity(selected.printed)} шт.`}
                     </strong>
                     {selectedBox && selectedBoxPrintedProgress && (
                       <small className="live-supply-linked-summary">
-                        Бокс · R: {observedStageText(
+                        Бокс · {observedStageText(
                           selectedBoxPrintedProgress,
                           selectedBox.quantity,
                           selectedBox.positions,
@@ -2294,7 +2318,7 @@ export function LiveSuppliesWorkspace({
                   <SupplyOverviewStage label="Печать · бокс" value={selected.printed} plan={selected.planned} tone="blue" />
                   <SupplyOverviewStage label="Порезка · бокс" value={selected.cut} plan={selected.planned} partial={selected.cutMissingOrders > 0} tone="orange" />
                 </>}
-                <SupplyOverviewStage label="Сборка · упаковка" value={live?.packing?.status === "unavailable" ? null : selectedAssemblyPacking.total} plan={selectedAssemblyPlan} partial={packingPartial} tone="violet" />
+                <SupplyOverviewStage label="Сборка · упаковка" value={packingTotal} plan={selectedAssemblyPlan} partial={packingPartial} tone="violet" />
               </section>
 
               <AssemblyOnlyItems shipmentId={selectedControlShipmentIds[0] || ""} />
@@ -2315,9 +2339,9 @@ export function LiveSuppliesWorkspace({
                   </h2>
                   <small>
                     {selectedBox
-                      ? "Рулон: печать T/X, резка U · Бокс: печать R, резка S · упаковка: WorkLog RITM"
+                      ? "Рулон: печать T/X, резка U · Бокс: печать по выпуску и готовности, резка S · упаковка: WorkLog RITM"
                       : selected.sheet.sourceId === "box-printing"
-                        ? "Печать и резка — флажки готовности R/S; упаковка — WorkLog RITM"
+                        ? "Печать по выпуску и готовности · Резка по отметкам · Упаковка из WorkLog RITM"
                         : "Печать — T/X; резка — U; упаковка — WorkLog RITM"}
                   </small>
                 </div>
@@ -2344,9 +2368,7 @@ export function LiveSuppliesWorkspace({
                     ) : (
                       <p className="live-supply-stage-empty">
                         {selected.planned > 0
-                          ? selected.remainingPrint === null
-                            ? "Нет показаний в T и X"
-                            : "T пуст; остаток по X известен"
+                          ? "Нет подтверждённых данных по печати"
                           : "Нет активных строк заказа"}
                       </p>
                     )}
@@ -2354,13 +2376,13 @@ export function LiveSuppliesWorkspace({
                       <span>
                         {selected.printed === null
                           ? `План: ${num(selected.planned)} шт.`
-                          : `${num(selected.printed)} из ${num(selected.planned)} шт.`}
+                          : `${formatPrintQuantity(selected.printed)} из ${num(selected.planned)} шт.`}
                       </span>
                       <span>
                         Осталось напечатать:{" "}
                         {selected.remainingPrint === null
                           ? "нет данных"
-                          : `${num(selected.remainingPrint)} шт.`}
+                          : `${formatPrintQuantity(selected.remainingPrint)} шт.`}
                       </span>
                       {selected.printed !== null &&
                         selected.printed > selected.planned && (
@@ -2437,7 +2459,7 @@ export function LiveSuppliesWorkspace({
                     )}
                   </div>
                   <div
-                    className={`live-supply-stage-card live-supply-stage-packing tone-violet${live?.packing?.status === "unavailable" ? " is-unavailable" : ""}${live?.packing?.status === "partial" || packingPartial ? " is-partial" : ""}${selectedAssemblyPacking.total !== null && selectedAssemblyPlan !== null && selectedAssemblyPacking.total > selectedAssemblyPlan ? " is-over" : ""}`}
+                    className={`live-supply-stage-card live-supply-stage-packing tone-violet${live?.packing?.status === "unavailable" ? " is-unavailable" : ""}${packingPartial ? " is-partial" : ""}`}
                   >
                     <div className="live-supply-stage-card-head">
                       <span className="live-supply-stage-icon">
@@ -2457,27 +2479,24 @@ export function LiveSuppliesWorkspace({
                     </div>
                     <div className="live-supply-packing-main">
                       <strong className="live-supply-stage-percent">
-                        {live?.packing?.status === "unavailable"
-                          ? "—"
-                          : stagePercentLabel(packingPercent, packingPartial)}
+                        {stagePercentLabel(packingPercent, packingPartial)}
                       </strong>
                       <div className="live-supply-packing-quantity">
                         <strong>
-                          {selectedAssemblyPacking.total === null
+                          {packingTotal === null
                             ? "Нет данных"
-                            : num(selectedAssemblyPacking.total)}
+                            : `${packingPartial ? "≥ " : ""}${num(packingTotal)}`}
                           {selectedAssemblyPlan !== null && (
                             <span> из {num(selectedAssemblyPlan)}</span>
                           )}
                         </strong>
-                        <small>Упаковано, шт.</small>
+                        <small>Упаковано по плану, шт.</small>
                       </div>
                     </div>
-                    {live?.packing?.status !== "unavailable" &&
-                    packingPercent !== null ? (
+                    {packingTotal !== null && selectedAssemblyPlan !== null && packingPercent !== null ? (
                       <StageMeter
-                        value={selectedAssemblyPacking.total!}
-                        plan={selectedAssemblyPlan!}
+                        value={packingTotal}
+                        plan={selectedAssemblyPlan}
                         label="Готовность упаковки по журналу «RITM Сборка»"
                         tone="violet"
                       />
@@ -2492,26 +2511,22 @@ export function LiveSuppliesWorkspace({
                     )}
                     <div className="live-supply-stage-details live-supply-packing-details">
                       <span>
-                        {selectedAssemblyPacking.total === null
-                          ? `Нет подтверждённых количеств по ${num(selectedAssemblyPacking.missing)} из ${num(selectedAssemblyPositions)} позиций.`
-                          : selectedAssemblyPacking.missing > 0
-                            ? `Подтверждено не менее ${num(selectedAssemblyPacking.total)} шт. по ${num(selectedAssemblyPacking.observed)} из ${num(selectedAssemblyPositions)} позиций; без данных ${num(selectedAssemblyPacking.missing)}.`
-                            : `Подтверждено по ${num(selectedAssemblyPacking.observed)} из ${num(selectedAssemblyPositions)} позиций.`}
+                        {packingTotal === null
+                          ? `Нет подтверждённых количеств по ${num(selectedAssemblyPositions)} позициям.`
+                          : `Учтены данные по ${num(selectedAssemblyPacking.observed)} из ${num(selectedAssemblyPositions)} позиций.`}
                       </span>
                       {packingCheckedAt && (
                         <span>WorkLog проверен: {packingCheckedAt}</span>
                       )}
-                      {live?.packing?.status === "partial" &&
+                      {packingPartial && live?.packing?.status === "partial" &&
                         live.packing.reason && (
                           <span className="live-supply-stage-warning">
                             {live.packing.reason}
                           </span>
                         )}
-                      {selectedAssemblyPacking.total !== null &&
-                        selectedAssemblyPlan !== null &&
-                        selectedAssemblyPacking.total > selectedAssemblyPlan && (
+                      {packingRecorded !== null && packedOverPlan > 0 && (
                           <span className="live-supply-stage-overrun">
-                            +{num(selectedAssemblyPacking.total - selectedAssemblyPlan)} шт. сверх плана
+                            В WorkLog {packingPartial ? "≥ " : ""}{num(packingRecorded)} шт., сверх плана по позициям {packingPartial ? "≥ " : ""}{num(packedOverPlan)} шт.
                           </span>
                         )}
                     </div>
@@ -2564,10 +2579,10 @@ export function LiveSuppliesWorkspace({
                               [
                                 order.article,
                                 order.quantity,
-                                rollPrinted(order),
+                                supplyPrinted(order),
                                 rollCut(order),
                                 order.packed ?? "",
-                                rollPrintRemaining(order),
+                                supplyPrintRemaining(order),
                                 order.areaKnown === false
                                   ? ""
                                   : order.plannedArea,
@@ -2632,10 +2647,10 @@ export function LiveSuppliesWorkspace({
                     {
                       id: "printed",
                       label: "Напечатано",
-                      render: (order) =>
-                        rollPrinted(order) === null
-                          ? "—"
-                          : num(rollPrinted(order)!),
+                      render: (order) => {
+                        const printed = supplyPrinted(order);
+                        return printed === null ? "—" : formatPrintQuantity(printed);
+                      },
                     },
                     {
                       id: "cut",
@@ -2654,10 +2669,10 @@ export function LiveSuppliesWorkspace({
                     {
                       id: "rest",
                       label: "Осталось напечатать",
-                      render: (order) =>
-                        rollPrintRemaining(order) === null
-                          ? "—"
-                          : num(rollPrintRemaining(order)!),
+                      render: (order) => {
+                        const remaining = supplyPrintRemaining(order);
+                        return remaining === null ? "—" : formatPrintQuantity(remaining);
+                      },
                     },
                     {
                       id: "actions",
@@ -2717,7 +2732,10 @@ export function LiveSuppliesWorkspace({
                     <DataTable rows={boxOrders} rowKey={boxPositionKey} label="Состав бокса" pageSize={10} columns={[
                       {id:'article',label:'Артикул',sort:order=>order.article,render:order=><strong>{order.article}</strong>},
                       {id:'quantity',label:'План, шт.',sort:order=>order.quantity,render:order=>num(order.quantity)},
-                      {id:'printed',label:'Напечатано',render:order=>rollPrinted(order) === null ? "—" : num(rollPrinted(order)!)},
+                      {id:'printed',label:'Напечатано',render:order=>{
+                        const printed = supplyPrinted(order);
+                        return printed === null ? "—" : formatPrintQuantity(printed);
+                      }},
                       {id:'cut',label:'Порезано',render:order=>rollCut(order) === null ? "—" : num(rollCut(order)!)},
                       {id:'move',label:'Действия',render:order=><div className="live-supply-row-actions">
                         <DepartmentMove shipmentId={moveShipmentIdForBox(order.sheetId)} uid={order.uid} article={order.article} quantity={order.quantity} printed={rollPrinted(order)} cut={rollCut(order)} disabledReason={moveBlockedReason} disabled={!canMove || !moveShipmentIdForBox(order.sheetId)} onDone={confirmMoves}/>
@@ -2735,6 +2753,7 @@ export function LiveSuppliesWorkspace({
       <Modal
         open={dialog !== null}
         onClose={() => !busy && setDialog(null)}
+        className={dialog === "create" ? "supply-create-modal" : undefined}
         title={
           dialog === "append"
             ? "Добавить товары в поставку"
@@ -2743,53 +2762,55 @@ export function LiveSuppliesWorkspace({
         description={
           dialog === "append"
             ? `Новые товары будут добавлены в поставку «${appendTarget?.name || ""}» по своим отделам. Существующие артикулы, их ID и выполненная работа сохранятся.`
-            : "Сначала проверим станки и покажем распределение товаров по двум отделам. После подтверждения создадим производственные задания и общий состав для «RITM Сборка»."
+            : createReview ? "Проверка распределения" : undefined
         }
       >
-        <form noValidate onSubmit={submit}>
+        <form noValidate onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+          <div ref={supplyDialogBody} className={dialog === "create" ? "supply-create-body" : undefined}>
           {!formAvailable && <p className="supply-write-wait" role="status">{routingAvailable === undefined ? "Проверяем доступ к поставкам…" : writeBlockedReason || "Проверьте доступ к управлению поставками"}</p>}
-          {dialog === "create" && (
+          {dialog === "create" && formError && (
+            <div className="supply-operation-error" role="alert">{formError}</div>
+          )}
+          {dialog === "create" && !createReview && (
             <>
-              <Field
-                label="Название поставки"
-                error={formError && !name.trim() ? formError : undefined}
-              >
-                <input
-                  value={name}
-                  maxLength={100}
-                  readOnly={
-                    busy || (!!operation && operation.status !== "failed")
-                  }
-                  onChange={(event) => setName(event.target.value)}
-                  placeholder="Например, Ozon · Москва · 20 октября"
-                />
-              </Field>
-              <ProductionDeadlineFields ready={productionReadyAt} packing={packingAt} ship={shippingAt} onReady={setProductionReadyAt} onPacking={setPackingAt} onShip={setShippingAt} disabled={busy || (!!operation && operation.status !== "failed")}/>
-              <Field label="Приоритет поставки">
-                <select value={supplyPriority} onChange={(event) => setSupplyPriority(event.target.value as "normal" | "urgent")} disabled={busy || (!!operation && operation.status !== "failed")}>
-                  <option value="normal">Обычная</option>
-                  <option value="urgent">🔥 Срочная</option>
-                </select>
-              </Field>
-              <label className="supply-lock-option">
-                <input
-                  type="checkbox"
-                  checked={lockAfterCreate}
-                  disabled={busy || (!!operation && operation.status !== "failed")}
-                  onChange={(event) => setLockAfterCreate(event.target.checked)}
-                />
-                <span>
-                  <strong>Закрыть для сборки сразу после создания</strong>
-                  <small>Сборщики увидят поставку, но не смогут записывать работу и работать с коробами, пока вы не снимете замок.</small>
-                </span>
-              </label>
+              <div className="supply-create-details">
+                <Field label="Название поставки">
+                  <input
+                    value={name}
+                    maxLength={100}
+                    readOnly={dialogReadOnly}
+                    onChange={(event) => setName(event.target.value)}
+                    placeholder="Например, OZON Москва · 27 ноября"
+                  />
+                </Field>
+                <Field label="Приоритет поставки">
+                  <select
+                    value={supplyPriority}
+                    onChange={(event) => setSupplyPriority(event.target.value as "normal" | "urgent")}
+                    disabled={dialogReadOnly}
+                  >
+                    <option value="normal">Обычная</option>
+                    <option value="urgent">Срочная</option>
+                  </select>
+                </Field>
+              </div>
+              <ProductionDeadlineFields
+                ready={productionReadyAt}
+                packing={packingAt}
+                ship={shippingAt}
+                onReady={setProductionReadyAt}
+                onPacking={setPackingAt}
+                onShip={setShippingAt}
+                disabled={dialogReadOnly}
+                timeline
+              />
             </>
           )}
-          <ExcelItemsField
+          {!createReview && <ExcelItemsField
             value={itemsText}
             onChange={setItemsText}
             error={
-              formError && (itemsText.trim() || fileName)
+              dialog === "append" && formError && (itemsText.trim() || fileName)
                 ? formError
                 : undefined
             }
@@ -2801,119 +2822,52 @@ export function LiveSuppliesWorkspace({
             onExport={() => void onExport()}
             exporting={exporting}
             canExport={!!itemsText.trim()}
-            readOnly={busy || (!!operation && operation.status !== "failed")}
-          />
-          {routingPreview?.input === routingInputKey && (
-            <div
-              className="supply-write-confirmation"
-              aria-label="Распределение товаров по отделам"
-            >
-              <strong>Распределение по станкам из базы</strong>
-              <strong>
-                {pendingRounding ? "Предварительно к добавлению" : "Будет добавлено позиций"}: {num(plannedRows.length)}.
-                Пропущено: {num(skippedRows)}.
-              </strong>
-              {routingPreview.departments.map(dept => {
-                const lines = plannedRows.filter(line => line.department === dept.id);
-                return <span key={dept.id}>
-                  {dept.name}: {num(lines.length)} позиций · {num(lines.reduce((sum, line) => sum + line.plannedQuantity, 0))} шт.
-                </span>;
-              })}
-              {pendingRounding && (
-                <span role="status">Выберите количество для отмеченных позиций.</span>
-              )}
-              <div style={{ maxHeight: 240, overflow: "auto" }}>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Артикул</th>
-                      <th>Расширение</th>
-                      <th>Станок</th>
-                      <th>Отдел</th>
-                      <th>Количество</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {roundedLines.map((line) => (
-                      <tr key={line.article}>
-                        <td>{line.article}</td>
-                        <td>{line.extension || "—"}</td>
-                        <td>{line.machine || "Не указан"}</td>
-                        <td>
-                          {line.department === "roll"
-                            ? "Рулонная печать"
-                            : line.department === "box"
-                              ? "Бокс"
-                              : `Будет пропущен: ${line.issue}`}
-                        </td>
-                        <td>
-                          {line.rounding ? (
-                            <label className="supply-quantity-rounding">
-                              <span>
-                                Запрошено {num(line.quantity)} шт.
-                                {line.rollMultiplicity && ` · кратность ${num(line.rollMultiplicity)} шт.`}
-                              </span>
-                              <select
-                                aria-label={`Округление для ${line.article}`}
-                                value={line.roundingDirection ?? ""}
-                                disabled={busy || (!!operation && operation.status !== "failed")}
-                                onChange={event => {
-                                  const direction = event.target.value as RoundingDirection | "";
-                                  setRoutingPreview(current => current && current.id === routingPreview.id ? {
-                                    ...current,
-                                    lines: current.lines.map(item => item.article === line.article
-                                      ? { ...item, roundingDirection: direction || undefined }
-                                      : item),
-                                  } : current);
-                                }}
-                              >
-                                <option value="">Выбрать округление</option>
-                                {line.rounding.choices.map(choice => {
-                                  const direction = choice.direction === "down" ? "Вниз" : "Вверх";
-                                  const sheets = choice.sheets === undefined ? "" : ` · ${num(choice.sheets)} лист.`;
-                                  const label = choice.quantity === 0
-                                    ? "Вниз до 0 шт. · пропустить"
-                                    : `${direction} до ${num(choice.quantity)} шт.${sheets}`;
-                                  return <option key={choice.direction} value={choice.direction}>{label}</option>;
-                                })}
-                              </select>
-                            </label>
-                          ) : (
-                            <>
-                              {num(line.quantity)} шт.
-                              {line.xeroxSheets !== undefined && <span className="supply-quantity-detail">{num(line.xeroxSheets)} лист.</span>}
-                              {(line.xeroxIssue || line.rollIssue) && <span className="supply-quantity-detail">{line.xeroxIssue || line.rollIssue}</span>}
-                            </>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {routingPreview.skippedRows > 0 && (
-                <span role="status">
-                  {routingPreview.acceptedRows > 0
-                    ? "Неопределённые товары не будут отправлены в производство. После подтверждения их список сохранится для последующей дозагрузки."
-                    : "Товары остаются в форме: можно выгрузить список и уточнить станки в базе."}
-                </span>
-              )}
-              {routingPreview.blocked && (
-                <span role="alert">
-                  Нет распознанных товаров для добавления. Уточните станки в
-                  базе.
-                </span>
-              )}
-              <Button
-                type="button"
-                disabled={busy}
-                onClick={() => setRoutingPreview(null)}
-              >
-                Проверить заново
-              </Button>
-            </div>
+            readOnly={dialogReadOnly}
+            split={dialog === "create"}
+          />}
+          {dialog === "create" && !createReview && (
+            <label className="supply-lock-option">
+              <input
+                type="checkbox"
+                checked={lockAfterCreate}
+                disabled={dialogReadOnly}
+                onChange={(event) => setLockAfterCreate(event.target.checked)}
+              />
+              <span>
+                <strong>Закрыть для сборки сразу после создания</strong>
+                <small>Сборщики увидят поставку. Работа с заданиями и коробами откроется после снятия замка.</small>
+              </span>
+            </label>
           )}
-          {formError && !itemsText.trim() && !fileName && (
+          {!needsPreview && routingPreview && (
+            <>
+              {createReview && (
+                <div className="supply-create-source">
+                  <div>
+                    {fileName ? <FileSpreadsheet size={21} aria-hidden="true" /> : <Layers3 size={20} aria-hidden="true" />}
+                    <strong>{fileName || "Список товаров"}</strong>
+                  </div>
+                  <Button type="button" kind="ghost" disabled={formDisabled} onClick={editSupplyDraft}>
+                    <Pencil size={16} aria-hidden="true" /> Изменить состав
+                  </Button>
+                </div>
+              )}
+              <SupplyRoutingReview
+                name={dialog === "append" ? appendTarget?.name || "" : name}
+                lines={roundedLines}
+                checking={checkingRouting}
+                disabled={formDisabled || !formAvailable}
+                onChoose={chooseSupplyRounding}
+                onRecheck={() => void submit(true)}
+              />
+              {(routingPreview.blocked || (!pendingRounding && plannedRows.length === 0)) && (
+                <p className="supply-review-guide" role="status">
+                  Для создания задания нужна хотя бы одна распознанная позиция с количеством больше нуля.
+                </p>
+              )}
+            </>
+          )}
+          {dialog === "append" && formError && !itemsText.trim() && !fileName && (
             <div className="supply-operation-error" role="alert">
               {formError}
             </div>
@@ -2995,49 +2949,39 @@ export function LiveSuppliesWorkspace({
                 )}
             </div>
           )}
-          <div className="supply-write-confirmation">
+          {dialog === "append" && <div className="supply-write-confirmation">
             <strong>Что будет записано</strong>
-            <span>
-              {dialog === "append"
-                ? `Поставка «${appendTarget?.name || ""}»`
-                : "Производственные задания только в отделах, к которым относятся товары"}
-            </span>
-            <span>
-              {dialog === "append"
-                ? "Новые строки получат уникальные ID и формулы; существующие позиции сдвинутся вниз вместе со своими ID и данными производства."
-                : "Будут записаны артикулы, количество и уникальные ID новых строк; старые строки только в новой копии очистятся. Формулы и существующие листы не меняются."}
-            </span>
+            <span>Поставка «{appendTarget?.name || ""}»</span>
+            <span>Новые строки получат уникальные ID и формулы; существующие позиции сдвинутся вниз вместе со своими ID и данными производства.</span>
             <span>
               Нажатие кнопки подтверждает добавление распознанных товаров в эту
               поставку. Пропущенные сохранятся отдельным списком.
             </span>
+          </div>}
           </div>
-          <div className="modal-actions">
-            <Button
-              type="button"
-              onClick={() => setDialog(null)}
-              disabled={busy}
-            >
-              Отмена
-            </Button>
+          <div className={`modal-actions${createReview ? " supply-create-review-actions" : ""}`}>
+            {createReview && !dialogReadOnly ? (
+              <Button type="button" onClick={editSupplyDraft} disabled={formDisabled}>
+                <ArrowLeft size={17} aria-hidden="true" /> Назад к составу
+              </Button>
+            ) : (
+              <Button type="button" onClick={() => setDialog(null)} disabled={busy}>
+                {createReview ? "Закрыть" : "Отмена"}
+              </Button>
+            )}
             <Button
               type="submit"
               kind="primary"
               disabled={
-                busy ||
-                (!!operation && operation.status !== "failed") ||
-                importing ||
-                downloading ||
-                exporting ||
-                (routingPreview?.input === routingInputKey &&
+                formDisabled ||
+                (!needsPreview && routingPreview &&
                   (routingPreview.blocked || pendingRounding || plannedRows.length === 0)) ||
                 !formAvailable
               }
             >
               {busy
-                ? (needsPreview ? "Проверяем распределение…" : "Сохраняем поставку…")
-                : !routingPreview ||
-                    routingPreview.input !== routingInputKey
+                ? (checkingRouting ? "Проверяем распределение…" : "Сохраняем поставку…")
+                : needsPreview
                   ? "Проверить распределение"
                   : dialog === "append"
                     ? "Подтвердить и добавить товары"

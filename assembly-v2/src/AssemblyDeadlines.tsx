@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { CalendarDays, Check, ChevronRight, Package } from "lucide-react";
 import {
   deadlineCaption, deadlineClock, deadlineDate, deadlineWeekday, longDeadlineDate,
@@ -20,6 +21,33 @@ export function shipmentDate(deadlines: SupplyDeadlines) {
   return shipping ? `Отправка ${deadlineDate(shipping)}` : "Дата отправки не указана";
 }
 
+const expressSnow = Array.from({ length: 64 }, (_, index) => {
+  const duration = 5.5 + (index * 31 % 71) / 10;
+  const near = index % 8 === 0;
+  return {
+    near,
+    style: {
+      "--snow-x": (2 + index * 37 % 96) + "%",
+      "--snow-y": (-31 + index * 23 % 81) + "%",
+      "--snow-size": (near ? 0.51 : 0.095 + (index * 7 % 15) * 0.021).toFixed(3) + "cqw",
+      "--snow-time": duration.toFixed(1) + "s",
+      "--snow-delay": (-(index * 1.38 + 0.8) % duration).toFixed(2) + "s",
+    } as CSSProperties,
+  };
+});
+
+function GiftExpressScene() {
+  return <div className="assembly-express-art" aria-hidden="true">
+    <div className="assembly-express-motion">
+      <span className="assembly-express-gift" />
+      <span className="assembly-express-gift is-berry" />
+      {expressSnow.map(({ near, style }, index) =>
+        <span className={near ? "assembly-express-snow is-near" : "assembly-express-snow"} style={style} key={index} />
+      )}
+    </div>
+  </div>;
+}
+
 export function UpcomingDeadlines({ now, items, selected, disabled, onSelect }: {
   now: number;
   items: (DeadlineShipment & { title: string })[];
@@ -27,13 +55,14 @@ export function UpcomingDeadlines({ now, items, selected, disabled, onSelect }: 
   disabled: boolean;
   onSelect: (id: string) => void;
 }) {
-  if (!items.length) return null;
+  if (!items.length && !selected) return null;
   return <section className="assembly-upcoming" aria-labelledby="assembly-upcoming-title">
+    <GiftExpressScene />
     <div className="assembly-upcoming-head">
       <h2 id="assembly-upcoming-title">Ближайшие сроки</h2>
-      <span>{deadlineWeekday.format(now)}, {longDeadlineDate.format(now)}</span>
+      <span className="assembly-upcoming-date">{deadlineWeekday.format(now)}, {longDeadlineDate.format(now)}</span>
     </div>
-    <div className="assembly-upcoming-grid">
+    {items.length === 0 ? <p className="assembly-upcoming-empty">Ближайших сроков нет</p> : <div className="assembly-upcoming-grid">
       {items.map(({ supply, title, deadlines }) => {
         const shipping = deadlines.stages[3].at;
         const completed = deadlines.stages.filter(({ id, state }) =>
@@ -61,7 +90,7 @@ export function UpcomingDeadlines({ now, items, selected, disabled, onSelect }: 
           </button>
         );
       })}
-    </div>
+    </div>}
   </section>;
 }
 

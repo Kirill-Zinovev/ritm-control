@@ -1,12 +1,14 @@
-import { labelMime } from "../shared/labels";
+import { labelArticle, labelMime } from "../shared/labels";
 import { json, type Database } from "./api";
 import type { SqlStore, Statement } from "./database";
 import { catalogFamilyKey, type CatalogFamilyCard, type CatalogFamilyMatches } from "../shared/catalog-editor";
 import {
   catalogDetail,
   catalogList,
+  findCatalogAliases,
   importManifest,
   requireCatalog as check,
+  selectableCatalog,
 } from "./catalog-store";
 import {
   catalogKey,
@@ -14,6 +16,7 @@ import {
   digest,
   photoAllowed,
 } from "../shared/catalog";
+import { ozonArticle } from "../shared/ozon-shipment";
 import type {
   CatalogEntry,
   CatalogManifest,
@@ -190,10 +193,10 @@ export async function catalogApi(
     if (request.method === "GET" && url.pathname === "/api/catalog/options") {
       const [norms,machines,packing]=await Promise.all([
         store.all<{data:string}>("select data from av2_shift_norms order by type_key"),
-        store.all<{machine:string}>("select distinct machine from av2_resolved_catalog_entries where import_id=(select active_catalog_id from av2_meta where id=1) and machine<>'' order by machine"),
+        store.all<{machine:string}>(`select distinct machine from ${selectableCatalog} where import_id=(select active_catalog_id from av2_meta where id=1) and machine<>'' order by machine`),
         store.all<{field:string;value:string}>(`with card_values as (
           select field.key field,trim(json_extract(e.data,'$.'||field.key)) value
-          from av2_resolved_catalog_entries e cross join json_each('{"packaging":0,"boxType":0}') field
+          from ${selectableCatalog} e cross join json_each('{"packaging":0,"boxType":0}') field
           where e.import_id=(select active_catalog_id from av2_meta where id=1)
         ) select field,value from card_values where value<>'' and value not like '#%' and length(value)<=150
           group by field,value order by count(*) desc,value limit 200`)]);
@@ -214,7 +217,7 @@ export async function catalogApi(
         const search = catalogKey(url.searchParams.get("q") ?? "").slice(0,150);
         const shop = (url.searchParams.get("store") ?? "").slice(0,30);
         const cards = await store.all<CatalogFamilyCard>(`select entry_id id,sku,market,store,
-          coalesce(json_extract(data,'$.name'),'') name from av2_resolved_catalog_entries
+          coalesce(json_extract(data,'$.name'),'') name from ${selectableCatalog}
           where import_id=(select active_catalog_id from av2_meta where id=1)
             and sku>=? and sku<? and sku<>? and instr(search,?)>0
           order by (market=?) desc,(store=?) desc,sku,market,store limit 31`,
@@ -223,11 +226,13 @@ export async function catalogApi(
       }
       const [cards, capacities] = await Promise.all([
         sku ? store.all<{id:string;market:string;store:string;name:string}>(`select entry_id id,market,store,
-          coalesce(json_extract(data,'$.name'),'') name from av2_resolved_catalog_entries
-          where import_id=(select active_catalog_id from av2_meta where id=1) and sku=?
-          order by market,store limit 30`,[sku]) : [],
+          coalesce(json_extract(data,'$.name'),'') name from ${selectableCatalog}
+          where import_id=(select active_catalog_id from av2_meta where id=1)
+            and (sku=? or (market=? and sku in (?,?)))
+          order by (sku=?) desc,market,store limit 30`,
+          [sku,market,market==="OZON" ? ozonArticle(sku) : sku,labelArticle(sku,market),sku]) : [],
         kind && box ? store.all<{quantity:number}>(`select distinct json_extract(e.data,'$.unitsPerBox') quantity
-          from av2_resolved_catalog_entries e
+          from ${selectableCatalog} e
           where import_id=(select active_catalog_id from av2_meta where id=1) and market=?
             and trim(json_extract(e.data,'$.kind'))=? and trim(json_extract(e.data,'$.boxType'))=?
             and json_type(e.data,'$.unitsPerBox')='integer' and json_extract(e.data,'$.unitsPerBox')>0
@@ -237,12 +242,47 @@ export async function catalogApi(
     }
     if (request.method === "GET" && url.pathname === "/api/catalog/history") {
       const id=url.searchParams.get("id") || "";
-      const rows=await store.all<{before:string;after:string;createdAt:string}>("select before,after,created_at from av2_quality_repairs where kind='catalog.edit' and json_extract(after,'$.id')=? order by created_at desc limit 20",[id]);
+      const rows=await store.all<{before:string;after:string;createdAt:string}>(`with recursive edits(before,after,created_at,depth) as (
+        select r.before,r.after,r.created_at,1 from av2_catalog_products p
+        join av2_quality_repairs r on r.kind='catalog.edit' and r.entity_id=p.entry_id||':'||p.revision
+        where p.entry_id=? and json_extract(p.data,'$.retiredIdentity') is null
+        union all
+        select r.before,r.after,r.created_at,e.depth+1 from edits e
+        join av2_quality_repairs r on r.kind='catalog.edit'
+          and r.entity_id=json_extract(e.before,'$.id')||':'||json_extract(e.before,'$.editRevision')
+        where e.depth<20
+      ) select before,after,created_at from edits order by depth`,[id]);
       return json({items:rows.map(r=>({before:JSON.parse(r.before),after:JSON.parse(r.after),createdAt:r.createdAt}))});
     }
     if (request.method === "GET" && url.pathname === "/api/catalog")
       return json(await catalogList(store, url));
     if (request.method === "GET" && url.pathname === "/api/catalog/entry") {
+      const article = url.searchParams.get("sku");
+      if (article !== null) {
+        const sku = catalogKey(article);
+        const market = url.searchParams.get("market");
+        const shop = url.searchParams.get("store")?.trim() || null;
+        check(sku.length > 0 && sku.length <= 300 && (market === "WB" || market === "OZON") &&
+          (!shop || shop.length <= 100), "Проверьте артикул, маркетплейс и магазин.");
+        const ozonSku = ozonArticle(sku);
+        const aliases = market === "OZON" ? [...new Set([sku, ozonSku, ozonSku.slice(0, -4)])] : [sku];
+        const matches = await findCatalogAliases(store, market, aliases, shop);
+        for (const alias of aliases) {
+          const matching = matches.filter((row) => row.alias === alias);
+          if (!matching.length) continue;
+          const primary = matching.filter((row) => row.isPrimary);
+          const entries = new Map((primary.length ? primary : matching).map((row) => [
+            (JSON.parse(row.data) as CatalogEntry).id, row.importId,
+          ]));
+          if (entries.size !== 1)
+            return json({ error: "Найдено несколько карточек. Выберите нужную в справочнике." }, 409);
+          const [id, importId] = entries.entries().next().value!;
+          const item = await catalogDetail(store, importId, id);
+          if (item) return json(item);
+          break;
+        }
+        return json({ error: "Карточка для этого артикула и магазина не найдена." }, 404);
+      }
       const item = await catalogDetail(
         store,
         url.searchParams.get("import") ?? "",

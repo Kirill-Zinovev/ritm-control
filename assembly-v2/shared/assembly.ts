@@ -1,17 +1,55 @@
 import type { Operation, Position, Supply } from "./model";
+import { number } from "./model";
+import { cartonStoreNumber } from "./carton-number";
+
+function storeCorrection(p: Position, supply: Supply): string {
+  const store = p.catalog?.store;
+  const path = "Владелец подтверждает магазин позиции в «Управление → Подключение → Требуют проверки».";
+  if (store && /^[1-9]\d*$/.test(store) && cartonStoreNumber(supply.store) === null) {
+    const units = p.catalog?.unitsPerBox;
+    const capacity = units ? `, ${number(units)} шт. в коробе` : "";
+    const fillCapacity = units ? "" : " Укажите тип и вместимость короба в карточке.";
+    return `У позиции не подтверждён магазин. В справочнике ${supply.market} уже указан магазин ${store}${capacity}.${fillCapacity} ${path}`;
+  }
+  if (p.storeNeedsReview && cartonStoreNumber(supply.store) !== null)
+    return "Магазин позиции расходится с РИТМ. Попросите владельца сверить магазин в поставке РИТМ и в справочнике.";
+  return `У позиции не подтверждён магазин. Проверьте поле «Магазин» в карточке ${supply.market} и заполните его, если оно пустое. ${path}`;
+}
 
 export function workBlockedReason(p: Position, supply: Supply): string {
   if (supply.sourceLocked)
     return "Поставка закрыта для сборки в РИТМ. Чтобы продолжить, откройте её замок в РИТМ.";
+  if (p.storeNeedsReview && supply.sourceActive !== false) return storeCorrection(p, supply);
   if (p.sourceActive === false || supply.sourceActive === false)
-    return "Позиция больше не активна в РИТМ. Предыдущая работа и короба сохранены.";
-  return p.ready ? "" : "Участок ещё не подтвердил готовность позиции.";
+    return "Позиция больше не активна в РИТМ. Если её вернули в поставку, обновите Сборку.";
+  return p.ready ? "" : "Участок ещё не подтвердил готовность позиции. Проверьте её статус в РИТМ.";
 }
+
+export function boxingBlockedReason(p: Position, supply: Supply): string {
+  const workBlock = workBlockedReason(p, supply);
+  if (workBlock) return workBlock;
+  if (cartonStoreNumber(supply.store) === null) return storeCorrection(p, supply);
+  if (!p.unitsPerBox)
+    return "Для этого артикула не задана вместимость. В справочнике откройте «Производство» и укажите тип и вместимость короба.";
+  return "";
+}
+
+const cartonFillTolerance = 1e-9;
+
+export function isCartonOverCapacity(fill: number): boolean {
+  return fill > 1 + cartonFillTolerance;
+}
+
+export type CartonFitConfirmation = {
+  cartonFingerprint: string | null;
+  shipmentQty: number;
+  unitsPerBox: number;
+};
 
 export function boxCapacity(fill: number, unitsPerBox: number | null): number {
   if (!unitsPerBox || unitsPerBox <= 0 || !Number.isFinite(fill)) return 0;
   // Match the server's mixed-carton tolerance; a 100% box can be 0.999… in JS.
-  return Math.max(0, Math.floor((1 - fill + 1e-9) * unitsPerBox));
+  return Math.max(0, Math.floor((1 - fill + cartonFillTolerance) * unitsPerBox));
 }
 
 export type ExcessDestination = "box" | "stock";

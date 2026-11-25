@@ -242,7 +242,7 @@
 }
 .direction-stage-summary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
 }
 .direction-stage-summary > div {
@@ -259,19 +259,25 @@
   margin: 0 0 13px;
   color: #274565;
 }
-.direction-stage-summary > div:nth-child(1) h3 svg {
+.direction-stage-summary .printed h3 svg {
+  color: #175ed8;
+}
+.direction-stage-summary .assemblyMachineCut h3 svg {
   color: #20a451;
 }
-.direction-stage-summary > div:nth-child(2) h3 svg {
+.direction-stage-summary .assemblyManualCut h3 svg {
   color: #13a7be;
 }
-.direction-stage-summary > div:nth-child(3) h3 svg {
+.direction-stage-summary .packed h3 svg {
   color: #9064dc;
 }
 .direction-progress {
   font-size: 12px;
   color: #55708e;
   min-width: 0;
+}
+.direction-progress-label {
+  display: none;
 }
 .direction-progress > span {
   display: flex;
@@ -291,6 +297,9 @@
 }
 .direction-progress-track {
   margin-top: 7px;
+}
+.direction-progress.printed i {
+  background: #2476ea;
 }
 .direction-progress.packed i {
   background: linear-gradient(90deg, #9866f1, #8958df);
@@ -357,10 +366,7 @@
 .direction-job-heading,
 .direction-job-select {
   display: grid;
-  grid-template-columns: minmax(200px, 2fr) 90px minmax(130px, 1.1fr) minmax(
-      130px,
-      1.1fr
-    ) 112px;
+  grid-template-columns: minmax(185px, 1.6fr) 80px repeat(3, minmax(115px, 1fr)) 112px;
   gap: 18px;
   align-items: center;
 }
@@ -498,10 +504,7 @@
   }
   .direction-job-heading,
   .direction-job-select {
-    grid-template-columns: minmax(150px, 1.6fr) 75px minmax(105px, 1fr) minmax(
-        105px,
-        1fr
-      ) 95px;
+    grid-template-columns: minmax(145px, 1.6fr) 72px repeat(3, minmax(94px, 1fr)) 95px;
     gap: 12px;
   }
   .direction-stage-summary > div {
@@ -525,10 +528,18 @@
     display: none;
   }
   .direction-job-select {
-    grid-template-columns: minmax(160px, 1fr) 90px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .direction-job-select > .direction-progress {
-    grid-row: 2;
+  .direction-job-select > strong {
+    justify-self: end;
+  }
+  .direction-job-select > .direction-progress.printed {
+    grid-column: 1/-1;
+  }
+  .direction-job-select .direction-progress-label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
   }
   .direction-job-status {
     grid-column: 1/-1;

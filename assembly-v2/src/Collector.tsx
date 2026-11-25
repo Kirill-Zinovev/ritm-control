@@ -1,17 +1,19 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ArrowDownUp, Box, Printer, RefreshCw } from "lucide-react";
 import { number, type Position } from "../shared/model";
 import { isFinished, positionStatus, readiness } from "../shared/assembly";
 import { Button, Empty, Status } from "./ui";
 import { useDraftNavigation } from "./DraftGuard";
+import { useAccess } from "./Access";
 import type { Workspace } from "./useWorkspace";
 import { WorkDialog } from "./WorkDialog";
 import { BoxDrawer } from "./BoxDrawer";
 import { AssemblyProduct } from "./AssemblyProduct";
 import { LabelDialog } from "./LabelDialog";
 import { labelBatchLimit } from "../shared/labels";
-import { matchesPositionQuery } from "../shared/position-search";
+import { isSearchablePosition, matchesPositionQuery } from "../shared/position-search";
 import { AssemblySearch, type SearchDestination } from "./AssemblySearch";
+import { ProductionTasks } from "./ProductionTasks";
 import { compareDeadlines, compareShippingDates, deadlineCaption, supplyDeadlines } from "../shared/supply-deadlines";
 import { deadlineTone, shipmentDate, ShipmentSchedule, UpcomingDeadlines } from "./AssemblyDeadlines";
 import "./legacy.css";
@@ -23,7 +25,9 @@ const tabs = [
   ["all", "Все"],
 ] as const;
 const noActivePositions: Position[] = [];
-export function CollectorLoading({ workspace: w, onLearning }: { workspace: Workspace; onLearning?: () => void }) {
+type CollectorShellProps = { workspace: Workspace; sidebarNavigation: ReactNode };
+
+export function CollectorLoading({ workspace: w, sidebarNavigation }: CollectorShellProps) {
   return (
     <div className="legacy-assembly">
       <div className="app-shell">
@@ -37,7 +41,7 @@ export function CollectorLoading({ workspace: w, onLearning }: { workspace: Work
           <p className="readonly-note">
             {w.loading ? "Загрузка поставок…" : "Поставки не загружены"}
           </p>
-          {onLearning && <Button onClick={onLearning}>Обучение с Аркадием</Button>}
+          <div className="sidebar-bottom">{sidebarNavigation}</div>
         </aside>
         <main className="legacy-main">
           <h1>
@@ -54,11 +58,9 @@ export function CollectorLoading({ workspace: w, onLearning }: { workspace: Work
 export function Collector({
   workspace: w,
   navigate,
-  onLearning,
-}: {
-  workspace: Workspace;
+  sidebarNavigation,
+}: CollectorShellProps & {
   navigate(view: string): void;
-  onLearning?: () => void;
 }) {
   const role = useAccess();
   const state = w.state!;
@@ -126,7 +128,7 @@ export function Collector({
     );
   }, [state.positions, filter, status, department, query, kind]);
   const targetIndex = searchTarget && searchTarget.supplyId === state.selectedSupplyId
-    ? matches.findIndex(p => p.id === searchTarget.id && p.sourceActive !== false) : -1;
+    ? matches.findIndex(p => p.id === searchTarget.id && isSearchablePosition(p)) : -1;
   const visibleLimit = Math.max(limit, targetIndex + 1);
   useEffect(() => {
     if (!searchTarget || w.loading || w.selectionPending || previousJump.current === searchTarget) return;
@@ -146,6 +148,7 @@ export function Collector({
         .includes(supplyQuery.toLocaleLowerCase("ru")),
   );
   const activeWork = state.positions.find((p) => p.id === workId);
+  const labelVersion = labelIds?.map(id => state.positions.find(p => p.id === id)?.catalog?.labelSha ?? "").join(":");
   function changeFilters(
     q: string,
     f: string,
@@ -296,36 +299,7 @@ export function Collector({
             </div>
           </nav>
           <div className="sidebar-bottom">
-            {role === "owner" ? (
-              <details className="review-navigation">
-                <summary>Управление</summary>
-                <nav aria-label="Другие разделы">
-                  {[
-                    ["cartons", "Все короба"],
-                    ["work", "Выработка"],
-                    ["warehouse", "Склад и отгрузки"],
-                    ["catalog", "Справочник"],
-                    ["setup", "Подключение"],
-                  ].map(([id, label]) => (
-                    <button
-                      type="button"
-                      disabled={w.busy}
-                      key={id}
-                      onClick={() => navigate(id)}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </nav>
-              </details>
-            ) : (
-              <Button onClick={() => navigate("work")} disabled={w.busy}>
-                Выработка
-              </Button>
-            )}
-            {onLearning && <Button onClick={onLearning} disabled={w.busy}>
-              Обучение с Аркадием
-            </Button>}
+            {sidebarNavigation}
             <div className="sidebar-foot">
               <span className="test-dot" />
               RITM Сборка · рабочая версия
@@ -365,33 +339,9 @@ export function Collector({
                   </span>
                 </span>
                 {supply ? (
-                  <details className="direction-jobs">
-                    <summary>
-                      Задания производства · {supply.sources?.length || 1}
-                    </summary>
-                    <div className="legacy-source-description">
-                      {(supply.sources || [supply]).map((source) => (
-                        <div key={source.id}>
-                          {source.id === state.selectedSupplyId || source.sourceActive === false
-                            ? <strong>{source.title}</strong>
-                            : <button type="button" className="assembly-schedule-source-link" onClick={() => selectSupply(source.id)}
-                                disabled={w.busy || w.loading || w.selectionPending}>{source.title}</button>}
-                          <span>
-                            {source.sourceLocked
-                              ? "Закрыта в РИТМ"
-                              : source.sourceActive === false
-                                ? "Архив"
-                                : "В работе"}
-                          </span>
-                        </div>
-                      ))}
-                      <span>
-                        {[
-                          ...new Set(state.positions.map((p) => p.department)),
-                        ].join(" · ")}
-                      </span>
-                    </div>
-                  </details>
+                  <ProductionTasks supply={supply} selectedId={state.selectedSupplyId}
+                    departments={[...new Set(state.positions.map(p => p.department).filter(Boolean))]}
+                    disabled={w.busy || w.loading || w.selectionPending} onSelect={selectSupply} />
                 ) : null}
               </div>
             </div>
@@ -636,9 +586,11 @@ export function Collector({
             </>
           ) : (
             <Empty title="Поставок пока нет">
-              <Button primary onClick={() => navigate("setup")}>
-                Добавить сотрудников и поставку
-              </Button>
+              {role === "owner" && (
+                <Button primary onClick={() => navigate("setup")}>
+                  Добавить сотрудников и поставку
+                </Button>
+              )}
             </Empty>
           )}
           <div className="legacy-status">
@@ -650,7 +602,7 @@ export function Collector({
           </div>
         </main>
       </div>
-      {labelIds ? <LabelDialog positionIds={labelIds} onClose={() => setLabelIds(null)} /> : null}
+      {labelIds ? <LabelDialog positionIds={labelIds} labelVersion={labelVersion} onClose={() => setLabelIds(null)} /> : null}
       {activeWork && supply ? (
         <WorkDialog
           key={activeWork.id}
@@ -683,4 +635,3 @@ export function Collector({
     </div>
   );
 }
-import { useAccess } from "./Access";

@@ -34,6 +34,16 @@ export interface RitmIssue {
   title: string;
   message: string;
 }
+const unconfirmedStoreWarnings = [
+  ": магазин изменился; сохранена прежняя привязка Не подтверждён, требуется проверка.",
+  ": магазин не подтверждён. Можно записывать работу, но нельзя добавлять в короб.",
+];
+export function unconfirmedStoreArticle(message: string): string | null {
+  const warning = unconfirmedStoreWarnings.find(suffix => message.endsWith(suffix));
+  return warning
+    ? message.slice(0, -warning.length).trim() || null
+    : null;
+}
 export interface RitmFeed {
   format: "ritm-assembly-v2";
   version: 1;

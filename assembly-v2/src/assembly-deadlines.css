@@ -1,9 +1,91 @@
 .legacy-assembly .assembly-upcoming {
+  position: relative;
+  isolation: isolate;
+  container: assembly-express / inline-size;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 290px;
   margin-bottom: 18px;
-  padding-bottom: 18px;
-  border-bottom: 1px solid #d9e3f0;
+  padding: 30px 34px 26px;
+  overflow: hidden;
+  border: 1px solid #536656;
+  border-radius: 18px;
+  color: #f5fbff;
+  background: #0a2428;
 }
-.legacy-assembly .assembly-upcoming-head,
+.legacy-assembly .assembly-upcoming + .page-head::after {
+  display: none;
+}
+.assembly-express-art {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  pointer-events: none;
+}
+.assembly-express-art::before,
+.assembly-express-art::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+.assembly-express-art::before {
+  left: 25%;
+  background: url("./assets/holiday/gift-express-scene.webp") right 64% / cover no-repeat;
+}
+.assembly-express-art::after {
+  background:
+    linear-gradient(90deg, #0a2428 0%, #0a2428f7 19%, #0a2428a3 45%, transparent 77%),
+    linear-gradient(0deg, #0a24286b, transparent 39%);
+}
+.assembly-express-motion {
+  position: absolute;
+  z-index: 1;
+  inset: 0 0 0 53%;
+  overflow: hidden;
+}
+.assembly-express-gift {
+  position: absolute;
+  z-index: 1;
+  top: 41.6%;
+  right: -6%;
+  width: 5.7cqw;
+  aspect-ratio: 1;
+  transform-origin: bottom center;
+  background: url("./assets/holiday/gift-express-presents.webp") left center / 200% 100% no-repeat;
+  filter: drop-shadow(2px 4px 4px #0008);
+  animation: assembly-express-conveyor 10.8s -2.25s linear infinite;
+}
+.assembly-express-gift.is-berry {
+  background-position: right center;
+  animation-delay: -4.85s;
+}
+.assembly-express-snow {
+  position: absolute;
+  z-index: 2;
+  top: var(--snow-y);
+  left: var(--snow-x);
+  width: var(--snow-size);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: #fffaf0;
+  box-shadow: 0 0 4px #fff7dcb3;
+  animation: assembly-express-snowfall var(--snow-time) var(--snow-delay) linear infinite;
+}
+.assembly-express-snow.is-near {
+  filter: blur(0.8px);
+}
+@keyframes assembly-express-conveyor {
+  0% { transform: translate(0.24cqw, -0.14cqw) scale(0.48); opacity: 0; }
+  13%, 68% { opacity: 1; }
+  100% { transform: translate(-31.8cqw, 6.39cqw) scale(1.28); opacity: 0; }
+}
+@keyframes assembly-express-snowfall {
+  0% { transform: translate(0.42cqw, -3.73cqw); opacity: 0; }
+  18% { opacity: 0.9; }
+  74% { opacity: 0.61; }
+  100% { transform: translate(-2.79cqw, 14.95cqw); opacity: 0; }
+}
 .legacy-assembly .assembly-upcoming-card,
 .legacy-assembly .assembly-schedule-head {
   display: flex;
@@ -12,7 +94,9 @@
   gap: 12px;
 }
 .legacy-assembly .assembly-upcoming-head {
-  margin-bottom: 10px;
+  position: relative;
+  z-index: 1;
+  margin-bottom: 24px;
 }
 .legacy-assembly .assembly-upcoming h2,
 .legacy-assembly .assembly-schedule h2 {
@@ -21,42 +105,60 @@
   font-size: 18px;
   line-height: 1.25;
 }
-.legacy-assembly .assembly-upcoming-head > span {
-  color: #56708b;
-  font-size: 13px;
+.legacy-assembly .assembly-upcoming-head h2 {
+  color: #fff;
+  font-size: clamp(24px, 2.24cqw, 36px);
+  line-height: 1.12;
+  letter-spacing: -0.027em;
 }
-.legacy-assembly .assembly-upcoming-head > span::first-letter,
+.legacy-assembly .assembly-upcoming-date {
+  display: block;
+  margin-top: 7px;
+  color: #f1ddbb;
+  font-size: 14px;
+}
+.legacy-assembly .assembly-upcoming-card:focus-visible {
+  outline: 2px solid #b0d9ff;
+  outline-offset: 3px;
+}
+.legacy-assembly .assembly-upcoming-date::first-letter,
 .legacy-assembly .assembly-schedule-shipping-copy > span::first-letter {
   text-transform: uppercase;
 }
 .legacy-assembly .assembly-upcoming-grid {
+  position: relative;
+  z-index: 1;
   display: grid;
+  width: 62%;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
+.legacy-assembly .assembly-upcoming-empty {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  color: #f1ddbb;
+  font-size: 14px;
+}
 .legacy-assembly .assembly-upcoming-card {
-  --deadline-accent: #376ca9;
-  --deadline-ink: #234d7d;
+  --deadline-ink: #d5e8f9;
   position: relative;
   min-width: 0;
-  min-height: 86px;
-  padding: 12px 13px 12px 24px;
-  border: 1px solid #cedbeb;
-  border-radius: 12px;
-  color: #536c8a;
-  background: #fff;
-  box-shadow: 0 2px 5px #193c6b08;
+  min-height: 126px;
+  padding: 11px 12px;
+  border: 1px solid #e4c28448;
+  border-radius: 11px;
+  color: #e0edf9;
+  background: #10272ce8;
+  box-shadow: inset 0 1px 0 #ffffff15, 0 5px 18px #0002;
   text-align: left;
 }
 .legacy-assembly .assembly-upcoming-card[data-tone="overdue"] {
-  --deadline-accent: #cf252d;
-  --deadline-ink: #ad2027;
+  --deadline-ink: #ffadb7;
 }
 .legacy-assembly .assembly-upcoming-card[data-tone="today"] {
-  --deadline-accent: #d58513;
-  --deadline-ink: #975600;
+  --deadline-ink: #ffda93;
 }
-.legacy-assembly .assembly-upcoming-card::before,
 .legacy-assembly .assembly-deadline-direction[data-tone="overdue"]::before,
 .legacy-assembly .assembly-deadline-direction[data-tone="today"]::before {
   content: "";
@@ -68,10 +170,10 @@
 }
 .legacy-assembly .assembly-upcoming-card:hover:enabled,
 .legacy-assembly .assembly-upcoming-card[aria-current="true"] {
-  color: #1b4b83;
-  background: #f8fbff;
-  border-color: #2671ef;
-  box-shadow: 0 0 0 1px #2671ef;
+  color: #f3f9ff;
+  background: #132f3bed;
+  border-color: #9dcbff;
+  box-shadow: inset 0 0 0 1px #a2cdff29, 0 4px 16px #07192c44;
 }
 .legacy-assembly .assembly-upcoming-card > span {
   display: grid;
@@ -80,8 +182,9 @@
   font-size: 12px;
 }
 .legacy-assembly .assembly-upcoming-card strong {
-  color: #132b48;
+  color: #fff;
   font-size: 15px;
+  line-height: 1.2;
   overflow-wrap: anywhere;
 }
 .legacy-assembly .assembly-upcoming-card svg {
@@ -93,15 +196,12 @@
   align-items: baseline;
   gap: 0 6px;
   width: fit-content;
-  padding: 2px 8px;
-  border-radius: 6px;
-  color: #17457c;
-  background: #eaf3ff;
-  font-size: 0.875rem;
-  font-weight: 700;
+  color: #f1f6ff;
+  font-size: 13px;
+  font-weight: 500;
 }
 .legacy-assembly .assembly-upcoming-shipping time {
-  font-size: 1.0625rem;
+  font-size: 14px;
   font-weight: 800;
 }
 .legacy-assembly .assembly-deadline-caption {
@@ -119,7 +219,19 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  background: #143f3b;
+  color: #b8f0d9;
+  font-size: 11px;
+}
+
+@container assembly-express (max-width: 1150px) {
+  .legacy-assembly .assembly-upcoming-grid { width: 78%; }
+}
+@container assembly-express (max-width: 800px) {
+  .legacy-assembly .assembly-upcoming-grid { width: 100%; }
+}
+@media (max-width: 1200px) {
+  .legacy-assembly .assembly-upcoming { min-height: 248px; padding: 22px 23px 20px; }
 }
 .legacy-assembly .assembly-deadline-order {
   display: flex;
@@ -303,6 +415,24 @@
   }
 }
 @media (max-width: 760px) {
+  .legacy-assembly .assembly-upcoming {
+    min-height: 155px;
+    padding: 15px;
+    border-radius: 12px;
+  }
+  .legacy-assembly .assembly-upcoming-head { min-height: 65px; margin-bottom: 12px; }
+  .assembly-express-art::before {
+    left: 12%;
+    height: 145px;
+    background-position: right center;
+  }
+  .assembly-express-art::after {
+    background: linear-gradient(90deg, #0a2428, #0a2428a8 49%, transparent 100%) top / 100% 150px no-repeat,
+      linear-gradient(0deg, #0a2428 5%, transparent) 0 65px / 100% 85px no-repeat;
+  }
+  .assembly-express-motion { inset: 0 0 auto 42%; height: 145px; }
+  .assembly-express-gift { top: 46%; width: 10cqw; }
+  .assembly-express-snow { width: max(1.3px, var(--snow-size)); }
   .legacy-assembly .assembly-upcoming-grid {
     grid-template-columns: 1fr;
     gap: 6px;

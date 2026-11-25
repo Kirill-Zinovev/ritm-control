@@ -1,10 +1,11 @@
 import { sameCartonScope } from "../shared/carton-scope";
 import { StockBoxSelect } from "./StockBoxSelect";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import type { Supply } from "../shared/model";
 import { number } from "../shared/model";
-import { boxCapacity, placementAmounts, workBlockedReason, type ExcessDestination } from "../shared/assembly";
-import { cartonPrefix } from "../shared/carton-number";
+import { boxCapacity, boxingBlockedReason, isCartonOverCapacity, placementAmounts, workBlockedReason, type CartonFitConfirmation, type ExcessDestination } from "../shared/assembly";
+import { cartonMergeFingerprint } from "../shared/carton-merge";
+import { cartonPrefix, cartonStoreNumber } from "../shared/carton-number";
 import type { Workspace } from "./useWorkspace";
 import { Button, Dialog, Empty, NativeSelect, Search } from "./ui";
 import { useDirty, useDraftNavigation } from "./DraftGuard";
@@ -12,6 +13,13 @@ import { CartonDetails } from "./Cartons";
 import { ProductPhoto } from "./ProductPhoto";
 import { CartonProduct } from "./CartonProduct";
 import { WarehouseStock } from "./WarehouseStock";
+import { CartonMerge } from "./CartonMerge";
+
+const boxTabs = [
+  { id: "direction", label: "Короба направления" },
+  { id: "warehouse", label: "На склад" },
+  { id: "merge", label: "Слияние" },
+] as const;
 
 export function BoxDrawer({
   initialPositionId,
@@ -28,7 +36,9 @@ export function BoxDrawer({
 }) {
   const state = w.state!;
   const [stockBox,setStockBox]=useState("");
-  const [warehouse, setWarehouse] = useState(false);
+  const [tab, setTab] = useState<(typeof boxTabs)[number]["id"]>("direction");
+  const tabsId = useId();
+  const warehouse = tab === "warehouse";
   const [employeeId, setEmployeeId] = useState(() => {
     try {
       return sessionStorage.getItem("assembly.v2.employee") || "";
@@ -62,8 +72,9 @@ export function BoxDrawer({
   const [error, setError] = useState("");
   const [detailsId, setDetailsId] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  const saving = useRef(false);
   const safely = useDraftNavigation();
-  useDirty(!!qty);
+  useDirty(tab === "direction" && !!qty);
   const box = newBox
     ? undefined
     : scopeBoxes.find(
@@ -90,28 +101,42 @@ export function BoxDrawer({
       : 0;
   const placementCapacity =
     excessDestination === "stock" && capacity >= shipmentRemaining ? available : capacity;
-  let prefix = "";
+  let prefix = "", prefixError = "";
   try {
     prefix = cartonPrefix(supply);
-  } catch {
-    /* Unconfirmed store is explained below. */
+  } catch (e) {
+    prefixError = e instanceof Error ? e.message : "Проверьте название и магазин поставки в РИТМ.";
   }
   const blocked = p ? workBlockedReason(p, supply) : "Выберите товар.";
-  const guidance =
-    blocked ||
-    (!p?.unitsPerBox
-      ? "Не подтверждена вместимость товара. Уточните данные справочника перед размещением."
-      : !available
-        ? p?.packing
-          ? "Вся записанная упаковка уже распределена по коробам."
-          : "Сначала запишите упаковку этого товара. Затем его можно положить в короб."
-        : !prefix
-          ? "Магазин товара не подтверждён. Короб пока нельзя создать."
-          : shipmentQty > 0 && !box && !newBox
-            ? "Выберите открытый короб или нажмите «+ Новый короб»."
-            : newBox
-              ? "Короб создастся вместе с первым товаром после нажатия «Создать и добавить»."
-              : "Укажите количество и добавьте товар в выбранный короб.");
+  const itemBlock = p ? boxingBlockedReason(p, supply) : blocked;
+  const newBoxBlock = blocked || (cartonStoreNumber(supply.store) === null ? itemBlock : prefixError);
+  const validQuantity = /^\d+$/.test(qty) && Number.isSafeInteger(value) && value > 0 && value <= 2147483647;
+  let placementBlock = closed ? "Переключитесь на открытые короба, чтобы добавить товар." : itemBlock;
+  if (!placementBlock) {
+    if (!available) {
+      placementBlock = p?.packing
+        ? "Вся упаковка уже в коробах. Проверьте состав, если товар нужно переложить."
+        : "Сначала запишите упаковку этого товара.";
+    } else if (newBox && newBoxBlock) {
+      placementBlock = newBoxBlock;
+    } else if ((shipmentQty > 0 || !qty) && !box && !newBox) {
+      placementBlock = "Выберите открытый короб или нажмите «Новый короб».";
+    } else if (!validQuantity) {
+      placementBlock = "Введите количество целым числом больше нуля.";
+    } else if (value > available) {
+      placementBlock = `Упаковано без короба ${number(available)} шт. Уменьшите количество.`;
+    } else if (shipmentQty > 0 && box?.capacityUnknown) {
+      placementBlock = "У товара в этом коробе нет подтверждённой вместимости. Выберите другой короб.";
+    } else if (warehouseQty > 0 && !stockBox) {
+      placementBlock = "Выберите складской короб для излишка.";
+    } else if (warehouseQty > 0 && !state.employees.some(e => e.id === employeeId && e.active)) {
+      placementBlock = "Выберите сотрудника для записи товара на склад.";
+    }
+  }
+  const requiresFitConfirmation = !placementBlock && shipmentQty > 0 && isCartonOverCapacity(fill);
+  const guidance = requiresFitConfirmation
+    ? `По норме в коробе есть место для ${number(capacity)} шт. Подтвердите, если ${number(shipmentQty)} шт. физически помещаются.`
+    : placementBlock || (newBox ? "Короб создастся при добавлении первого товара." : "");
   const rows = scopeBoxes.filter(
     (c) =>
       (closed ? c.state === "closed" : c.state === "open") &&
@@ -133,25 +158,20 @@ export function BoxDrawer({
     setExcessDestination("box");
     requestAnimationFrame(() => input.current?.focus());
   }
-  async function add(e: FormEvent) {
+  function submit(e: FormEvent) {
     e.preventDefault();
+    void add(false);
+  }
+  async function add(confirmFit: boolean) {
+    if (!p?.unitsPerBox || placementBlock || w.busy || saving.current || confirmFit !== requiresFitConfirmation) return;
+    saving.current = true;
     setError("");
-    if (
-      !/^\d+$/.test(qty) ||
-      !Number.isSafeInteger(value) ||
-      value <= 0 ||
-      value > 2147483647
-    ) {
-      setError("Введите положительное целое количество.");
-      input.current?.focus();
-      return;
-    }
-    if (!p || (shipmentQty > 0 && !box && !newBox)) {
-      setError("Выберите товар и открытый короб.");
-      return;
-    }
-    if(warehouseQty > 0 && !stockBox){setError("Выберите складской короб или создание нового.");return;}
     try {
+      const fitConfirmation: CartonFitConfirmation | undefined = confirmFit ? {
+        cartonFingerprint: box ? await cartonMergeFingerprint(box) : null,
+        shipmentQty,
+        unitsPerBox: p.unitsPerBox,
+      } : undefined;
       const result = await w.command(
         "allocation.place",
         {
@@ -159,6 +179,7 @@ export function BoxDrawer({
           ...(newBox ? { newCarton: true } : box ? { cartonId: box.id } : {}),
           qty: value,
           excessDestination,
+          ...(fitConfirmation ? { fitConfirmation } : {}),
           ...(warehouseQty > 0 ? { employeeId, warehouseCartonId:stockBox === "new" ? undefined : stockBox, newWarehouseCarton:stockBox === "new" } : {}),
         },
         warehouseQty > 0
@@ -173,13 +194,15 @@ export function BoxDrawer({
       requestAnimationFrame(() => input.current?.focus());
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      saving.current = false;
     }
   }
   return (
     <Dialog
       title="📦 Короба"
       kicker={`Поставка · ${supply.title}`}
-      className={`box-drawer legacy-box-drawer ${warehouse ? "show-warehouse-stock" : ""}`}
+      className={`box-drawer legacy-box-drawer ${warehouse ? "show-warehouse-stock" : ""}${tab === "merge" ? " show-carton-merge" : ""}`}
       busy={w.busy}
       onClose={close}
     >
@@ -189,24 +212,24 @@ export function BoxDrawer({
           role="tablist"
           aria-label="Назначение коробов"
         >
-          {["Короба направления", "На склад"].map((label, index) => (
+          {boxTabs.map(({ id, label }, index) => (
             <button
               type="button"
               role="tab"
-              key={label}
-              aria-selected={warehouse === (index === 1)}
-              tabIndex={warehouse === (index === 1) ? 0 : -1}
+              key={id}
+              id={`${tabsId}-${id}`}
+              aria-selected={tab === id}
+              aria-controls={id === "merge" && tab === id ? `${tabsId}-merge-panel` : undefined}
+              tabIndex={tab === id ? 0 : -1}
               disabled={w.busy}
-              onClick={() => safely(() => setWarehouse(index === 1))}
+              onClick={() => { if (tab !== id) safely(() => setTab(id)); }}
               onKeyDown={(e) => {
                 if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
                   e.preventDefault();
-                  safely(() => setWarehouse(!warehouse));
-                  (
-                    e.currentTarget.parentElement?.children[
-                      index === 0 ? 1 : 0
-                    ] as HTMLElement
-                  )?.focus();
+                  const offset = e.key === "ArrowRight" ? 1 : -1;
+                  const next = (index + offset + boxTabs.length) % boxTabs.length;
+                  const nextButton = e.currentTarget.parentElement?.children[next] as HTMLElement | undefined;
+                  safely(() => { setTab(boxTabs[next].id); nextButton?.focus(); });
                 }
               }}
             >
@@ -214,7 +237,11 @@ export function BoxDrawer({
             </button>
           ))}
         </div>
-        {warehouse ? (
+        {tab === "merge" ? (
+          <div id={`${tabsId}-merge-panel`} role="tabpanel" aria-labelledby={`${tabsId}-merge`} className="merge-tab-panel">
+            <CartonMerge cartons={scopeBoxes} workspace={w} />
+          </div>
+        ) : warehouse ? (
           <WarehouseStock workspace={w} supply={supply} />
         ) : (
           <>
@@ -242,7 +269,7 @@ export function BoxDrawer({
               <>
                 <div className="box-product-card">
                   <ProductPhoto
-                    importId={p.catalogImportId || ""}
+                    importId={p.photoCatalogImportId ?? p.catalogImportId ?? ""}
                     id={p.catalog?.photoId || null}
                     sourceUrl={p.photoUrl}
                     sku={p.sku}
@@ -295,12 +322,17 @@ export function BoxDrawer({
                   }
                 </h3>
                 <Button
-                  disabled={w.busy || !!blocked || !prefix}
+                  disabled={w.busy || !!newBoxBlock}
+                  aria-describedby={newBoxBlock ? "new-box-blocked" : undefined}
+                  title={newBoxBlock || undefined}
                   onClick={() => safely(create)}
                 >
                   ＋ Новый короб
                 </Button>
               </div>
+              {newBoxBlock && newBoxBlock !== guidance && (
+                <p id="new-box-blocked" className="box-guidance is-error" role="status">{newBoxBlock}</p>
+              )}
               <div className="box-list-tools">
                 <Search
                   label="Найти номер короба или артикул"
@@ -408,8 +440,8 @@ export function BoxDrawer({
           </>
         )}
       </div>
-      {!warehouse ? (
-        <form className="box-action-footer" noValidate onSubmit={add}>
+      {tab === "direction" ? (
+        <form className="box-action-footer" noValidate onSubmit={submit}>
           <div className="box-placement">
             <p className="box-selected-row">
               {newBox ? (
@@ -424,9 +456,10 @@ export function BoxDrawer({
                 "Выберите открытый короб или создайте новый"
               )}
             </p>
-            <p className="box-guidance" role="status">
-              {guidance}
-            </p>
+            {guidance && (
+              <p id={newBoxBlock === guidance ? "new-box-blocked" : "box-placement-help"}
+                className={`box-guidance${itemBlock || requiresFitConfirmation ? " is-error" : ""}`} role="status">{guidance}</p>
+            )}
             {excessQty > 0 ? (
               <>
                 <NativeSelect label="Куда направить излишек?" value={excessDestination} disabled={w.busy}
@@ -500,49 +533,29 @@ export function BoxDrawer({
             </div>
             <p className="box-capacity-preview" id="box-capacity">
               <span>
-                Можно в выбранный короб:{" "}
-                {number(Math.min(available, placementCapacity))} шт.
+                По норме в короб:{" "}
+                {number(Math.min(available, capacity))} шт.
               </span>
               <span>После добавления: {Math.round(fill * 100)}%</span>
             </p>
-            {value > 0 && (value > available || fill > 1 + 1e-9) ? (
-              <p className="form-error">
-                {value > available
-                  ? "Столько упакованных изделий нет."
-                  : "Количество превышает свободное место в коробе."}
-              </p>
-            ) : null}
           </div>
           <p className="form-error" role="alert" id="box-error">
             {error}
           </p>
           <Button
             primary
-            type="submit"
+            type={requiresFitConfirmation ? "button" : "submit"}
             className="box-primary-action"
-            disabled={
-              w.busy ||
-              closed ||
-              !p?.ready ||
-              !p.unitsPerBox ||
-              (shipmentQty > 0 && !box && !newBox) ||
-              !/^\d+$/.test(qty) ||
-              !Number.isSafeInteger(value) ||
-              value <= 0 ||
-              value > available ||
-              shipmentQty > capacity ||
-              (warehouseQty > 0 && (!stockBox)) ||
-              (warehouseQty > 0 &&
-                !state.employees.some(
-                  (e) => e.id === employeeId && e.active,
-                )) ||
-              !!blocked
-            }
+            disabled={w.busy || !!placementBlock}
+            aria-describedby={guidance ? newBoxBlock === guidance ? "new-box-blocked" : "box-placement-help" : undefined}
             aria-busy={w.busy}
+            onClick={requiresFitConfirmation ? () => void add(true) : undefined}
           >
             {w.busy
               ? "Добавляем…"
-              : newBox
+              : requiresFitConfirmation
+                ? "Подтвердить и добавить"
+                : newBox
                 ? "Создать и добавить"
                 : "Добавить в короб"}
           </Button>

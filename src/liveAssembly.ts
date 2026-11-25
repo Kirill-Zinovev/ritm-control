@@ -4,6 +4,12 @@ export const ASSEMBLY_URL = "https://assembly-v2.zinovevkirill234.chatgpt.site";
 export type AssemblyDateRange = { start: string; end: string };
 
 export type AssemblyTypeCount = { name: string; quantity: number };
+export type AssemblyNormIssue = {
+  reason: "catalog" | "kind" | "sheets" | "norm" | "ready";
+  market: "OZON" | "WB";
+  store: string;
+  hasCard: boolean;
+};
 export type AssemblyEvent = {
   eventId: string;
   idempotencyKey: string;
@@ -23,6 +29,7 @@ export type AssemblyEvent = {
   date: string;
   source: string;
   productType: string;
+  normIssue?: AssemblyNormIssue;
 };
 export type AssemblySummary = {
   employee: string;

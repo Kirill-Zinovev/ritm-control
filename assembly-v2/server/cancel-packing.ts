@@ -49,8 +49,14 @@ export async function cancelPacking(
     kind: string;
   }>(
     `
- select a.id,a.qty,a.carton_id,c.label,c.state,c.dispatch_id,c.closed_at,a.created_at created_at,a.legacy,'direction' kind from av2_all_allocations a join av2_cartons c on c.id=a.carton_id where a.position_id=? and a.removed_at is null
- union all select r.id,r.qty,r.carton_id,c.label,c.state,null,c.closed_at,r.created_at,0,'warehouse' kind from av2_warehouse_receipts r join av2_warehouse_cartons c on c.id=r.carton_id where r.position_id=? and r.voided_at is null order by 8,1`,
+ select a.id,a.qty,a.carton_id,c.label,c.state,c.dispatch_id,c.closed_at,a.created_at,a.legacy,'direction' kind,
+   coalesce(split.root_id,a.id) order_id
+ from av2_all_allocations a join av2_cartons c on c.id=a.carton_id
+ left join av2_carton_merge_splits split on split.id=a.id and split.legacy=a.legacy
+ where a.position_id=? and a.removed_at is null
+ union all select r.id,r.qty,r.carton_id,c.label,c.state,null,c.closed_at,r.created_at,0,'warehouse' kind,r.id
+ from av2_warehouse_receipts r join av2_warehouse_cartons c on c.id=r.carton_id
+ where r.position_id=? and r.voided_at is null order by 8,11,1`,
     [work.positionId, work.positionId],
   );
   check(

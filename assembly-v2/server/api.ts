@@ -2,6 +2,7 @@ import type { Command, PreparedDispatch } from "../shared/model";
 import type { PositionSearchPage } from "../shared/position-search";
 import type { DispatchHistoryDetail, DispatchHistoryPage } from "../shared/dispatch-history";
 import type { OzonBatch, OzonBatchSummary, OzonPreview } from "../shared/ozon-shipment";
+import type { WarehouseNumberPreview } from "../shared/warehouse";
 import { collectorActions, managerActions } from "./access";
 export interface Database {
   ozon?: {
@@ -9,7 +10,9 @@ export interface Database {
     list(): Promise<OzonBatchSummary[]>;
     batch(id: string): Promise<OzonBatch | null>;
   };
+  wb?: Database["ozon"];
   warehouse?(url: URL): Promise<unknown>;
+  warehouseNumberPreview?(numbers: string): Promise<WarehouseNumberPreview>;
   preparedDispatches?(): Promise<PreparedDispatch[]>;
   dispatchHistory?: {
     page(index: number, query?: string): Promise<DispatchHistoryPage>;
@@ -80,23 +83,27 @@ export async function api(
         return json({ error: "Проверьте номер короба, ШК Ozon или артикул." }, 400);
       return json(await db.dispatchHistory.page(page, query));
     }
-    if (db.ozon && url.pathname.startsWith("/api/ozon/")) {
+    const marketplace = url.pathname.startsWith("/api/wb/") ? "wb"
+      : url.pathname.startsWith("/api/ozon/") ? "ozon" : null;
+    const shipments = marketplace ? db[marketplace] : undefined;
+    if (shipments) {
       if (role === "collector")
-        return json({ error: "Отгрузки Ozon доступны руководителю." }, 403);
-      if (request.method === "GET" && url.pathname === "/api/ozon/shipments") {
+        return json({ error: "Отгрузки доступны руководителю." }, 403);
+      if (request.method === "GET" && url.pathname === `/api/${marketplace}/shipments`) {
         const id = url.searchParams.get("id");
-        if (!id) return json({ batches: await db.ozon.list() });
-        const batch = await db.ozon.batch(id);
+        if (!id) return json({ batches: await shipments.list() });
+        if (id.length > 160) return json({ error: "Проверьте номер подготовки." }, 400);
+        const batch = await shipments.batch(id);
         return batch ? json(batch) : json({ error: "Подготовка не найдена." }, 404);
       }
-      if (request.method === "POST" && url.pathname === "/api/ozon/preview") {
+      if (request.method === "POST" && url.pathname === `/api/${marketplace}/preview`) {
         if (!request.headers.get("content-type")?.startsWith("application/json"))
           return json({ error: "Ожидается JSON." }, 415);
         const body = await request.text();
         if (body.length > 45_000) return json({ error: "Вставьте более короткий список коробов." }, 413);
         const input = JSON.parse(body);
         if (typeof input?.numbers !== "string") return json({ error: "Проверьте список коробов." }, 400);
-        return json(await db.ozon.preview(input.numbers));
+        return json(await shipments.preview(input.numbers));
       }
     }
     if (request.method === "GET" && url.pathname === "/api/state") {
@@ -114,6 +121,16 @@ export async function api(
     }
     if (request.method === "GET" && url.pathname === "/api/positions/search" && db.searchPositions)
       return json(await db.searchPositions(url));
+    if (request.method === "POST" && url.pathname === "/api/warehouse/number-preview" && db.warehouseNumberPreview) {
+      if (role === "collector") return json({ error: "Выгрузки доступны руководителю." }, 403);
+      if (!request.headers.get("content-type")?.startsWith("application/json"))
+        return json({ error: "Ожидается JSON." }, 415);
+      const body = await request.text();
+      if (body.length > 20_000) return json({ error: "Вставьте более короткий список складских коробов." }, 413);
+      const input = JSON.parse(body);
+      if (typeof input?.numbers !== "string") return json({ error: "Проверьте список складских коробов." }, 400);
+      return json(await db.warehouseNumberPreview(input.numbers));
+    }
     if (
       request.method === "GET" &&
       url.pathname === "/api/warehouse" &&

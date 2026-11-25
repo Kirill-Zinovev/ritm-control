@@ -517,7 +517,8 @@ export async function ritmApi(
         printExtension: entry.printExtension ?? (matches.size === 1 ? [...matches][0] : ""),
         rollMultiplicity: entry.rollMultiplicity,
         ...(includeProductDetails === true ? {
-          name: entry.name, kind: entry.kind, size: entry.size, boxType: entry.boxType, unitsPerBox: entry.unitsPerBox,
+          name: entry.name, kind: entry.kind, size: entry.size, printFolder: entry.printFolder,
+          boxType: entry.boxType, unitsPerBox: entry.unitsPerBox,
         } : {}),
         ...(includePhotos === true ? {photoUrl: typeof photo === "string" && photoAllowed(photo) ? photo : ""} : {}),
       };

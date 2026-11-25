@@ -36,7 +36,7 @@ export async function planDeparture(
   revision: number,
   now: string,
   loadCartons: (ids: string[]) => Promise<Carton[]>,
-  splitOzon: (draftId: string, sentId: string, selected: ReadonlySet<string>, remaining: string[],
+  splitPreparation: (market: Dispatch["market"], draftId: string, sentId: string, selected: ReadonlySet<string>, remaining: string[],
     actor: string, now: string) => Promise<Statement[]>,
 ) {
   check(payload.confirmed === true, "Подтвердите фактический выезд.");
@@ -108,8 +108,7 @@ export async function planDeparture(
         remaining.reduce((qty, box) => qty + box.qty, 0), dispatch.id);
       add("update av2_cartons set dispatch_id=? where dispatch_id=? and id in (select value from json_each(?))",
         sent.id, dispatch.id, JSON.stringify(sent.cartonIds));
-      if (dispatch.market === "OZON")
-        statements.push(...await splitOzon(dispatch.id, sent.id, chosen, remainingIds, actor, now));
+      statements.push(...await splitPreparation(dispatch.market, dispatch.id, sent.id, chosen, remainingIds, actor, now));
     }
     sentIds.push(sent.id);
   }

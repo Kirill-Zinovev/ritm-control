@@ -2,14 +2,16 @@ import {receiptRoot, warehouseWorkQty} from "./warehouse-splits";
 import type { SqlStore, Statement } from "./database";
 import type {
   WarehouseCarton,
+  WarehouseNumberPreview,
   WarehousePage,
   WarehouseReceipt,
 } from "../shared/warehouse";
 import type { CatalogEntry } from "../shared/catalog";
-import { effectiveCatalogData, requireCatalog as check } from "./catalog-store";
+import { effectiveCatalogData, requireCatalog as check, selectableCatalog } from "./catalog-store";
 import { catalogKey } from "../shared/catalog";
 import { effectiveWorkNorms, savedCoefficient, type ShiftNorm } from "../shared/work-norm";
 import { enqueueStockCutWork, enqueueWarehouseWork } from "./ritm-outbox";
+import { cartonNumberKey, cartonNumberList } from "../shared/carton-number";
 const q = (sql: string, ...args: (string | number | null)[]): Statement => ({
   sql,
   args,
@@ -18,6 +20,31 @@ const str = (v: unknown, max = 300) =>
   typeof v === "string" && v.trim().length > 0 && v.length <= max
     ? v.trim()
     : "";
+const warehouseExportSelectionLimit = 100;
+
+export async function previewWarehouseNumbers(store: SqlStore, input: string): Promise<WarehouseNumberPreview> {
+  const labels = cartonNumberList(input);
+  check(labels.length > 0, "Введите номера складских коробов.");
+  check(labels.length <= warehouseExportSelectionLimit,
+    `Проверьте список. За один раз можно выбрать до ${warehouseExportSelectionLimit} складских коробов.`);
+
+  type Carton = WarehouseNumberPreview["cartons"][number];
+  const wanted = new Set(labels);
+  const matches = new Map<string, Carton | null>();
+  const rows = await store.all<Carton>("select id,label,market,store,state from av2_warehouse_cartons");
+  for (const row of rows) {
+    const key = cartonNumberKey(row.label);
+    if (wanted.has(key)) matches.set(key, matches.has(key) ? null : row);
+  }
+  const preview: WarehouseNumberPreview = { cartons: [], issues: [] };
+  for (const label of labels) {
+    const carton = matches.get(label);
+    if (carton) preview.cartons.push(carton);
+    else preview.issues.push({ label, reason: carton === null ? "ambiguous" : "missing" });
+  }
+  return preview;
+}
+
 export async function readWarehouse(
   store: SqlStore,
   url: URL,
@@ -39,14 +66,14 @@ export async function readWarehouse(
   const includeSummary = !exporting && url.searchParams.get("summary") === "1";
   const exportAll=url.searchParams.get("export")==="all";
   const ids:unknown=exporting&&!exportAll?JSON.parse(url.searchParams.get("export")||"[]"):[];
-  check(Array.isArray(ids)&&ids.length<=100&&ids.every(id=>typeof id==='string'&&id.length<=300),"Выберите не больше 100 складских коробов.");
+  check(Array.isArray(ids)&&ids.length<=warehouseExportSelectionLimit&&ids.every(id=>typeof id==='string'&&id.length<=300),`Выберите не больше ${warehouseExportSelectionLimit} складских коробов.`);
   if(exporting&&!exportAll)check(ids.length>0,"Выберите складские короба.");
   const market=url.searchParams.get("market")||"", shop=url.searchParams.get("store")||"", status=url.searchParams.get("state")||"";
   const filter = `(?='' or c.id=?) and (?='' or instr(lower(c.label),?)>0 or exists(select 1 from av2_warehouse_receipts r where r.carton_id=c.id and r.voided_at is null and instr(r.search,?)>0))
     and (?='' or c.market=?) and (?='' or c.store=?) and (?='' or c.state=?) ${exporting&&!exportAll?'and c.id in(select value from json_each(?))':''}`;
   const args = [carton, carton, search, search.toLocaleLowerCase("ru"), search,market,market,shop,shop,status,status,...(exporting&&!exportAll?[JSON.stringify(ids)]:[])];
   const offset=exporting?0:page*5;
-  const selection = `select c.id from av2_warehouse_cartons c where ${filter} order by c.created_at desc,c.id desc limit ${exportAll?500:exporting?100:5} offset ?`;
+  const selection = `select c.id from av2_warehouse_cartons c where ${filter} order by c.created_at desc,c.id desc limit ${exportAll?500:exporting?warehouseExportSelectionLimit:5} offset ?`;
   const batch = await store.readBatch([
     q(
       `select count(*) total ${includeSummary ? `,
@@ -261,7 +288,7 @@ export async function warehousePlan(
       const receiptMode = p.receiptMode ?? "receipt";
       check(receiptMode === "packing" || receiptMode === "receipt", "Выберите новую упаковку или приём готового остатка.");
       const row = await one<{ importId: string; data: string }>(
-        `select e.import_id,${effectiveCatalogData()} data from av2_resolved_catalog_entries e where e.import_id=(select active_catalog_id from av2_meta where id=1) and e.entry_id=?`,
+        `select e.import_id,${effectiveCatalogData()} data from ${selectableCatalog} e where e.import_id=(select active_catalog_id from av2_meta where id=1) and e.entry_id=?`,
         [str(p.entryId, 1500)],
         "Выберите товар из действующего справочника.",
       );

@@ -206,6 +206,7 @@ export const collectorActions = new Set([
   "allocation.add",
   "allocation.place",
   "allocation.remove",
+  "carton.merge",
   "carton.close",
   "warehouse.receive",
   "warehouse.transfer",
@@ -215,4 +216,4 @@ export const collectorActions = new Set([
   "warehouse.reopen",
   "warehouse.move",
 ]);
-export const managerActions=new Set([...collectorActions,'catalog.save','catalog.activate','photo.assign','carton.create','carton.reopen','dispatch.create','dispatch.cancel','dispatch.send','export.create','ozon.prepare','ozon.assign']);
+export const managerActions=new Set([...collectorActions,'catalog.save','catalog.applyWorkNorms','catalog.activate','photo.assign','carton.create','carton.reopen','dispatch.create','dispatch.cancel','dispatch.send','export.create','ozon.prepare','ozon.assign','wb.prepare','wb.assign','wb.generate']);

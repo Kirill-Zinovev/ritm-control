@@ -958,7 +958,7 @@ function AppShell() {
           {(cloudAuth.role === "owner" || cloudAuth.role === "manager") && <div className="sidebar-account-actions">
             {cloudAuth.role === "owner" && <button className="sidebar-account-button" type="button" onClick={() => setAccessOpen(true)}>Доступы</button>}
             {cloudAuth.role === "manager" && <button className="sidebar-account-button" type="button" onClick={cloudAuth.openPinChange}>Сменить PIN</button>}
-            {cloudAuth.role === "manager" && <button className="sidebar-account-button" type="button" onClick={() => void cloudAuth.signOut()}>Выйти</button>}
+            {(cloudAuth.role === "manager" || (cloudAuth.role === "owner" && cloudAuth.username)) && <button className="sidebar-account-button" type="button" onClick={() => void cloudAuth.signOut()}>Выйти</button>}
           </div>}
         </div>
       </aside>

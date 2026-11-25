@@ -185,7 +185,7 @@ export function WorkDialog({
             После записи перейти к коробам
           </label>
         ) : null}
-        <details className="work-norm-details">
+        <details className="work-norm-details" open={!p.workNorms?.[operation] || undefined}>
           <summary>Норма и расчёт выработки</summary>
           <p className="form-hint">
             {p.workNorms?.[operation] ? (
@@ -203,7 +203,7 @@ export function WorkDialog({
                   : ""}
               </>
             ) : (
-              "Для этого товара и операции норма не подтверждена. Количество сохранится, коэффициент останется неизвестным."
+              `Для ${p.sku} нужна норма «${operationLabels[operation]}». Передайте артикул менеджеру для проверки в справочнике. Количество можно записать сейчас.`
             )}
           </p>
         </details>

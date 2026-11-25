@@ -266,6 +266,17 @@ function googleHarness({
           copied.properties.title = duplicate.newSheetName;
           sheets.set(duplicate.newSheetId, copied);
           replies.push({ duplicateSheet: { properties: copied.properties } });
+        } else if (request.updateSheetProperties?.fields === "hidden") {
+          const { sheetId, hidden } = request.updateSheetProperties.properties;
+          sheets.get(sheetId).properties.hidden = hidden;
+          replies.push({});
+        } else if (request.clearBasicFilter) {
+          delete sheets.get(request.clearBasicFilter.sheetId).basicFilter;
+          replies.push({});
+        } else if (request.setBasicFilter) {
+          const filter = request.setBasicFilter.filter;
+          sheets.get(filter.range.sheetId).basicFilter = structuredClone(filter);
+          replies.push({});
         } else if (request.deleteSheet) {
           sheets.delete(request.deleteSheet.sheetId);
           replies.push({});
@@ -1254,6 +1265,40 @@ test("adding extension preserves external lookups, strings and absolute local fo
   assert.equal(grid.data[0].rowData[4].values[9].userEnteredValue.formulaValue.includes('SUM(F5:$I$5)'), true);
 });
 
+for (const department of ["roll", "box"]) {
+  test(`new ${department} tab is visible and centered with an empty filter on row four`, async () => {
+    const google = googleHarness({ box: department === "box" });
+    const template = google.sheets.get(DEPARTMENTS[department].template.gid);
+    template.properties.hidden = true;
+    template.basicFilter = {
+      range: { sheetId: template.properties.sheetId, startRowIndex: 3 },
+      criteria: { 4: { hiddenValues: ["TEST-001"] } },
+    };
+    const original = structuredClone(template);
+    const writer = new ProductionSupplyWriter({
+      department, credentialWriter: { token: async () => "test-token", metrics: {} }, fetcher: google.fetcher,
+    });
+    const plan = await writer.prepareCreate(payload("18181818-1818-4818-8818-181818181818", {
+      lines: [{ article: "TEST-001", quantity: 12, extension: "X" }],
+    }));
+    await writer.execute(plan);
+    await writer.verify(plan);
+    const target = google.sheets.get(plan.sheetId);
+    assert.equal(target.properties.hidden, false);
+    assert.deepEqual(target.basicFilter, {
+      range: { sheetId: plan.sheetId, startRowIndex: 3, startColumnIndex: 0, endColumnIndex: 30 },
+    });
+    const batch = google.requests[0];
+    assert.deepEqual(batch.at(-2).repeatCell, {
+      range: { sheetId: plan.sheetId },
+      cell: { userEnteredFormat: { horizontalAlignment: "CENTER", verticalAlignment: "MIDDLE" } },
+      fields: "userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment",
+    });
+    assert.deepEqual(template, original);
+    assert.equal(google.requests.length, 1);
+  });
+}
+
 test("new box has extension F, shifted calculations and neutral appearance; original template is preserved", async () => {
   const google = googleHarness({ box: true });
   const source = google.sheets.get(DEPARTMENTS.box.template.gid);
@@ -1382,4 +1427,32 @@ for (const legacy of [false,true]) test(`filtered destination template appends w
   assert.deepEqual(sheet.data[0].rowData.slice(0,before.length),before,'all old positions remain unchanged');
   assert.equal(sheet.data[0].rowData[plan.startRow-1].values[15].userEnteredValue.numberValue,30);
   assert.equal(google.requests.at(-1).some(r=>r.copyPaste||r.clearBasicFilter),false);
+});
+
+for (const department of ["roll", "box"]) test(`${department} writes catalog-only formulas when creating and adding positions`, async () => {
+  const box = department === "box";
+  const google = googleHarness({ box });
+  google.sheets.delete(1475850544);
+  google.sheets.set(849681173, { properties: { sheetId: 849681173, title: "_RITM_СПРАВОЧНИК", gridProperties: {rowCount: 100, columnCount: 6} }, data: [{ rowData: [] }] });
+  const headings = google.sheets.get(DEPARTMENTS[department].template.gid).data[0].rowData[3].values;
+  for (const [column, label] of [[2, "Фото"], [4, "Станок"], [box ? 6 : 7, "Кол-во листов"], [box ? 7 : 8, "Размер"],
+    [box ? 12 : 13, "Папка печати"], [box ? 13 : 14, "Кратность"]])
+    headings[column - 1] = { userEnteredValue: { stringValue: label } };
+  const writer = new ProductionSupplyWriter({ department, assemblyCatalogOnly: true,
+    credentialWriter: { token: async () => "test-token", metrics: {} }, fetcher: google.fetcher });
+  const lines = [{ article: "FIRST", quantity: 10, extension: "F", catalogMachine: box ? "DTF" : "2-GO", store: "2" }];
+  const input = payload("c253206e-82f0-4a52-8405-6fe99730b933", { name: "OZON Проверка 2 магазин", lines });
+  const created = await writer.prepareCreate(input);
+  await writer.execute(created);
+  await writer.verify(created);
+  const added = await writer.prepareAppend({ ...input, operationId: "40b42ade-e0e0-4526-8870-4926a952ead9", sheetId: created.sheetId,
+    lines: [{ ...lines[0], article: "SECOND" }], registeredSheets: [{ gid: created.sheetId, name: input.name }] });
+  await writer.execute(added);
+  await writer.verify(added);
+  const firstRow = google.sheets.get(created.sheetId).data[0].rowData[4].values;
+  assert.equal(firstRow[3].userEnteredValue.formulaValue, `="${lines[0].catalogMachine}"`);
+  for (const column of [1, 6, 7, 12, 13]) {
+    assert.match(firstRow[column].userEnteredValue.formulaValue, /_RITM_СПРАВОЧНИК/);
+    assert.doesNotMatch(firstRow[column].userEnteredValue.formulaValue, /Cache FBO|_RITM_WB_SOURCE|IMPORTRANGE/);
+  }
 });

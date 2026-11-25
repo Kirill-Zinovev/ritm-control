@@ -163,6 +163,110 @@ test("RITM manager PIN login grants business sections except AI and owner admini
     assert.equal((await bearerAfterDisable.json()).authorized, false);
   } finally { await mf.dispose(); }
 });
+
+test("a linked four-digit PIN grants owner access in a fresh browser and can be revoked", async () => {
+  const owner = "owner-site-id";
+  const setupPath = "/api/auth/owner-pin";
+  const loginPath = "/api/auth/login";
+  const origin = "https://ritm.test";
+  const identity = { "oai-authenticated-user-id": owner };
+  const credentials = { username: "owner.test", pin: "5072" };
+  const mf = new Miniflare({
+    modules: true,
+    scriptPath: fileURLToPath(new URL("../dist/server/index.js", import.meta.url)),
+    compatibilityDate: "2026-08-06",
+    d1Databases: ["DB"],
+    bindings: {
+      ...bindings,
+      RITM_OWNER_USER_IDS: owner,
+      RITM_OWNER_PIN_KEY: crypto.randomUUID() + crypto.randomUUID(),
+      RITM_GOOGLE_READER_JSON: "{}",
+    },
+    outboundService: async () => { throw new Error("Network forbidden in isolated owner PIN test"); },
+  });
+  const read = (path, headers = {}) => mf.dispatchFetch(origin + path, { headers });
+  const write = (path, body, caller = {}, method = "POST") => mf.dispatchFetch(origin + path, {
+    method,
+    headers: { origin, "content-type": "application/json", ...caller },
+    body: JSON.stringify(body),
+  });
+  const session = async (body) => {
+    const result = await write(loginPath, body);
+    assert.equal(result.status, 200, await result.clone().text());
+    assert.deepEqual(await result.json(), { ok: true, role: "owner" });
+    const cookie = result.headers.get("set-cookie") || "";
+    assert.match(cookie, /^__Host-ritm_owner_session=/);
+    assert.match(cookie, /HttpOnly; Secure; SameSite=Strict/);
+    return { cookie: cookie.split(";")[0] };
+  };
+  try {
+    const db = await mf.getD1Database("DB");
+    for (const statement of cloudSchemaStatements()) await db.prepare(statement).run();
+    assert.equal((await write(setupPath, credentials)).status, 401);
+    assert.equal((await write(setupPath, credentials, { "oai-authenticated-user-id": "another-user" })).status, 403);
+    assert.equal((await write(setupPath, credentials, { ...identity, origin: "https://other.test" })).status, 403);
+    assert.equal((await write(setupPath, { ...credentials, pin: "50729813" }, identity)).status, 400);
+    assert.equal((await write(setupPath, { ...credentials, pin: "1234" }, identity)).status, 400);
+    assert.deepEqual(await (await read(setupPath, identity)).json(), {
+      ok: true, available: true, canEdit: true, username: null,
+    });
+    const configured = await write(setupPath, credentials, identity);
+    assert.equal(configured.status, 200, await configured.clone().text());
+    assert.deepEqual(await configured.json(), {
+      ok: true, available: true, canEdit: true, username: credentials.username,
+    });
+    const stored = await db.prepare("SELECT pin_salt,pin_hash FROM ritm_owner_pin_credentials WHERE owner_id=?").bind(owner).first();
+    assert.match(stored.pin_salt, /^[\w-]{22}$/);
+    assert.match(stored.pin_hash, /^[\w-]{43}$/);
+    assert.equal((await write(loginPath, { ...credentials, pin: "9372" })).status, 401);
+
+    const ownerSession = await session({ ...credentials, username: "Owner.Test" });
+    const runtime = await (await read("/api/runtime", ownerSession)).json();
+    assert.equal(runtime.role, "owner");
+    assert.equal(runtime.displayName, "Кирилл");
+    assert.equal(runtime.username, credentials.username);
+    assert.equal(runtime.mustChangePin, false);
+    assert.equal((await (await read(setupPath, ownerSession)).json()).canEdit, false);
+    assert.equal((await write(setupPath, credentials, ownerSession)).status, 403);
+    assert.equal((await write(setupPath, {}, ownerSession, "DELETE")).status, 403);
+    assert.equal((await read("/api/production-planning", ownerSession)).status, 200);
+    assert.equal((await mf.dispatchFetch(origin + "/owner/database-backup", { method: "HEAD", headers: ownerSession })).status, 204);
+    assert.deepEqual((await (await read("/api/auth/users", ownerSession)).json()).users, []);
+    const manager = await write("/api/auth/users", { username: "manager.test", displayName: "Тестовый менеджер" }, ownerSession);
+    assert.equal(manager.status, 201, await manager.clone().text());
+    const { user } = await manager.json();
+    const managerLogin = await write(loginPath, { username: user.username, pin: user.temporaryPin });
+    assert.equal(managerLogin.status, 200);
+    const managerCookie = { cookie: managerLogin.headers.get("set-cookie").split(";")[0] };
+    assert.equal((await write(setupPath, credentials, managerCookie)).status, 403);
+
+    const loggedOut = await write("/api/auth/logout", {}, ownerSession);
+    assert.equal(loggedOut.status, 200);
+    assert.match(loggedOut.headers.get("set-cookie") || "", /__Host-ritm_owner_session=;/);
+    assert.equal((await (await read("/api/runtime", ownerSession)).json()).authorized, false);
+    const previousSession = await session(credentials);
+    const replacement = { ...credentials, pin: "9064" };
+    assert.equal((await write(setupPath, replacement, identity)).status, 200);
+    assert.equal((await (await read("/api/runtime", previousSession)).json()).authorized, false);
+    assert.equal((await write(loginPath, credentials)).status, 401);
+
+    const attempts = await Promise.all(Array.from({ length: 8 }, async () => {
+      const response = await write(loginPath, { ...replacement, pin: "0397" });
+      return response.status;
+    }));
+    assert.equal(attempts.filter((status) => status === 401).length, 4);
+    assert.equal(attempts.filter((status) => status === 429).length, 4);
+    assert.equal((await write(loginPath, replacement)).status, 429);
+
+    await db.prepare("UPDATE ritm_owner_pin_credentials SET attempt_window_started_at=? WHERE owner_id=?")
+      .bind(Date.now() - 25 * 60 * 60 * 1000, owner).run();
+    const recovered = await session(replacement);
+    assert.equal((await write(setupPath, {}, identity, "DELETE")).status, 200);
+    assert.equal((await (await read("/api/runtime", recovered)).json()).authorized, false);
+    assert.equal((await write(loginPath, replacement)).status, 401);
+    assert.equal((await (await read("/api/runtime", identity)).json()).role, "owner");
+  } finally { await mf.dispose(); }
+});
 test('owner-only stock panel health exercises the authenticated read path without exposing credentials or making a production write',async()=>{
  const token='SYNTHETIC_HEALTH_TOKEN_0000000000000000000';let calls=0;
  const mf=new Miniflare({modules:true,scriptPath:fileURLToPath(new URL('../dist/server/index.js',import.meta.url)),compatibilityDate:'2026-08-06',d1Databases:['DB'],bindings:{...bindings,RITM_OWNER_USER_IDS:'owner-site-id',RITM_GOOGLE_READER_JSON:'{}',RITM_STOCK_ROLL_GATEWAY_URL:'https://script.google.com/macros/s/SYNTHETIC_HEALTH_00000000000/exec',RITM_STOCK_ROLL_GATEWAY_TOKEN:token},outboundService:async request=>{calls++;const body=await request.json();assert.equal(body.action,'health');assert.equal(body.token,token);assert.equal(body.entries,undefined);return Response.json({ok:true,status:'ready',token:'DO_NOT_RETURN',panelCheck:[{sheetId:7,status:'ready',article:'SYNTHETIC',quantity:32,rolls:2,printed:32,cut:0,internal:'DO_NOT_RETURN'}]});}});

@@ -1,23 +1,29 @@
 import { useEffect, useId, useRef, useState, type ChangeEvent } from "react";
 import { Download, FileSpreadsheet, Plus, RefreshCw, ScanBarcode, Upload } from "lucide-react";
-import { countLabel, dateTime, number } from "../shared/model";
+import { countLabel, dateTime, number, type Market } from "../shared/model";
 import {
   ozonArticle, ozonProductBarcodes, readOzonCargoCodes, summarizeOzonProducts,
   type OzonBatch, type OzonBatchSummary, type OzonGroup, type OzonPreview,
 } from "../shared/ozon-shipment";
 import { Button, Dialog, Empty } from "./ui";
 import { request, type Workspace } from "./useWorkspace";
+import { WbShipmentRow, type WbPairSelection } from "./WbShipmentRow";
 import "./ozon-shipments.css";
 
-const shipmentPath = "/api/ozon/shipments";
-const readBatch = (id: string, signal?: AbortSignal) =>
-  request<OzonBatch>(shipmentPath + "?id=" + encodeURIComponent(id), { signal });
-const readBatches = (signal?: AbortSignal) => request<{ batches: OzonBatchSummary[] }>(shipmentPath, { signal });
 const message = (error: unknown) => error instanceof Error ? error.message : "Операция не выполнена. Повторите запрос.";
 
-export default function OzonShipments({ workspace }: { workspace: Workspace }) {
-  const [creating, setCreating] = useState(false);
-  const [numbers, setNumbers] = useState("");
+export default function MarketplaceShipments({ workspace, market, initialNumbers = "", onPrepared }: {
+  workspace: Workspace;
+  market: Market;
+  initialNumbers?: string;
+  onPrepared: () => void;
+}) {
+  const isWb = market === "WB";
+  const name = isWb ? "WB" : "Ozon";
+  const prefix = isWb ? "wb" : "ozon";
+  const shipmentPath = `/api/${prefix}/shipments`;
+  const [creating, setCreating] = useState(Boolean(initialNumbers));
+  const [numbers, setNumbers] = useState(initialNumbers);
   const [preview, setPreview] = useState<OzonPreview | null>(null);
   const [clusters, setClusters] = useState<Record<string, string>>({});
   const [batches, setBatches] = useState<OzonBatchSummary[]>([]);
@@ -32,13 +38,13 @@ export default function OzonShipments({ workspace }: { workspace: Workspace }) {
     const abort = new AbortController();
     void (async () => {
       try {
-        const data = await readBatches(abort.signal);
+        const data = await request<{ batches: OzonBatchSummary[] }>(shipmentPath, { signal: abort.signal });
         if (abort.signal.aborted) return;
         setBatches(data.batches);
         const first = data.batches[0]?.id;
         if (first) {
           setSelectedId(first);
-          const saved = await readBatch(first, abort.signal);
+          const saved = await request<OzonBatch>(shipmentPath + "?id=" + encodeURIComponent(first), { signal: abort.signal });
           if (!abort.signal.aborted) setBatch(saved);
         }
       } catch (error) {
@@ -48,7 +54,7 @@ export default function OzonShipments({ workspace }: { workspace: Workspace }) {
       }
     })();
     return () => abort.abort();
-  }, []);
+  }, [shipmentPath]);
 
   async function run(task: () => Promise<void>) {
     setBusy(true);
@@ -58,10 +64,11 @@ export default function OzonShipments({ workspace }: { workspace: Workspace }) {
     finally { setBusy(false); }
   }
   async function load(id: string) {
-    const saved = await readBatch(id);
+    const saved = await request<OzonBatch>(shipmentPath + "?id=" + encodeURIComponent(id));
     setBatch(saved);
     setSelectedId(saved.id);
   }
+  const readBatches = () => request<{ batches: OzonBatchSummary[] }>(shipmentPath);
   async function refresh() {
     const { batches } = await readBatches();
     setBatches(batches);
@@ -73,7 +80,7 @@ export default function OzonShipments({ workspace }: { workspace: Workspace }) {
     }
   }
   async function find() {
-    const data = await request<OzonPreview>("/api/ozon/preview", {
+    const data = await request<OzonPreview>(`/api/${prefix}/preview`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ numbers }),
@@ -85,23 +92,23 @@ export default function OzonShipments({ workspace }: { workspace: Workspace }) {
   const openCount = preparedBoxes.filter((box) => box.state === "open").length;
   async function prepare() {
     if (!preview || preview.issues.length) return;
-    const result = await workspace.command("ozon.prepare", {
+    const result = await workspace.command(prefix + ".prepare", {
       boxes: preview.groups.flatMap((group) => group.boxes.map((box) => ({
-        id: box.id, proof: box.proof, cluster: clusters[group.key],
+        id: box.id, proof: box.proof, cluster: isWb ? group.cluster : clusters[group.key],
       }))),
-    }, "Состав заявок Ozon сохранён.");
+    }, `Состав заявок ${name} сохранён.`);
     setNumbers("");
     setPreview(null);
     setCreating(false);
     await load(String(result.batchId));
     setBatches((await readBatches()).batches);
   }
-  async function assign(group: OzonGroup, codes: string[]) {
+  async function savePairs(group: OzonGroup, action: string, payload: Record<string, unknown>) {
     setBusy(true);
     setError("");
     try {
-      await workspace.command("ozon.assign", {
-        dispatchId: group.dispatch.id, previousLabelId: group.labels?.id ?? null, codes,
+      await workspace.command(action, {
+        dispatchId: group.dispatch.id, previousLabelId: group.labels?.id ?? null, ...payload,
       }, "Пары коробов и грузомест сохранены.");
       try {
         await load(group.batchId);
@@ -114,16 +121,22 @@ export default function OzonShipments({ workspace }: { workspace: Workspace }) {
     }
   }
 
+  async function assignWb(group: OzonGroup, selection: WbPairSelection) {
+    if (selection.kind === "generate") await savePairs(group, "wb.generate", {});
+    else await savePairs(group, "wb.assign", { entries: selection.entries, replaceCodes: selection.replaceCodes });
+  }
+
   return (
     <div className="ozon-shipments">
       <header className="ozon-page-head">
-        <h1>Отгрузки Ozon</h1>
+        <h1>Отгрузки {name}</h1>
         <div className="ozon-actions">
           <Button className="ozon-refresh" disabled={disabled} aria-label="Обновить"
             title="Обновить" onClick={() => void run(refresh)}><RefreshCw size={17} /></Button>
-          <Button disabled={disabled || !batch} onClick={() => void run(async () => {
+          {isWb ? <Button disabled={disabled} onClick={onPrepared}>К подготовленным</Button>
+            : <Button disabled={disabled || !batch} onClick={() => void run(async () => {
             if (batch) await (await import("./exports/ozon-excel")).downloadOzonControl(batch);
-          })}><Download size={18} />Контрольный Excel</Button>
+            })}><Download size={18} />Контрольный Excel</Button>}
           <Button primary disabled={disabled} onClick={() => {
             setError("");
             setCreating(true);
@@ -145,7 +158,7 @@ export default function OzonShipments({ workspace }: { workspace: Workspace }) {
             rows={3}
             value={numbers}
             disabled={disabled}
-            placeholder={"1мос260\n1мос258"}
+            placeholder={isWb ? "1щер4\n1щер5" : "1мос260\n1мос258"}
             onChange={(event) => { setNumbers(event.target.value); setPreview(null); }}
           />
         </label>
@@ -159,24 +172,24 @@ export default function OzonShipments({ workspace }: { workspace: Workspace }) {
             {preview.groups.map((group) => (
               <div className="ozon-preview-group" key={group.key}>
                 <div>
-                  <strong>{group.city} · магазин {group.store}</strong>
+                  <strong>{isWb ? group.cluster : group.city} · магазин {group.store}</strong>
                   <p className="muted">{countLabel(group.boxes.length, ["короб", "короба", "коробов"])} · {number(group.boxes.reduce((qty, box) => qty + box.qty, 0))} шт.</p>
                   <details>
                     <summary>Номера коробов</summary>
                     <p>{group.boxes.map((box) => box.label + (box.state === "open" ? " (открыт)" : "")).join(", ")}</p>
                   </details>
                 </div>
-                <label className="ozon-field">
+                {!isWb && <label className="ozon-field">
                   Кластер Ozon
                   <input className="field" value={clusters[group.key] ?? ""} maxLength={120} disabled={disabled}
                     onChange={(event) => setClusters({ ...clusters, [group.key]: event.target.value })} />
-                </label>
+                </label>}
               </div>
             ))}
             {!!preparedBoxes.length && (
               <div className="ozon-actions">
                 <Button primary disabled={disabled || !!preview.issues.length ||
-                  preview.groups.some((group) => !clusters[group.key]?.trim())}
+                  (!isWb && preview.groups.some((group) => !clusters[group.key]?.trim()))}
                   onClick={() => void run(prepare)}>Подготовить состав</Button>
                 {openCount > 0 && <small className="muted">При подготовке будут закрыты открытые короба из списка · {openCount}</small>}
               </div>
@@ -186,34 +199,40 @@ export default function OzonShipments({ workspace }: { workspace: Workspace }) {
       </Dialog>}
 
       {!creating && error && <p className="field-error" role="alert">{error}</p>}
-      {loading ? <p role="status">Загружаем отгрузки Ozon…</p> : batch ? (
+      {loading ? <p role="status">Загружаем отгрузки {name}…</p> : batch ? (
         <>
-          <OzonBatchOverview batch={batch} batches={batches} selectedId={selectedId}
+          <OzonBatchOverview batch={batch} batches={batches} selectedId={selectedId} isWb={isWb}
             disabled={disabled} onSelect={(id) => void run(() => load(id))} />
-          <div className="table-scroll ozon-table-wrap" role="region" aria-label="Отгрузки по кластерам" tabIndex={0}>
+          <div className="table-scroll ozon-table-wrap" role="region" aria-label={isWb ? "Отгрузки WB по направлениям" : "Отгрузки по кластерам"} tabIndex={0}>
             <table className="ozon-table">
               <thead>
                 <tr>
-                  <th scope="col">Кластер</th>
+                  <th scope="col">{isWb ? "Назначение" : "Кластер"}</th>
                   <th scope="col">Магазин</th>
                   <th scope="col">Короба / шт.</th>
                   <th scope="col">
-                    <span className="ozon-step-title"><Download size={18} />1. Состав заявки</span>
-                    <small>Excel для Ozon</small>
+                    <span className="ozon-step-title"><Download size={18} />{isWb ? "1. Товары и количество" : "1. Состав заявки"}</span>
+                    <small>Excel для {name}</small>
                   </th>
                   <th scope="col">
-                    <span className="ozon-step-title"><Upload size={18} />2. Состав грузомест</span>
-                    <small>После создания грузомест в Ozon</small>
+                    <span className="ozon-step-title"><Upload size={18} />{isWb ? "2. Состав коробов" : "2. Состав грузомест"}</span>
+                    <small>{isWb ? "Свои коды или файл WB" : "После создания грузомест в Ozon"}</small>
                   </th>
                 </tr>
               </thead>
               <tbody>
-                {batch.groups.map((group) => (
+                {batch.groups.map((group) => isWb ? (
+                  <WbShipmentRow key={group.dispatch.id} group={group} disabled={disabled}
+                    onSave={(selection) => assignWb(group, selection)}
+                    onDownload={(kind) => run(async () => {
+                      await (await import("./exports/wb-excel")).downloadWbGroup(group, kind);
+                    })} />
+                ) : (
                   <OzonShipmentRow
                     key={group.dispatch.id + (group.labels?.id ?? "")}
                     group={group}
                     disabled={disabled}
-                    onAssign={(codes) => assign(group, codes)}
+                    onAssign={(codes) => savePairs(group, "ozon.assign", { codes })}
                     onDownload={(kind) => run(async () => {
                       await (await import("./exports/ozon-excel")).downloadOzonGroup(group, kind);
                     })}
@@ -223,16 +242,17 @@ export default function OzonShipments({ workspace }: { workspace: Workspace }) {
             </table>
           </div>
         </>
-      ) : !error ? <Empty title="Отгрузок Ozon пока нет">Подготовьте состав по номерам коробов.</Empty> : null}
+      ) : !error ? <Empty title={`Отгрузок ${name} пока нет`}>Подготовьте состав по номерам коробов.</Empty> : null}
     </div>
   );
 }
 
-function OzonBatchOverview({ batch, batches, selectedId, disabled, onSelect }: {
+function OzonBatchOverview({ batch, batches, selectedId, disabled, isWb, onSelect }: {
   batch: OzonBatch;
   batches: OzonBatchSummary[];
   selectedId: string;
   disabled: boolean;
+  isWb: boolean;
   onSelect: (id: string) => void;
 }) {
   const boxes = batch.groups.reduce((total, group) => total + group.boxes.length, 0);
@@ -248,11 +268,11 @@ function OzonBatchOverview({ batch, batches, selectedId, disabled, onSelect }: {
           ))}
         </select>
       </label>
-      <div className="ozon-metric"><span>Кластеры</span><strong>{number(batch.groups.length)}</strong></div>
+      <div className="ozon-metric"><span>{isWb ? "Направления" : "Кластеры"}</span><strong>{number(batch.groups.length)}</strong></div>
       <div className="ozon-metric"><span>Короба</span><strong>{number(boxes)}</strong></div>
       <div className="ozon-metric"><span>Изделия</span><strong>{number(items)}</strong></div>
       <div className="ozon-metric ozon-metric-progress">
-        <span>ШК грузомест</span>
+        <span>{isWb ? "Коды коробов" : "ШК грузомест"}</span>
         <div>
           <strong>{number(labels)} из {number(boxes)}</strong>
           <progress aria-label="Загружено штрихкодов грузомест" value={labels} max={boxes} />

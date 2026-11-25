@@ -825,6 +825,33 @@ test("append from box targets the same common supply and keeps the other departm
   assert.equal(f.store.meta("productionSupplies")[0].id, supply.id);
 });
 
+test("the hosted catalog is the only source for append previews and confirmation", async () => {
+  const f = fixture();
+  const input = { ...payload(), name: "OZON Проверка (2 магазин)", lines: [{ article: "ROLL", quantity: 10 }] };
+  const queries = [];
+  f.service.catalog = async () => { throw new Error("legacy catalog must never be read"); };
+  f.service.createCatalog = async (market, articles) => {
+    queries.push([market, articles]);
+    return [
+      { article: "ROLL", primary: true, store: "2", machine: "2-GO", printExtension: "CBI", rollMultiplicity: "10" },
+      { article: "ADD", primary: true, store: "2", machine: "DTF", printExtension: "D" },
+    ].filter(entry => articles.includes(entry.article));
+  };
+  const original = await f.service.preview(input);
+  const created = await f.service.execute({ ...input, previewId: original.id });
+  assert.equal(created.status, "verified");
+  const append = { ...input, operationId: randomUUID(), action: "append", department: "roll", sheetId: created.sheetId,
+    lines: [{ article: "ADD", quantity: 3 }, { article: "MISSING", quantity: 4 }] };
+  const preview = await f.service.preview(append);
+  assert.equal(preview.lines[0].department, "box");
+  assert.match(preview.lines[1].issue, /не найден.*справочнике Assembly/);
+  const result = await f.service.execute({ ...append, previewId: preview.id });
+  assert.equal(result.status, "verified");
+  assert.deepEqual(f.service.operations().find(op => op.id === append.operationId).steps[1].lines,
+    [{ article: "ADD", quantity: 3, extension: "D", catalogMachine: "DTF", store: "2" }]);
+  assert.deepEqual(queries.map(([market]) => market), ["OZON", "OZON", "OZON", "OZON"]);
+});
+
 test("a repeated article already present in another department is rejected before append", async () => {
   const f = fixture(),
     p = payload(),

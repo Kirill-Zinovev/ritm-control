@@ -3,6 +3,8 @@ import { RitmBackdrop } from "./RitmBackdrop";
 import { clearManagerSession, saveManagerSession } from "./managerSession";
 import { Button, Field, Modal, Notice } from "./ui";
 
+export const ritmChatGPTSignInPath = "/signin-with-chatgpt?return_to=%2F%3Fpage%3Dsupplies";
+
 type Runtime = {
   mode: "cloud";
   authenticated: boolean;
@@ -117,6 +119,7 @@ function LoginCard({ onSuccess }: { onSuccess: () => Promise<void> }) {
     try {
       const result = await postAuth("/api/auth/login", { username, pin });
       if (typeof result.sessionToken === "string") saveManagerSession(result.sessionToken);
+      else clearManagerSession();
       await onSuccess();
     }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Не удалось войти."); }
@@ -126,14 +129,14 @@ function LoginCard({ onSuccess }: { onSuccess: () => Promise<void> }) {
     <span className="ritm-auth-mark">RITM<span>/</span></span>
     <p className="ritm-auth-eyebrow">Рабочее пространство</p>
     <h1>Вход в RITM</h1>
-    <p className="ritm-auth-copy">Введите логин и PIN, выданные руководителем. ChatGPT для входа не нужен.</p>
+    <p className="ritm-auth-copy">PIN владельца состоит из 4 цифр, PIN менеджера — из 8.</p>
     <form onSubmit={submit}>
       <Field label="Логин"><input autoComplete="username" autoFocus value={username} onChange={(e) => setUsername(e.target.value)} maxLength={40} /></Field>
-      <Field label="PIN из 8 цифр"><input type="password" inputMode="numeric" autoComplete="current-password" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 8))} maxLength={8} pattern="\d{8}" /></Field>
+      <Field label="PIN"><input type="password" inputMode="numeric" autoComplete="current-password" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 8))} maxLength={8} pattern="[0-9]{4}|[0-9]{8}" /></Field>
       {error && <Notice tone="warning">{error}</Notice>}
-      <Button kind="primary" type="submit" disabled={busy || username.trim().length < 3 || pin.length !== 8}>{busy ? "Проверяю…" : "Войти"}</Button>
+      <Button kind="primary" type="submit" disabled={busy || username.trim().length < 3 || (pin.length !== 4 && pin.length !== 8)}>{busy ? "Проверяю…" : "Войти"}</Button>
     </form>
-    <small className="ritm-auth-footnote">Если PIN не подходит, попросите руководителя сбросить его.</small>
+    <small className="ritm-auth-footnote">Владелец может <a href={ritmChatGPTSignInPath} target="_top">войти через ChatGPT</a> и изменить PIN.</small>
   </section>;
 }
 

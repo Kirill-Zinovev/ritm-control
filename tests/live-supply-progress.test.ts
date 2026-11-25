@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import type { LiveOrder } from "../src/livePrinting";
 import {
   assemblyAreaTotal,
   assemblyPackingTotal,
@@ -11,16 +12,36 @@ import {
   rollCut,
   rollPrinted,
   rollPrintRemaining,
+  supplyPrinted,
+  supplyPrintRemaining,
 } from "../src/liveSupplyProgress";
+
+test("partial Box printing counts checked units and confirmed good output in position units", () => {
+  const row: LiveOrder = {
+    uid: "box", row: 5, sheetId: 1, sheetName: "WB", article: "SKU",
+    sourceId: "box-printing", quantity: 10, plannedArea: 1,
+    sourceMachine: "XEROX", sheetsInProduct: 3, multiplicity: 4,
+    printProgress: 0, remainingPrint: 10,
+    planningPhysicalUnits: true, planningPrinted: 7,
+  };
+  assert.ok(Math.abs(supplyPrinted(row)! - 28 / 3) < 1e-8);
+  assert.ok(Math.abs(supplyPrintRemaining(row)! - 2 / 3) < 1e-8);
+  assert.equal(supplyPrinted({ ...row, sourceMachine: "УФ планшет" }), 7);
+  assert.equal(supplyPrinted({ ...row, multiplicity: null }), null);
+  assert.equal(supplyPrinted({ ...row, planningPrinted: 50 }), null);
+  assert.equal(supplyPrinted({ ...row, printProgress: 10, planningPrinted: 2 }), 10);
+  assert.equal(supplyPrinted({ ...row, planningPrinted: null }), 0);
+  assert.equal(supplyPrinted({ ...row, sourceId: "roll-printing", printProgress: 3 }), 3);
+});
 
 test("Assembly supply totals include both departments and keep unknown rows visible", () => {
   const roll = [
-    { plannedArea: 449.47, areaKnown: true, packed: 0 },
-    { plannedArea: 0, areaKnown: false, packed: 125 },
+    { plannedArea: 449.47, areaKnown: true, quantity: 100, packed: 0 },
+    { plannedArea: 0, areaKnown: false, quantity: 200, packed: 125 },
   ];
   const box = [
-    { plannedArea: 343.73, areaKnown: true, packed: null },
-    { plannedArea: 0, areaKnown: false, packed: 75 },
+    { plannedArea: 343.73, areaKnown: true, quantity: 50, packed: null },
+    { plannedArea: 0, areaKnown: false, quantity: 100, packed: 75 },
   ];
   assert.deepEqual(assemblyAreaTotal([...roll, ...box], 1), {
     total: 793.2,
@@ -28,9 +49,27 @@ test("Assembly supply totals include both departments and keep unknown rows visi
     missing: 3,
   });
   assert.deepEqual(assemblyPackingTotal([...roll, ...box], 1), {
+    plan: 450,
     total: 200,
+    recorded: 200,
     observed: 3,
+    known: 3,
     missing: 2,
+  });
+});
+
+test("packing keeps the confirmed minimum and counts excess against each line", () => {
+  assert.deepEqual(assemblyPackingTotal([
+    { quantity: 10, packed: null, packedConfirmed: 14 },
+    { quantity: 7, packed: 3 },
+    { quantity: 2, packed: null, packedConfirmed: 0 },
+  ]), {
+    plan: 19,
+    total: 13,
+    recorded: 17,
+    observed: 2,
+    known: 1,
+    missing: 1,
   });
 });
 

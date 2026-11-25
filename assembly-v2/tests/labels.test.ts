@@ -3,12 +3,15 @@ import assert from "node:assert/strict";
 import { labelsApi } from "../server/labels-api";
 import { catalogList } from "../server/catalog-store";
 import { api } from "../server/api";
-import type { ManagedProduct } from "../shared/catalog-editor";
+import { productFields, type ManagedProduct } from "../shared/catalog-editor";
 import { labelInputKey } from "../shared/product-label-fields";
 import { openDatabase } from "../server/local-db";
-import type { FileStore } from "../server/catalog-api";
+import { catalogApi, type FileStore } from "../server/catalog-api";
 import { digest } from "../shared/catalog";
 import { labelArticle, type LabelEntry, type LabelManifest, type PrintableLabel } from "../shared/labels";
+import type { Snapshot } from "../shared/model";
+import type { PositionSearchPage } from "../shared/position-search";
+import type { RitmSupply } from "../shared/ritm";
 import { validateLabelPrint } from "../src/label-print";
 import { bootstrap, fixture } from "./fixtures";
 
@@ -39,7 +42,7 @@ async function context(t: TestContext) {
     return { id, data, manifest, chunk: () => call(`/api/labels/chunk?import=${encodeURIComponent(id)}&part=0`, "PUT", data), activate: () => call("/api/labels/activate", "POST", JSON.stringify({ id })) };
   }
   const upload = () => call("/api/labels/file?sha256=" + sha, "PUT", png.buffer);
-  return { ...f, db, objects, call, entry, stage, upload };
+  return { ...f, db, objects, files, call, entry, stage, upload };
 }
 
 test("печать использует сохранённый оригинал; неполная база не включается, повтор не меняет работу или короба", async t => {
@@ -129,6 +132,77 @@ test("превью карточки и печать позиции выбира�
     const { items } = await response.json() as { items: PrintableLabel[] };
     assert.equal(items[0].imageUrl, "/api/catalog/media?sha256=" + own);
   }
+});
+
+test("сборщик находит позицию с неподтверждённым магазином и сразу видит сохранённую этикетку её маркетплейса", async t => {
+  const c = await context(t);
+  const importId = "live-label-catalog";
+  c.db.sqlite.prepare("insert into av2_catalog_imports values(?,?,?,?,?)").run(importId, "{}", "active", "now", "test");
+  c.db.sqlite.prepare("update av2_meta set active_catalog_id=? where id=1").run(importId);
+  const shipmentId = "RITM-ROLL-7706", sku = "VD0038.A7706";
+  const source: RitmSupply = {
+    shipmentId, title: "OZON СПБ 2-й магазин", market: "OZON", locked: false,
+    positions: [["current", sku], ["removed", sku], ["other", "OTHER-ACTIVE"]].map(([uid, article]) => ({
+      positionId: `${shipmentId}|uid:${uid}|${article}`, sku: article, name: article, quantity: 5,
+      sourceId: "roll-printing", sheetId: 45, row: 2, rawUid: uid, store: "", storeStatus: "missing",
+    })),
+  };
+  const sync = async (feed: RitmSupply, sourceRevision: number) => c.cmd("ritm.import", {
+    source: feed, sourceRevision, fingerprint: await digest(JSON.stringify(feed)),
+  });
+  await sync(source, 1);
+  const [position] = await c.db.store.all<{ id: string; supplyId: string }>(
+    "select id,supply_id from av2_positions where external_id=?", [source.positions[0].positionId],
+  );
+  await c.cmd("work.save", { positionId: position.id, employeeId: c.employee.id, operation: "packing", qty: 5 });
+  const product = {
+    ...Object.fromEntries(productFields.map(([key]) => [key, ""])),
+    sku: sku + "(OZ)", market: "OZON", store: "2", aliases: [sku],
+    name: "Товар из справочника", kind: "Наклейки", barcode: "OZN2789046032",
+    unitsPerBox: 108, boxType: "О",
+  };
+  const save = (product: Record<string, unknown>, revision: number) => c.cmd("catalog.save", {
+    importId, product, revision, create: revision === 0,
+  });
+  await save(product, 0);
+  await save({ ...product, sku, market: "WB", barcode: "2037000000001" }, 0);
+  await sync({ ...source, positions: source.positions.filter(p => p.rawUid !== "removed") }, 2);
+  const readSearch = await api(new Request(`${origin}/api/positions/search?q=${sku}&supply=${c.supply.id}`), c.db, "collector", "collector");
+  assert.equal(readSearch.status, 200);
+  const search = await readSearch.json() as PositionSearchPage;
+  assert.deepEqual(search.items.map(({ id, supplyId, packing, storeNeedsReview }) =>
+    ({ id, supplyId, packing, storeNeedsReview })), [{ ...position, packing: 5, storeNeedsReview: true }]);
+  const labelForPosition = async () => {
+    const response = await c.call("/api/labels?position=" + position.id, "GET", undefined, "collector");
+    assert.equal(response.status, 200);
+    return ((await response.json()) as { items: PrintableLabel[] }).items[0];
+  };
+  assert.equal((await labelForPosition()).imageUrl, undefined);
+
+  const upload = await catalogApi(new Request(origin + "/api/catalog/media", { method: "POST", body: png.buffer }),
+    c.db.store, c.db, "owner", c.files);
+  assert.equal(upload.status, 200);
+  const old = await c.db.snapshot(position.supplyId) as Snapshot;
+  await save({ ...product, name: "Обновлённое название", labelSha: sha }, 1);
+  const label = await labelForPosition();
+  assert.equal(label.imageUrl, "/api/catalog/media?sha256=" + sha);
+  assert.equal(label.status, "found");
+  assert.equal(label.name, "Обновлённое название");
+  const image = await catalogApi(new Request(origin + label.imageUrl), c.db.store, c.db, "collector", c.files);
+  assert.deepEqual(new Uint8Array(await image.arrayBuffer()), png);
+
+  const state = await c.db.snapshot(position.supplyId) as Snapshot;
+  const updated = state.positions.find(p => p.id === position.id);
+  assert.ok(state.revision > old.revision);
+  assert.equal(updated?.name, label.name);
+  assert.equal(updated?.catalog?.labelSha, sha);
+  assert.equal(updated?.catalog?.kind, product.kind);
+  assert.equal(updated?.catalogEntryId, null);
+  assert.equal(updated?.sourceActive, false);
+  assert.equal(updated?.ready, false);
+  assert.equal(updated?.packing, 5);
+  assert.equal(state.supplies.find(s => s.id === position.supplyId)?.store, "Не подтверждён");
+  assert.deepEqual(state.works, old.works);
 });
 
 test("фильтр без этикеток проверяет весь справочник и обновляется после сохранения файла", async t => {

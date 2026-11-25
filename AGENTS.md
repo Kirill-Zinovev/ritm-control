@@ -1,5 +1,11 @@
 # Prototype Instructions
 
+## Создание поставки (2026-11-23)
+
+В форме создания используем выбранный макет со сроками печати и порезки, упаковки и отгрузки в одной линии. На проверке в сводке «К запуску» показываем иконки рулона и короба. Для пропуска сразу видны конкретная причина и способ исправления. Повторная проверка читает состав по текущему справочнику, запись выполняется через отдельное явное подтверждение.
+
+В форме создания сроки вводятся по МСК независимо от названия поставки. Над шкалой показываем заголовок «Сроки поставки».
+
 17 November photos: the signed Assembly v2 feed includes current per-article photoUrl from the existing printing snapshot independently of marketplace catalog matching. Export only approved public WB image hosts and image paths. This cosmetic metadata cannot change source identities, norms, quantities, writer leases or old Assembly. No extra Sheets reads from the feed.
 
 17 November: NEW Assembly stock work also includes machine/manual cutting by their actual employees. Signed warehouse-work cutting events reference an actual taskId rather than a finished receiptId; validate operation, identity and frozen norm/coefficient, count each once in employee output and keep every stock event outside source-supply progress. Legacy Assembly and Sheets remain unchanged.

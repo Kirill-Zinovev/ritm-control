@@ -2,6 +2,7 @@ import { RefreshCw, ShieldCheck, PackageCheck, ArrowRightLeft } from "lucide-rea
 import { useState, type ChangeEvent, type FormEvent } from "react";
 import type { SupplyImport } from "../shared/model";
 import { dateTime, number } from "../shared/model";
+import { unconfirmedStoreArticle } from "../shared/ritm";
 import type { Workspace } from "./useWorkspace";
 import { Button, Field } from "./ui";
 import { WorkplaceLink } from "./Access";
@@ -58,6 +59,17 @@ export function Setup({ workspace: w }: { workspace: Workspace }) {
       setData(null);
       setFile("");
       setError("");
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+  async function confirmPositionStore(shipmentId: string, sku: string) {
+    try {
+      await w.command("quality.confirmPositionStore",
+        {shipmentId, sku, reason: "Привязка позиции к подтверждённому магазину из справочника"},
+        `Магазин для ${sku} подтверждён. Позиция снова доступна для сборки.`);
+      setError("");
+      void w.syncFromRitm(true);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -155,15 +167,19 @@ export function Setup({ workspace: w }: { workspace: Workspace }) {
                   : "Обновить из РИТМ"}
               </Button>
               {w.ritm.issues.length ? (
-                <details>
+                <details id="ritm-issues" open={location.hash === "#ritm-issues" || undefined}>
                   <summary>Требуют проверки · {w.ritm.issues.length}</summary>
                   <ul>
-                    {w.ritm.issues.slice(0, 100).map((i, n) => (
-                      <li key={n}>
+                    {w.ritm.issues.slice(0, 100).map((i, n) => {
+                      const sku = unconfirmedStoreArticle(i.message);
+                      return <li key={n}>
                         <strong>{i.title}</strong>
                         <p>{i.message}</p>
-                      </li>
-                    ))}
+                        {sku && <Button disabled={w.busy} onClick={() => void confirmPositionStore(i.shipmentId, sku)}>
+                          Подтвердить магазин для {sku}
+                        </Button>}
+                      </li>;
+                    })}
                   </ul>
                   {w.ritm.issues.length > 100 ? (
                     <p className="muted">Показаны первые 100 замечаний.</p>

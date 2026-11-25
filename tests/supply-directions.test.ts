@@ -86,3 +86,29 @@ test("an incomplete city shows a rounded-down packing bound without declaring re
   assert.equal(progress.lowerPercent, 41);
   assert.equal(directionJobReady(job("a", "OZON Москва", orders)), false);
 });
+
+test("direction printing sums both departments and remains independent of assembly work", () => {
+  const orders = [
+    order({ sourceId: "roll-printing", quantity: 900, remainingPrint: 40, packed: 0, assemblyMachineCut: 0 }),
+    order({ uid: "box", sourceId: "box-printing", quantity: 1040, printProgress: 1040, packed: 0, assemblyMachineCut: 0 }),
+  ];
+  const printed = directionProgress(orders, "printed");
+  assert.equal(printed.plan, 1940);
+  assert.equal(printed.done, 1900);
+  assert.equal(printed.percent, 98);
+  assert.equal(directionProgress(orders, "assemblyMachineCut").done, 0);
+  assert.equal(directionJobReady(job("wb", "WB ДАЧА", orders)), false);
+});
+
+test("missing print facts stay unknown and a print run below plan cannot show 100 percent", () => {
+  const orders = [
+    order({ quantity: 1000, printProgress: 999 }),
+    order({ uid: "unknown", quantity: 10, printProgress: null, packed: 10 }),
+  ];
+  const printed = directionProgress(orders, "printed");
+  assert.equal(printed.done, 999);
+  assert.equal(printed.known, 1);
+  assert.equal(printed.percent, null);
+  assert.equal(printed.lowerPercent, 98);
+  assert.equal(directionProgress([orders[0]], "printed").percent, 99);
+});

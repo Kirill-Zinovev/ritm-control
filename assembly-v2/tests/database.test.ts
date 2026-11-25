@@ -5,6 +5,7 @@ import type { Snapshot, ExportSnapshot } from "../shared/model";
 import { bootstrap, fixture } from "./fixtures";
 import { api } from "../server/api";
 import { createDatabase } from "../server/database";
+import { cartonMergeFingerprint } from "../shared/carton-merge";
 async function context() {
   const db = await openDatabase();
   const f = await bootstrap(db);
@@ -83,6 +84,65 @@ test("вместимость микса считается долями норм
     c.cmd("allocation.add", { positionId: c.a.id, cartonId: box, qty: 1 }),
     /свободное место/,
   );
+});
+test("подтверждение укладки сохраняет полный микс сверх нормы один раз", async (t) => {
+  const c = await context();
+  t.after(() => c.db.sqlite.close());
+  await c.pack(50);
+  await c.pack(125, c.b.id);
+  const { cartonId } = await c.cmd("allocation.place", { positionId: c.a.id, qty: 50, newCarton: true });
+  const before = await c.snapshot();
+  const payload = { cartonId, positionId: c.b.id, qty: 120 };
+  await assert.rejects(c.cmd("allocation.place", payload), /свободное место/);
+  assert.throws(() => c.db.sqlite.prepare(`insert into av2_allocations
+    (id,carton_id,position_id,qty,units_per_box,created_at,actor) values(?,?,?,?,?,?,?)`)
+    .run(crypto.randomUUID(), String(cartonId), c.b.id, 120, 200, "now", "test-owner"), /ASSEMBLY_CARTON_FULL/);
+
+  const confirmed = { ...payload, fitConfirmation: {
+    cartonFingerprint: await cartonMergeFingerprint(before.cartons[0]), shipmentQty: 120, unitsPerBox: 200,
+  } };
+  const key = crypto.randomUUID();
+  const saved = await c.cmd("allocation.place", confirmed, key);
+  assert.equal(saved.shipmentQty, 120);
+  assert.equal(saved.warehouseQty, 0);
+  assert.deepEqual(await c.cmd("allocation.place", confirmed, key), saved);
+
+  const after = await c.snapshot();
+  assert.equal(after.cartons[0].qty, 170);
+  assert.equal(after.cartons[0].fill, 1.1);
+  assert.deepEqual(after.cartons[0].items.map(item => [item.qty, item.unitsPerBox]).sort(), [[120, 200], [50, 100]]);
+  assert.deepEqual(after.works, before.works);
+  assert.equal(c.db.sqlite.prepare("select count(*) n from av2_quality_repairs where kind='allocation.fit-confirmed'").get()?.n, 1);
+  await c.close(String(cartonId));
+  assert.equal((await c.snapshot()).cartons[0].state, "closed");
+});
+test("подтверждение содержит состав короба и устаревает после параллельной укладки", async (t) => {
+  const c = await context();
+  t.after(() => c.db.sqlite.close());
+  await c.pack(250);
+  const cartonId = await c.box();
+  const fitConfirmation = {
+    cartonFingerprint: await cartonMergeFingerprint((await c.snapshot()).cartons[0]),
+    shipmentQty: 110, unitsPerBox: 100,
+  };
+  const payload = { cartonId, positionId: c.a.id, qty: 110, fitConfirmation };
+  const saves = await Promise.allSettled([c.cmd("allocation.place", payload), c.cmd("allocation.place", payload)]);
+  assert.equal(saves.filter(save => save.status === "fulfilled").length, 1);
+  const rejected = saves.find(save => save.status === "rejected");
+  assert.match(String(rejected?.reason), /Состав короба, количество или норма изменились/);
+  assert.equal((await c.snapshot()).cartons[0].qty, 110);
+});
+test("новый короб сверх нормы создаётся только с точным подтверждением количества и нормы", async (t) => {
+  const c = await context();
+  t.after(() => c.db.sqlite.close());
+  await c.pack(150);
+  const placement = { positionId: c.a.id, qty: 110, newCarton: true };
+  const fitConfirmation = { cartonFingerprint: null, shipmentQty: 110, unitsPerBox: 100 };
+  await assert.rejects(c.cmd("allocation.place", placement), /свободное место/);
+  await assert.rejects(c.cmd("allocation.place", { ...placement, fitConfirmation: { ...fitConfirmation, unitsPerBox: 200 } }), /норма изменились/);
+  assert.equal((await c.snapshot()).cartons.length, 0);
+  await c.cmd("allocation.place", { ...placement, fitConfirmation });
+  assert.equal((await c.snapshot()).cartons[0].qty, 110);
 });
 test("два сборщика не могут одновременно распределить последний остаток", async (t) => {
   const c = await context();

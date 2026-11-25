@@ -1,6 +1,7 @@
 import { CatalogEditor } from "./CatalogEditor";
+import { catalogKey } from "../shared/catalog";
 import type { ManagedDetail, ManagedProduct } from "../shared/catalog-editor";
-import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
 import type {
   CatalogBundle,
   CatalogDetail,
@@ -51,6 +52,12 @@ const labels: Record<string, string> = {
 };
 export function Catalog({ workspace: w }: { workspace: Workspace }) {
   const initial = new URLSearchParams(location.search);
+  const repairWorkIds = (initial.get("catalog_norm_work") ?? "").split(",")
+    .filter(id => /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)).slice(0, 50);
+  const normRequest = repairWorkIds.length ? {
+    workIds: repairWorkIds, article: catalogKey(initial.get("catalog_q") ?? ""),
+    market: initial.get("catalog_market"), store: initial.get("catalog_store"),
+  } : undefined;
   const [query, setQuery] = useState(initial.get("catalog_q") ?? "");
   const [market, setMarket] = useState(initial.get("catalog_market") ?? "");
   const [store, setStore] = useState(initial.get("catalog_store") ?? "");
@@ -77,14 +84,25 @@ export function Catalog({ workspace: w }: { workspace: Workspace }) {
     if (!editor || !matchMedia("(max-width: 960px)").matches) return;
     catalogWorkspace.current?.querySelector(".catalog-editor")?.scrollIntoView({ block: "start" });
   }, [editor]);
-  async function openEditor(item:CatalogListItem) {
+  const openEntry = useCallback(async (params: URLSearchParams) => {
     editorRequest.current?.abort();
     const controller=new AbortController();editorRequest.current=controller;
     setOpening(true);setError('');
-    try {const product=await catalogRequest<ManagedDetail>(`/api/catalog/entry?import=${item.importId}&id=${encodeURIComponent(item.id)}`,undefined,controller.signal);if(!controller.signal.aborted)setEditor(product);}
+    try {const product=await catalogRequest<ManagedDetail>(`/api/catalog/entry?${params}`,undefined,controller.signal);if(!controller.signal.aborted)setEditor(product);}
     catch(e){if(!controller.signal.aborted)setError((e as Error).message);}
     finally{if(!controller.signal.aborted)setOpening(false);}
+  }, []);
+  function openEditor(item: CatalogListItem) {
+    return openEntry(new URLSearchParams({ import: item.importId, id: item.id }));
   }
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const sku = params.get("catalog_q");
+    const market = params.get("catalog_market");
+    if (params.get("catalog_open") === "1" && sku && market) {
+      void openEntry(new URLSearchParams({ sku, market, store: params.get("catalog_store") ?? "" }));
+    }
+  }, [openEntry]);
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
@@ -353,13 +371,16 @@ export function Catalog({ workspace: w }: { workspace: Workspace }) {
         ) : null}
       </div>
       </div>
-      {editor && data?.active ? <CatalogEditor key={activeCard?.id ?? (initialDraft ? "wb-draft" : "new")} inline item={activeCard}
+      {editor && data?.active ? <CatalogEditor key={activeCard?.id ?? (initialDraft ? `draft:${initialDraft.market}:${initialDraft.sku}` : "new")} inline item={activeCard}
         initialDraft={initialDraft} importId={data.active.id} workspace={w}
+        normRequest={!initialDraft ? normRequest : undefined}
+        normFocus={initial.get("catalog_focus") === "kind" ? "kind" : undefined}
         onOpenExisting={setEditor} onClose={()=>{editorRequest.current?.abort();setOpening(false);setEditor(null)}}
-        onSaved={nextDraft=>{
+        onSaved={(nextDraft, workNotice)=>{
           setEditor(nextDraft ? {draft:nextDraft} : null);
           setVersion(v=>v+1);
-          setNotice(nextDraft ? "Карточка Ozon сохранена. Введите штрихкод WB." : "Карточка сохранена. Данные сборки обновлены; выработка сохранена.");
+          setNotice(workNotice?.pending ? "" : workNotice?.text || (nextDraft ? `Открыт черновик для ${nextDraft.market === "OZON" ? "Ozon" : "WB"}. Введите штрихкод этого маркетплейса.` : "Карточка сохранена. Данные сборки обновлены."));
+          if (workNotice?.pending) setError(workNotice.text);
           void w.refresh();
         }}/>:null}
       </div>

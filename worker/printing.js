@@ -1011,6 +1011,10 @@ export function assignWorkloadDetails(orders, catalog, photos = null, {preferCat
   }
   for (const order of orders) {
     order.catalogUnitsPerBox = null;
+    if (preferCatalog) {
+      order.productName = "";
+      order.photoUrl = "";
+    }
     const articleKey = normalizeCatalogArticle(order.article);
     const entries = indices.get(marketplaceForSupply(order.sheetName))?.get(articleKey);
     if (entries?.length) {
@@ -1045,7 +1049,7 @@ export function assignWorkloadDetails(orders, catalog, photos = null, {preferCat
     // a store, and missing marketplace catalog rows must not suppress a photo.
     const sourcePhoto = (photoIndex.get(articleKey) || []).map(photoUrlFromSourceRow).find(Boolean) || "";
     const catalogPhoto = entries?.map(entry => entry.photoUrl).find(Boolean) || "";
-    if (preferCatalog && catalogPhoto) order.photoUrl = catalogPhoto;
+    if (preferCatalog) order.photoUrl = catalogPhoto;
     else if (sourcePhoto) order.photoUrl = sourcePhoto;
     else if (!order.photoUrl) order.photoUrl = catalogPhoto;
   }

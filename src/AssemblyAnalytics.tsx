@@ -1,7 +1,12 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { sourceCoefficientSum, groupWorkEvents } from "./assemblyCoefficient";
+import { AssemblyNormIssues, assemblyNormReason, missingAssemblyCoefficient } from "./AssemblyNormIssues";
 import {
   Activity,
+  ArrowDown,
+  ArrowDownUp,
+  ArrowLeft,
+  ArrowUp,
   BookOpen,
   CalendarDays,
   Clock3,
@@ -34,6 +39,20 @@ type SortKey =
   | "date";
 type DetailTab = "summary" | "history" | "chart" | "norms";
 type OperationFilter = "all" | "machine" | "manual" | "packing";
+
+const teamColumns: {
+  key: SortKey;
+  label: string;
+  Icon?: typeof Users;
+  tone?: string;
+}[] = [
+  { key: "employee", label: "Сотрудник" },
+  { key: "machineCut", label: "Резка на станке", Icon: Scissors, tone: "is-green" },
+  { key: "manualCut", label: "Ручная резка", Icon: Hand, tone: "is-violet" },
+  { key: "packed", label: "Упаковка", Icon: Package, tone: "is-indigo" },
+  { key: "coefficient", label: "Общий кэф" },
+  { key: "date", label: "Последняя работа" },
+];
 
 type Props = {
   value: LiveAssembly | null;
@@ -104,7 +123,7 @@ function ranges(preset: RangePreset, today: string, from: string, to: string) {
   const end = utcDate(today);
   const start = new Date(end);
   if (preset === "week") {
-    start.setUTCDate(start.getUTCDate() - ((start.getUTCDay() + 6) % 7));
+    start.setUTCDate(start.getUTCDate() - 6);
   } else if (preset === "month") {
     start.setUTCDate(1);
   }
@@ -538,6 +557,18 @@ function eventMatchesOperation(event: AssemblyEvent, filter: OperationFilter) {
   if (filter === "manual") return event.operationId === "assembly";
   return event.operationId === "packing";
 }
+
+function employeeInitials(name: string) {
+  return (
+    name
+      .trim()
+      .split(/\s+/, 2)
+      .map((part) => part[0])
+      .join("")
+      .toLocaleUpperCase("ru-RU") || "?"
+  );
+}
+
 function Metric({
   label,
   value,
@@ -553,7 +584,7 @@ function Metric({
 }) {
   return (
     <div className={`assembly-kpi ${tone}`}>
-      <span className="assembly-kpi-icon">
+      <span className="assembly-kpi-icon" aria-hidden="true">
         <Icon size={20} />
       </span>
       <span className="assembly-kpi-copy">
@@ -760,6 +791,20 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOn
   const [operationFilter, setOperationFilter] =
     useState<OperationFilter>("all");
   const [historyLimit, setHistoryLimit] = useState(25);
+  const viewHeading = useRef<HTMLHeadingElement>(null);
+  const teamTable = useRef<HTMLTableElement>(null);
+  const returnToEmployee = useRef("");
+  const focusReport = useRef(false);
+  const catalogOpened = useRef(false);
+  useEffect(() => {
+    function refreshOnReturn() {
+      if (!catalogOpened.current || document.visibilityState !== "visible") return;
+      catalogOpened.current = false;
+      onRefresh();
+    }
+    window.addEventListener("focus", refreshOnReturn);
+    return () => window.removeEventListener("focus", refreshOnReturn);
+  }, [onRefresh]);
   const range = useMemo(
     () => ranges(preset, today, customStart, customEnd),
     [preset, today, customStart, customEnd],
@@ -833,16 +878,21 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOn
     };
     return rows.sort((a, b) => comparator(a, b) * (sortDescending ? -1 : 1));
   }, [team, search, sortKey, sortDescending]);
-  useEffect(() => {
-    if (
-      selectedEmployee &&
-      visibleTeam.some((row) => row.identityKey === selectedEmployee)
-    )
-      return;
-    setSelectedEmployee(visibleTeam[0]?.identityKey || "");
-  }, [visibleTeam, selectedEmployee]);
   const selected =
     team.find((row) => row.identityKey === selectedEmployee) || null;
+  const normIssues = useMemo(() => (selected ? selected.events : periodRows.flatMap(row => row.events ?? []))
+    .filter(missingAssemblyCoefficient), [selected, periodRows]);
+  const showingEmployee = selected !== null;
+  useEffect(() => {
+    if (!focusReport.current) return;
+    focusReport.current = false;
+    const returnButton = showingEmployee
+      ? null
+      : teamTable.current?.querySelector<HTMLButtonElement>(
+          `[data-employee="${CSS.escape(returnToEmployee.current)}"]`,
+        );
+    (returnButton ?? viewHeading.current)?.focus();
+  }, [showingEmployee]);
   const activeDays = new Set(
     periodRows
       .filter((row) => hasType(row, aggregateType))
@@ -955,12 +1005,6 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOn
   const selectedEvents = (selected?.events || []).filter((event) =>
     eventMatchesOperation(event, operationFilter),
   );
-  const selectedSourceMetric = (
-    metric: "machineCut" | "manualCut" | "packed" | "coefficient",
-  ) => {
-    if (!selected) return "—";
-    return fmt(selected[metric], metric === "coefficient");
-  };
   const selectedHasMultipleSources =
     (selected?.sourceContributions.length || 0) > 1;
   const latestRecordAt = value?.sources?.assembly.sourceUpdatedAt || "";
@@ -975,6 +1019,8 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOn
       ? `В источниках есть ${value.quality.invalidRecords} некорректных строк; они исключены, поэтому показатели могут быть неполными.`
       : "";
   const workLogUnavailable = value?.sources?.assembly.status !== "available";
+  const showSourceNotes =
+    !assemblyOnly || workLogUnavailable || value?.stale || value?.staleSnapshot;
   const fboUnavailable = !assemblyOnly && value?.sources?.fbo?.status !== "available";
   const tabs: { id: DetailTab; label: string }[] = [
     { id: "summary", label: "Сводка" },
@@ -991,6 +1037,38 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOn
   };
   const topCutTypes = selected?.cutTypes.slice(0, 4) || [];
   const topPackTypes = selected?.packTypes.slice(0, 4) || [];
+  const openEmployee = (identityKey: string) => {
+    returnToEmployee.current = identityKey;
+    focusReport.current = true;
+    setTab(assemblyOnly ? "history" : "summary");
+    setOperationFilter("all");
+    setHistoryLimit(25);
+    setSelectedEmployee(identityKey);
+  };
+  const closeEmployee = () => {
+    focusReport.current = true;
+    setSelectedEmployee("");
+  };
+  const employeeSearch = (
+    <div className="assembly-search">
+      <Search size={17} aria-hidden="true" />
+      <input
+        aria-label="Поиск сотрудника"
+        placeholder="Найти сотрудника"
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+      />
+      {search && (
+        <button
+          type="button"
+          aria-label="Очистить поиск"
+          onClick={() => setSearch("")}
+        >
+          <X size={15} />
+        </button>
+      )}
+    </div>
+  );
 
   return (
     <section
@@ -1016,6 +1094,7 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOn
                 key={id}
                 className={preset === id ? "is-active" : ""}
                 aria-pressed={preset === id}
+                title={id === "week" ? "Последние 7 дней, включая сегодня" : undefined}
                 onClick={() => setPreset(id)}
               >
                 {label}
@@ -1072,24 +1151,7 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOn
               ))}
             </select>
           </label>
-          <label className="assembly-search">
-            <Search size={17} />
-            <input
-              aria-label="Поиск сотрудника"
-              placeholder="Сотрудник"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
-            {search && (
-              <button
-                type="button"
-                aria-label="Очистить поиск"
-                onClick={() => setSearch("")}
-              >
-                <X size={15} />
-              </button>
-            )}
-          </label>
+          {!showingEmployee && employeeSearch}
           <div className="assembly-toolbar-actions">
             <button
               className="assembly-button assembly-button-secondary"
@@ -1201,10 +1263,10 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOn
         </div>
       )}
 
-      <div className="assembly-kpis">
+      <div className={showingEmployee ? "assembly-kpis is-compact" : "assembly-kpis"}>
         <Metric
           label={
-            needsReconciliation ? "Профилей источников" : "Активных сотрудников"
+            needsReconciliation ? "Профилей источников" : "Сотрудники"
           }
           value={value ? fmt(team.length) : "—"}
           note={
@@ -1212,7 +1274,7 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOn
               ? "Данные ещё не загружены."
               : needsReconciliation
                 ? "FBO и «RITM Сборка» · возможны совпадения сотрудников"
-                : "Есть записи за период"
+                : undefined
           }
           tone="is-blue"
           Icon={Users}
@@ -1226,7 +1288,7 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOn
                 ? "—"
                 : fmt(packedTotal)
           }
-          note={sourceTotalsNote("packed")}
+          note={showSourceNotes ? sourceTotalsNote("packed") : undefined}
           tone="is-indigo"
           Icon={Package}
         />
@@ -1241,7 +1303,7 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOn
                   ? fmt(machineTotal)
                   : "—"
           }
-          note={sourceTotalsNote("machineCut")}
+          note={showSourceNotes ? sourceTotalsNote("machineCut") : undefined}
           tone="is-green"
           Icon={Scissors}
         />
@@ -1256,12 +1318,12 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOn
                   ? fmt(manualTotal)
                   : "—"
           }
-          note={sourceTotalsNote("manualCut")}
+          note={showSourceNotes ? sourceTotalsNote("manualCut") : undefined}
           tone="is-violet"
           Icon={Hand}
         />
         <Metric
-          label="Коэффициенты"
+          label="Общий кэф"
           value={
             needsReconciliation
               ? sourceMetricValue("coefficient")
@@ -1274,19 +1336,20 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOn
           note={
             needsReconciliation
               ? sourceTotalsNote("coefficient")
-              : averageCoefficient === null
-                ? "Сумма за период"
-                : `Среднее на активный день ${fmt(averageCoefficient, true)}`
+              : averageCoefficient !== null && activeDays > 1
+                ? `В среднем за активный день ${fmt(averageCoefficient, true)}`
+                : undefined
           }
           tone="is-teal"
           Icon={Activity}
         />
       </div>
 
-      <div className="assembly-master-detail">
+      <AssemblyNormIssues events={normIssues} onOpenCatalog={() => { catalogOpened.current = true; }} />
+      {!selected && (
           <section
             className="assembly-team-panel"
-            aria-label="Таблица сотрудников"
+            aria-labelledby="assembly-team-title"
           >
             <div className="assembly-panel-heading">
               <div>
@@ -1294,8 +1357,8 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOn
                   <Users size={18} />
                 </span>
                 <div>
-                  <h2>
-                    {needsReconciliation ? "Профили источников" : "Сотрудники"}
+                  <h2 id="assembly-team-title" ref={viewHeading} tabIndex={-1}>
+                    {needsReconciliation ? "Профили источников" : "Выработка команды"}
                   </h2>
                   <p>
                     {value
@@ -1355,102 +1418,41 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOn
                 <span>Измените поисковый запрос.</span>
               </div>
             ) : (
-              <div className="assembly-team-table-scroll">
-                <table className="assembly-team-table">
+              <div
+                className="assembly-team-table-scroll"
+                tabIndex={0}
+                aria-label="Выработка по сотрудникам"
+                role="region"
+              >
+                <table className="assembly-team-table" ref={teamTable}>
                   <thead>
                     <tr>
-                      <th>
-                        <button onClick={() => setSort("employee")}>
-                          Сотрудник{" "}
-                          <span>
-                            {sortKey === "employee"
-                              ? sortDescending
-                                ? "↓"
-                                : "↑"
-                              : "↕"}
-                          </span>
-                        </button>
-                      </th>
-                      <th>
-                        <button onClick={() => setSort("machineCut")}>
-                          <i className="is-green">
-                            <Scissors size={15} />
-                          </i>
-                          Резка на станке{" "}
-                          <span>
-                            {sortKey === "machineCut"
-                              ? sortDescending
-                                ? "↓"
-                                : "↑"
-                              : "↕"}
-                          </span>
-                        </button>
-                      </th>
-                      <th>
-                        <button onClick={() => setSort("manualCut")}>
-                          <i className="is-violet">
-                            <Hand size={15} />
-                          </i>
-                          Ручная резка{" "}
-                          <span>
-                            {sortKey === "manualCut"
-                              ? sortDescending
-                                ? "↓"
-                                : "↑"
-                              : "↕"}
-                          </span>
-                        </button>
-                      </th>
-                      <th>
-                        <button onClick={() => setSort("packed")}>
-                          <i className="is-indigo">
-                            <Package size={15} />
-                          </i>
-                          Упаковка{" "}
-                          <span>
-                            {sortKey === "packed"
-                              ? sortDescending
-                                ? "↓"
-                                : "↑"
-                              : "↕"}
-                          </span>
-                        </button>
-                      </th>
-                      <th>
-                        <button onClick={() => setSort("coefficient")}>
-                          {needsReconciliation ? "Итоговый кэф" : "Общий кэф"}{" "}
-                          <span>
-                            {sortKey === "coefficient"
-                              ? sortDescending
-                                ? "↓"
-                                : "↑"
-                              : "↕"}
-                          </span>
-                        </button>
-                      </th>
-                      <th>
-                        <button onClick={() => setSort("date")}>
-                          Последняя работа{" "}
-                          <span>
-                            {sortKey === "date"
-                              ? sortDescending
-                                ? "↓"
-                                : "↑"
-                              : "↕"}
-                          </span>
-                        </button>
-                      </th>
+                      {teamColumns.map(({ key, label, Icon, tone }) => {
+                        const direction =
+                          key === sortKey
+                            ? sortDescending ? "descending" : "ascending"
+                            : undefined;
+                        const SortIcon =
+                          direction === "descending"
+                            ? ArrowDown
+                            : direction === "ascending"
+                              ? ArrowUp
+                              : ArrowDownUp;
+                        return (
+                          <th key={key} scope="col" aria-sort={direction}>
+                            <button type="button" onClick={() => setSort(key)}>
+                              {Icon && <Icon className={tone} size={15} aria-hidden="true" />}
+                              {key === "coefficient" && needsReconciliation ? "Итоговый кэф" : label}
+                              <SortIcon className="assembly-sort-icon" size={13} aria-hidden="true" />
+                            </button>
+                          </th>
+                        );
+                      })}
+                      <th className="assembly-row-end" aria-hidden="true" />
                     </tr>
                   </thead>
                   <tbody>
                     {visibleTeam.map((row) => {
-                      const initial = row.employee
-                        .trim()
-                        .split(/\s+/)
-                        .map((part) => part[0])
-                        .slice(0, 2)
-                        .join("")
-                        .toLocaleUpperCase("ru-RU");
                       const displayMachine = row.machineCut;
                       const displayManual = row.manualCut;
                       const displayPacked = row.packed;
@@ -1458,27 +1460,21 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOn
                       return (
                         <tr
                           key={row.identityKey}
-                          className={
-                            row.identityKey === selectedEmployee
-                              ? "is-selected"
-                              : ""
-                          }
-                          onClick={() => setSelectedEmployee(row.identityKey)}
-                          aria-selected={row.identityKey === selectedEmployee}
+                          onClick={() => openEmployee(row.identityKey)}
                         >
                           <th scope="row">
                             <button
                               className="assembly-person-button"
-                              onClick={() =>
-                                setSelectedEmployee(row.identityKey)
-                              }
+                              type="button"
+                              data-employee={row.identityKey}
+                              aria-label={`Открыть отчёт сотрудника ${row.employee}`}
                             >
-                              <span className="assembly-avatar">
-                                {initial || "?"}
+                              <span className="assembly-avatar" aria-hidden="true">
+                                {employeeInitials(row.employee)}
                               </span>
                               <span>
                                 <strong>{row.employee}</strong>
-                                <small>
+                                {!assemblyOnly && <small>
                                   <span
                                     className={`assembly-source-pill is-${row.sourceKind}`}
                                   >
@@ -1491,7 +1487,7 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOn
                                         Сумма источников
                                       </span>
                                     )}
-                                </small>
+                                </small>}
                               </span>
                             </button>
                           </th>
@@ -1536,7 +1532,9 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOn
                           </td>
                           <td>
                             <strong className="assembly-coef-value">
-                              {fmt(displayCoefficient, true)}
+                              {displayCoefficient === null && row.events.some(missingAssemblyCoefficient)
+                                ? <a className="assembly-norm-pending" href="#assembly-norm-issues">Требует проверки</a>
+                                : fmt(displayCoefficient, true)}
                             </strong>
                           </td>
                           <td>
@@ -1551,6 +1549,9 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOn
                             >
                               {row.date ? dayLabel(row.date) : "—"}
                             </span>
+                          </td>
+                          <td className="assembly-row-end" aria-hidden="true">
+                            <ChevronRight size={18} />
                           </td>
                         </tr>
                       );
@@ -1571,53 +1572,112 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOn
               </span>}
             </div>
           </section>
+      )}
 
-          {selected ? (
-            <aside
+      {selected && (
+        <div className="assembly-master-detail">
+            <nav className="assembly-roster" aria-label="Сотрудники отчёта">
+              <button
+                type="button"
+                className="assembly-button assembly-team-back"
+                onClick={closeEmployee}
+              >
+                <ArrowLeft size={16} aria-hidden="true" />
+                К команде
+              </button>
+              <h2>Сотрудники</h2>
+              {employeeSearch}
+              {visibleTeam.length ? (
+                <ul className="assembly-roster-list">
+                  {visibleTeam.map((row) => (
+                    <li key={row.identityKey}>
+                      <button
+                        type="button"
+                        className="assembly-roster-person"
+                        aria-current={row.identityKey === selectedEmployee || undefined}
+                        onClick={() => {
+                          setSelectedEmployee(row.identityKey);
+                          setHistoryLimit(25);
+                        }}
+                      >
+                        <span className="assembly-avatar" aria-hidden="true">
+                          {employeeInitials(row.employee)}
+                        </span>
+                        <span className="assembly-roster-name">
+                          <strong>{row.employee}</strong>
+                          {!assemblyOnly && <small>{sourceBadgeLabel(row.sourceKinds)}</small>}
+                        </span>
+                        <b className="assembly-coef-value">{fmt(row.coefficient, true)}</b>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="assembly-roster-empty">Сотрудники не найдены</p>
+              )}
+            </nav>
+            <section
               className="assembly-detail-panel"
-              aria-label={`Детализация сотрудника ${selected.employee}`}
+              aria-labelledby="assembly-employee-title"
             >
-              <div className="assembly-detail-heading">
-                <div className="assembly-avatar is-large">
-                  {selected.employee
-                    .trim()
-                    .split(/\s+/)
-                    .map((part) => part[0])
-                    .slice(0, 2)
-                    .join("")
-                    .toLocaleUpperCase("ru-RU")}
+              <div className="assembly-detail-hero">
+                <div className="assembly-detail-heading">
+                  <div className="assembly-avatar is-large" aria-hidden="true">
+                    {employeeInitials(selected.employee)}
+                  </div>
+                  <div>
+                    <h2 id="assembly-employee-title" ref={viewHeading} tabIndex={-1}>
+                      {selected.employee}
+                    </h2>
+                    <p>
+                      {sourceBadgeLabel(selected.sourceKinds)}
+                      {!assemblyOnly && (selected.employeeId
+                        ? ` · employeeId ${selected.employeeId}`
+                        : " · FBO employeeId не передаётся")}
+                    </p>
+                    {selectedHasMultipleSources && selected.reconciliationStatus !== "clear" && (
+                      <span className="assembly-review-pill">Сумма FBO + RITM Сборка</span>
+                    )}
+                  </div>
                 </div>
-                <div>
-                  <h2>{selected.employee}</h2>
-                  <p>
-                    {sourceBadgeLabel(selected.sourceKinds)}
-                    {selected.employeeId
-                      ? ` · employeeId ${selected.employeeId}`
-                      : " · FBO employeeId не передаётся"}
-                  </p>
+                <div className="assembly-employee-kpis">
+                  <Metric
+                    label="Резка на станке"
+                    value={fmt(selected.machineCut)}
+                    tone="is-green"
+                    Icon={Scissors}
+                  />
+                  <Metric
+                    label="Ручная резка"
+                    value={fmt(selected.manualCut)}
+                    tone="is-violet"
+                    Icon={Hand}
+                  />
+                  <Metric
+                    label="Упаковка"
+                    value={fmt(selected.packed)}
+                    tone="is-indigo"
+                    Icon={Package}
+                  />
+                  <Metric
+                    label="Общий кэф"
+                    value={fmt(selected.coefficient, true)}
+                    note={selected.coefficient === null ? "Нет подтверждённого кэфа" : undefined}
+                    tone="is-teal"
+                    Icon={Activity}
+                  />
                 </div>
-                <span
-                  className={`assembly-detail-active ${selectedHasMultipleSources && selected.reconciliationStatus !== "clear" ? "is-review" : ""}`}
-                >
-                  <i />
-                  {selectedHasMultipleSources &&
-                  selected.reconciliationStatus !== "clear"
-                    ? "Сумма FBO + RITM Сборка"
-                    : selected.sourceContributions.length === 1
-                      ? `Данные ${selected.sourceContributions[0].sourceKind === "fbo" ? "FBO" : "RITM Сборка"}`
-                      : "Работал · сверено"}
-                </span>
               </div>
               <div
                 className="assembly-tabs assembly-detail-tabs"
-                role="tablist"
+                role="group"
                 aria-label="Разделы сотрудника"
               >
                 {tabs.map((item) => (
                   <button
                     key={item.id}
-                    role="tab"
-                    aria-selected={tab === item.id}
+                    type="button"
+                    aria-pressed={tab === item.id}
                     className={tab === item.id ? "is-active" : ""}
                     onClick={() => {
                       setTab(item.id);
@@ -1637,56 +1697,6 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOn
                         : "Выше — суммарная работа и кэф. Ниже — количества, операции и коэффициенты отдельно по FBO и «RITM Сборка»."
                       : `Показаны фактические данные ${selected.sourceContributions[0]?.sourceKind === "fbo" ? "FBO" : selected.sourceContributions[0]?.sourceKind === "assembly" ? "журнала «RITM Сборка»" : "источника"}; они не смешиваются с другой системой.`}
                   </p>
-                  <div className="assembly-employee-kpis">
-                    <div className="is-green">
-                      <Scissors size={17} />
-                      <small>Резка на станке</small>
-                      <strong
-                        className={selectedHasMultipleSources ? "is-split" : ""}
-                      >
-                        {selectedSourceMetric("machineCut")}
-                      </strong>
-                    </div>
-                    <div className="is-violet">
-                      <Hand size={17} />
-                      <small>Ручная резка</small>
-                      <strong
-                        className={selectedHasMultipleSources ? "is-split" : ""}
-                      >
-                        {selectedSourceMetric("manualCut")}
-                      </strong>
-                    </div>
-                    <div className="is-indigo">
-                      <Package size={17} />
-                      <small>Упаковка</small>
-                      <strong
-                        className={selectedHasMultipleSources ? "is-split" : ""}
-                      >
-                        {selectedSourceMetric("packed")}
-                      </strong>
-                    </div>
-                    <div className="is-blue">
-                      <Activity size={17} />
-                      <small>Итоговый кэф</small>
-                      <strong
-                        className={selectedHasMultipleSources ? "is-split" : ""}
-                      >
-                        {selectedSourceMetric("coefficient")}
-                      </strong>
-                      <em>
-                        {selectedHasMultipleSources &&
-                        selected.reconciliationStatus !== "clear"
-                          ? "Сумма FBO + RITM Сборка"
-                          : selected.sourceContributions.length === 1
-                            ? "Коэффициент этого источника"
-                            : selected.coefficient === null
-                              ? productType
-                                ? "Не делится по виду"
-                                : "Есть операции без подтверждённой нормы или коэффициента"
-                              : `${selected.activeDays} акт. дн. · ${fmt(selected.activeDays ? selected.coefficient / selected.activeDays : 0, true)} в день`}
-                      </em>
-                    </div>
-                  </div>
                   <div className="assembly-source-breakdown">
                     <div className="assembly-source-breakdown-heading">
                       <h3>По источникам</h3>
@@ -1843,31 +1853,49 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOn
               )}
               {tab === "history" && (
                 <div className="assembly-history-view">
-                  <div className="assembly-history-filters">
-                    <label>
-                      <span>Операция</span>
-                      <select
-                        value={aggregateType ? "all" : operationFilter}
-                        disabled={!!aggregateType}
-                        onChange={(event) => {
-                          setOperationFilter(
-                            event.target.value as OperationFilter,
-                          );
-                          setHistoryLimit(25);
-                        }}
-                      >
-                        <option value="all">Все операции</option>
-                        <option value="machine">Резка на станке</option>
-                        <option value="manual">Ручная резка</option>
-                        <option value="packing">Упаковка</option>
-                      </select>
-                    </label>
-                    {!assemblyOnly && <label>
-                      <span>Поставка</span>
-                      <select value="none" disabled>
-                        <option value="none">Нет данных в FBO</option>
-                      </select>
-                    </label>}
+                  <div className="assembly-history-toolbar">
+                    {assemblyOnly && (
+                      <div className="assembly-detail-section-heading">
+                        <div>
+                          <h3>Журнал операций</h3>
+                          <p>
+                            {countWithNoun(selectedEvents.length, [
+                              "запись",
+                              "записи",
+                              "записей",
+                            ])} · нормы на момент записи
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                    <div className="assembly-history-filters">
+                      <label>
+                        <span>Операция</span>
+                        <select
+                          value={aggregateType ? "all" : operationFilter}
+                          disabled={!!aggregateType}
+                          onChange={(event) => {
+                            setOperationFilter(
+                              event.target.value as OperationFilter,
+                            );
+                            setHistoryLimit(25);
+                          }}
+                        >
+                          <option value="all">Все операции</option>
+                          <option value="machine">Резка на станке</option>
+                          <option value="manual">Ручная резка</option>
+                          <option value="packing">Упаковка</option>
+                        </select>
+                      </label>
+                      {!assemblyOnly && (
+                        <label>
+                          <span>Поставка</span>
+                          <select value="none" disabled>
+                            <option value="none">Нет данных в FBO</option>
+                          </select>
+                        </label>
+                      )}
+                    </div>
                   </div>
                   {!assemblyOnly && <p className="assembly-detail-note">
                     FBO отображается дневными итогами, «RITM Сборка» — отдельными
@@ -1888,14 +1916,17 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOn
                       />
                     </>
                   )}
-                  {selectedEvents.length > 0 && (
+                  {(assemblyOnly || selectedEvents.length > 0) && (
                     <>
-                      <div className="assembly-detail-section-heading">
-                        <div>
-                          <h3>RITM Сборка · журнал операций</h3>
-                          <p>Сохранённые действия с точным временем</p>
+                      {!assemblyOnly && (
+                        <div className="assembly-detail-section-heading">
+                          <div>
+                            <h3>RITM Сборка · журнал операций</h3>
+                            <p>Время по МСК · нормы на момент записи</p>
+                          </div>
+                          <span>{countWithNoun(selectedEvents.length, ["запись", "записи", "записей"])}</span>
                         </div>
-                      </div>
+                      )}
                       <AssemblyEventRows
                         events={selectedEvents}
                         limit={historyLimit}
@@ -1928,17 +1959,9 @@ export function AssemblyAnalytics({ value, loading, error, onRefresh, assemblyOn
                   <NormsTable norms={value?.norms} productType={productType} />
                 </div>
               )}
-            </aside>
-          ) : (
-            <aside className="assembly-detail-panel assembly-detail-empty">
-              <div className="assembly-detail-empty-icon">
-                <Users size={25} />
-              </div>
-              <strong>Выберите сотрудника</strong>
-              <span>{assemblyOnly ? "Здесь появятся сводка, журнал и график." : "Здесь появятся сводка, журнал, график и нормы."}</span>
-            </aside>
-          )}
+            </section>
         </div>
+      )}
     </section>
   );
 }
@@ -1965,8 +1988,13 @@ function AssemblyEventRows({
   });
   const groups = groupWorkEvents(events);
   return (
-    <div className="assembly-detail-table-scroll">
-      <table className="assembly-detail-table">
+    <div
+      className="assembly-detail-table-scroll"
+      role="region"
+      aria-label="Записи журнала операций"
+      tabIndex={0}
+    >
+      <table className="assembly-detail-table assembly-event-table">
         <thead>
           <tr>
             <th>Время · МСК</th>
@@ -1986,34 +2014,46 @@ function AssemblyEventRows({
             const start = group.events[0];
             const end = group.events[group.events.length - 1];
             const norms = new Set(group.events.map((item) => item.norm));
+            const missing = group.events.find(missingAssemblyCoefficient);
             return (
               <tr key={group.key}>
                 <td>
-                  {timeFormat.format(new Date(start.createdAt))}
-                  {start.createdAt !== end.createdAt
-                    ? ` — ${timeFormat.format(new Date(end.createdAt))}`
-                    : ""}
+                  <time dateTime={start.createdAt}>
+                    {timeFormat.format(new Date(start.createdAt))}
+                  </time>
+                  {start.createdAt !== end.createdAt && (
+                    <>
+                      {" — "}
+                      <time dateTime={end.createdAt}>
+                        {timeFormat.format(new Date(end.createdAt))}
+                      </time>
+                    </>
+                  )}
                 </td>
                 <td>{event.shipmentName || event.shipmentId}</td>
                 <td title={event.positionId}>{event.article}</td>
                 <td>{event.productType || "Нет данных"}</td>
-                <td>{event.operation}</td>
+                <td>
+                  <span className={`assembly-operation is-${event.operationId}`}>
+                    {event.operation}
+                  </span>
+                </td>
                 <td>{fmt(group.quantity)}</td>
                 <td>
-                  {norms.size > 1
-                    ? "Разные нормы — см. записи"
-                    : event.norm === null
-                      ? "Нет нормы"
-                      : `${fmt(event.norm)} шт/чел`}
+                  {norms.size > 1 ? "Разные нормы — см. записи" : (
+                    <span className="assembly-norm-value">
+                      {event.norm === null ? "Нет нормы" : `${fmt(event.norm)} шт/чел`}
+                    </span>
+                  )}
                 </td>
                 <td>
                   {group.coefficient === null
-                    ? "Нет нормы"
+                    ? (missing ? assemblyNormReason(missing) : "—")
                     : fmt(group.coefficient, true)}
                 </td>
                 <td>
                   <details>
-                    <summary>{group.events.length} записей</summary>
+                    <summary>{countWithNoun(group.events.length, ["запись", "записи", "записей"])}</summary>
                     {group.events.map((item) => (
                       <div key={item.eventId} title={item.eventId}>
                         {timeFormat.format(new Date(item.createdAt))} ·{" "}

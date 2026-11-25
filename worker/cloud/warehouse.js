@@ -1,4 +1,4 @@
-import { readProductionShopCatalog, readWorkloadPhotos } from "../../agent/adapters.js";
+import { readWorkloadCatalog } from "./assemblyProductionCatalog.js";
 import { buildWarehouseSnapshot } from "../warehouseCartons.js";
 import { CloudError } from "./access.js";
 import { cloudConfig, sourceId } from "./config.js";
@@ -76,12 +76,9 @@ function extract(grid, documentId, sheets) {
   });
 }
 
-export async function loadWarehouse(reader, bindings, { signal, now = Date.now, activeShipmentIds = null, shipmentInfo = null } = {}) {
+export async function loadWarehouse(reader, bindings, { signal, now = Date.now, activeShipmentIds = null, shipmentInfo = null, fetcher = fetch } = {}) {
   const documentId = sourceId(bindings, "assemblyDatabaseId");
   if (!documentId) throw new CloudError("warehouse_source_unconfigured", "Источник коробов Assembly не настроен.");
-  const catalogPromise = readProductionShopCatalog(reader, signal).catch(() => null);
-  const photoId = sourceId(bindings, "photosId");
-  const photoPromise = photoId ? readWorkloadPhotos(reader, photoId, signal).catch(() => null) : Promise.resolve(null);
   const metadata = await reader.metadata(documentId, signal), sheets = describe(metadata, documentId);
   const ranges = sheets.map((sheet) => `'${sheet.name}'!A1:${sheet.endColumn}${sheet.rows}`);
   let first, second;
@@ -95,8 +92,17 @@ export async function loadWarehouse(reader, bindings, { signal, now = Date.now, 
   const finalSheets = describe(await reader.metadata(documentId, signal), documentId);
   if (sheets.some((sheet, index) => sheet.sheetId !== finalSheets[index].sheetId || sheet.rows !== finalSheets[index].rows || sheet.columns !== finalSheets[index].columns))
     throw new CloudError("warehouse_changing", "Структура коробов изменилась во время чтения. Повторите обновление.", 409);
-  const [catalog, photos] = await Promise.all([catalogPromise, photoPromise]);
-  return buildWarehouseSnapshot(second[0], second[1], { catalog, photos, checkedAt: new Date(now()).toISOString(), activeShipmentIds, shipmentInfo, includeArchived: true });
+  const cartons = new Map(second[0].map(row => [text(row.cartonId), row]));
+  const positions = second[1].map(row => {
+    const shipmentId = text(row.shipmentId);
+    const carton = cartons.get(text(row.cartonId));
+    const manualMarket = shipmentId.match(/^RITM-WAREHOUSE-MANUAL-(OZON|WB)-\d+$/)?.[1];
+    const name = manualMarket || (shipmentId === "RITM-STOCK-WAREHOUSE" ? "OZON" :
+      shipmentInfo?.[shipmentId]?.name || carton?.["Направление"]);
+    return { article: row["Артикул"], sheetName: name };
+  });
+  const catalog = await readWorkloadCatalog(bindings, positions, [], fetcher);
+  return buildWarehouseSnapshot(second[0], second[1], { catalog, checkedAt: new Date(now()).toISOString(), activeShipmentIds, shipmentInfo, includeArchived: true });
 }
 
 // Dispatch changes a physical carton's status, not a production plan. Reuse the
@@ -124,7 +130,7 @@ export async function readWarehouseForDispatch(bindings, store, { fetcher = fetc
     return property&&!property.hidden&&property.title===sheet.name;
   })};
   return loadWarehouse(sourceReader, bindings, {
-    now: () => store.now(), activeShipmentIds:activeWarehouseShipmentIds(confirmed), shipmentInfo:activeWarehouseShipmentInfo(confirmed),
+    now: () => store.now(), activeShipmentIds:activeWarehouseShipmentIds(confirmed), shipmentInfo:activeWarehouseShipmentInfo(confirmed), fetcher,
   });
 }
 
@@ -148,7 +154,7 @@ export async function readWarehouseSnapshot(url, bindings, store, { fetcher = fe
   let lease;
   try {
     lease = await store.acquire("refresh:warehouse", 60000);
-    const value = await loadWarehouse(new CloudSheetsReader(bindings, { fetcher }), bindings, { now: () => store.now(), activeShipmentIds, shipmentInfo });
+    const value = await loadWarehouse(new CloudSheetsReader(bindings, { fetcher }), bindings, { now: () => store.now(), activeShipmentIds, shipmentInfo, fetcher });
     value.activeShipmentFingerprint = activeShipmentFingerprint;
     value.activeShipmentIds = activeIds;
     await store.saveSnapshot("warehouse", value, lease);

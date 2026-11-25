@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
+import { ritmChatGPTSignInPath } from "./CloudAuth";
 import { Button, Field, Modal, Notice } from "./ui";
 
 type Manager = { id: string; username: string; displayName: string; status: "active" | "disabled"; createdAt: number; lastLoginAt: number | null };
 type TemporaryPin = { username: string; value: string; action: "created" | "reset" };
+type OwnerPinSettings = { username: string | null; available: boolean; canEdit: boolean };
 
 async function request(path: string, method = "GET", body?: Record<string, unknown>) {
   const response = await fetch(path, {
@@ -66,8 +68,9 @@ export function ManagerAccessPanel({ open, onClose }: { open: boolean; onClose: 
     catch { setError("Не удалось скопировать PIN. Выделите его и скопируйте вручную."); }
   };
 
-  return <Modal open={open} onClose={onClose} title="Доступ менеджеров" description="Каждому менеджеру выдаётся личный логин и PIN для работы с поставками.">
+  return <Modal open={open} onClose={onClose} title="Доступы" description="Вход владельца и учётные записи менеджеров">
     <div className="manager-access-panel">
+      {open && <OwnerPinAccess />}
       <Notice>Менеджеру доступны все рабочие разделы RITM, кроме AI Center. Управление учётными записями и технические операции остаются владельцу.</Notice>
       {error && <Notice tone="warning">{error}</Notice>}
       {temporaryPin && <div className="manager-temp-pin" role="status">
@@ -100,4 +103,100 @@ export function ManagerAccessPanel({ open, onClose }: { open: boolean; onClose: 
       </section>
     </div>
   </Modal>;
+}
+
+function OwnerPinAccess() {
+  const path = "/api/auth/owner-pin";
+  const [settings, setSettings] = useState<OwnerPinSettings | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [username, setUsername] = useState("");
+  const [pin, setPin] = useState("");
+  const [confirmPin, setConfirmPin] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    void request(path).then((result: OwnerPinSettings) => {
+      if (active) setSettings(result);
+    }).catch((reason: unknown) => {
+      if (active) setError(reason instanceof Error ? reason.message : "Не удалось проверить вход владельца.");
+    });
+    return () => { active = false; };
+  }, []);
+
+  const closeForm = () => {
+    setPin("");
+    setConfirmPin("");
+    setEditing(false);
+  };
+
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setError("");
+    setSaved("");
+    if (pin !== confirmPin) {
+      setError("PIN-коды не совпадают.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const result: OwnerPinSettings = await request(path, "POST", { username, pin });
+      setSettings(result);
+      closeForm();
+      setSaved("Вход по PIN настроен.");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Не удалось сохранить вход по PIN.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const disable = async () => {
+    if (!window.confirm("Отключить вход владельца по PIN и завершить открытые сеансы по PIN?")) return;
+    setBusy(true);
+    setError("");
+    setSaved("");
+    try {
+      const result: OwnerPinSettings = await request(path, "DELETE", {});
+      setSettings(result);
+      closeForm();
+      setSaved("Вход по PIN отключён.");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Не удалось отключить вход по PIN.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return <section className="owner-pin-access">
+    <h3>Вход владельца по PIN</h3>
+    {settings && <div className="owner-pin-status">
+      <span>{settings.username ? <>Логин <strong>{settings.username}</strong></> : "Вход по PIN ещё не настроен"}</span>
+      {settings.canEdit && !editing && <div className="owner-pin-actions">
+        {settings.available && <Button type="button" disabled={busy} onClick={() => {
+          setUsername(settings.username || "");
+          setSaved("");
+          setError("");
+          setEditing(true);
+        }}>{settings.username ? "Изменить" : "Настроить"}</Button>}
+        {settings.username && <Button type="button" kind="danger" disabled={busy} onClick={() => void disable()}>Отключить</Button>}
+      </div>}
+    </div>}
+    {!settings && !error && <small role="status">Проверяю вход по PIN…</small>}
+    {settings && !settings.available && <Notice tone="warning">Вход по PIN пока недоступен.</Notice>}
+    {settings && !settings.canEdit && <small><a href={ritmChatGPTSignInPath} target="_top">Войти через ChatGPT</a> для смены или отключения PIN.</small>}
+    {editing && <form className="manager-create-form owner-pin-form" onSubmit={save} autoComplete="off">
+      <Field label="Логин"><input autoFocus value={username} onChange={(event) => setUsername(event.target.value)} maxLength={40} required /></Field>
+      <Field label="PIN из 4 цифр"><input type="password" inputMode="numeric" autoComplete="new-password" value={pin} onChange={(event) => setPin(event.target.value.replace(/\D/g, "").slice(0, 4))} pattern="[0-9]{4}" maxLength={4} required /></Field>
+      <Field label="Повторите PIN"><input type="password" inputMode="numeric" autoComplete="new-password" value={confirmPin} onChange={(event) => setConfirmPin(event.target.value.replace(/\D/g, "").slice(0, 4))} pattern="[0-9]{4}" maxLength={4} required /></Field>
+      <div className="owner-pin-actions">
+        <Button type="button" disabled={busy} onClick={() => { closeForm(); setError(""); }}>Отмена</Button>
+        <Button type="submit" kind="primary" disabled={busy || username.trim().length < 3 || pin.length !== 4 || confirmPin.length !== 4}>{busy ? "Сохраняю…" : "Сохранить"}</Button>
+      </div>
+    </form>}
+    {error && <Notice tone="warning">{error}</Notice>}
+    {saved && <small role="status">{saved}</small>}
+  </section>;
 }

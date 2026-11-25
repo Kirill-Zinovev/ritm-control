@@ -1,4 +1,6 @@
 import type { Dispatch } from "./model";
+import { cartonNumberList } from "./carton-number";
+export { cartonNumberKey as ozonCartonKey } from "./carton-number";
 
 export interface OzonProduct {
   sku: string;
@@ -34,15 +36,18 @@ export interface OzonComposition {
   city: string;
   cluster: string;
   boxes: OzonBox[];
+  products?: OzonLabels["products"];
 }
 export interface OzonLabels {
   id: string;
   codes: string[];
   products: { sku: string; barcode: string }[];
+  printCodes?: (string | null)[];
 }
 export interface OzonGroup extends OzonComposition {
   dispatch: Dispatch;
   labels: OzonLabels | null;
+  compositionChanged?: boolean;
 }
 export interface OzonBatchSummary {
   id: string;
@@ -59,11 +64,8 @@ export interface OzonBatch {
 export const ozonBoxLimit = 500;
 export const ozonGroupBoxLimit = 100;
 
-export function ozonCartonKey(label: string) {
-  return label.normalize("NFC").trim().toLocaleLowerCase("ru-RU");
-}
 export function parseOzonCartonNumbers(input: string) {
-  const numbers = [...new Set(input.split(/[\s,;]+/u).map(ozonCartonKey).filter(Boolean))];
+  const numbers = cartonNumberList(input);
   if (!numbers.length) throw Error("Вставьте номера коробов.");
   if (numbers.length > ozonBoxLimit || numbers.some((number) => number.length > 80))
     throw Error("Проверьте список. За один раз можно подготовить до " + ozonBoxLimit + " коробов.");
@@ -73,11 +75,15 @@ export const isOzonCargoCode = (value: string) => /^\d{12,24}$/u.test(value);
 export const ozonArticle = (sku: string) => sku.trim().replace(/(?:\s*\(OZ\))+$/iu, "") + "(OZ)";
 
 export function ozonProductBarcodes(labels: OzonLabels | null) {
+  return shipmentProductBarcodes(labels?.products ?? [], ozonArticle);
+}
+
+export function shipmentProductBarcodes(products: OzonLabels["products"], key = (sku: string) => sku) {
   const codes = new Map<string, string | null>();
-  for (const { sku, barcode } of labels?.products ?? []) {
+  for (const { sku, barcode } of products) {
     const code = barcode.trim();
     if (!code) continue;
-    const article = ozonArticle(sku);
+    const article = key(sku);
     const previous = codes.get(article);
     codes.set(article, previous === undefined || previous === code ? code : null);
   }

@@ -3,7 +3,7 @@ import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 
 import { catalogKey } from "../shared/catalog";
 import { number, type Position } from "../shared/model";
 import {
-  matchesPositionQuery, positionSearchMaxLength, positionSearchMinLength,
+  isSearchablePosition, matchesPositionQuery, positionSearchMaxLength, positionSearchMinLength,
   type PositionSearchItem, type PositionSearchPage,
 } from "../shared/position-search";
 import { ProductPhoto } from "./ProductPhoto";
@@ -49,7 +49,7 @@ export function AssemblySearch({ query, currentId, positions, disabled, onQuery,
   const local = useMemo(() => {
     if (!visible) return [];
     const needle = query.trim().toLocaleLowerCase("ru");
-    return positions.filter(p => p.supplyId === currentId && p.sourceActive !== false && matchesPositionQuery(p, needle))
+    return positions.filter(p => p.supplyId === currentId && isSearchablePosition(p) && matchesPositionQuery(p, needle))
       .sort((a, b) => Number(catalogKey(b.sku) === sku) - Number(catalogKey(a.sku) === sku))
       .slice(0, 6);
   }, [currentId, positions, query, sku, visible]);
@@ -157,9 +157,11 @@ export function AssemblySearch({ query, currentId, positions, disabled, onQuery,
           <h2>В текущей поставке</h2>
           {local.length ? local.map(item => (
             <button type="button" key={item.id} className="supply-search-result" disabled={disabled} onClick={() => select(item)}>
-              <ProductPhoto importId={item.catalogImportId ?? ""} id={item.catalog?.photoId ?? null}
+              <ProductPhoto importId={item.photoCatalogImportId ?? item.catalogImportId ?? ""} id={item.catalog?.photoId ?? null}
                 sourceUrl={item.photoUrl} sku={item.sku} />
-              <span className="supply-search-copy"><strong>{item.sku}</strong><span>{item.name}</span></span>
+              <span className="supply-search-copy"><strong>{item.sku}</strong><span>{item.name}</span>
+                {item.storeNeedsReview && <span>Магазин требует подтверждения</span>}
+              </span>
               <span className="supply-search-packing">Упаковано {number(item.packing)} из {number(item.plan)}</span>
               <ChevronRight size={17} aria-hidden="true" />
             </button>
@@ -171,7 +173,7 @@ export function AssemblySearch({ query, currentId, positions, disabled, onQuery,
           </button>
           <div id={resultsId} hidden={!otherExpanded}>
             {otherItems.map(item => {
-              const { city, detail } = supplyLabel(item.supplyTitle, item.store);
+              const { city, detail } = supplyLabel(item.supplyTitle, item.storeNeedsReview ? "Магазин требует подтверждения" : item.store);
               return (
                 <button type="button" key={item.id} className="supply-search-result" title={item.supplyTitle}
                   disabled={disabled} onClick={() => select(item)}>

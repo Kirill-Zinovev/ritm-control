@@ -22,7 +22,7 @@ import { printingReadModel } from "./printing-workspace/read-model.mjs";
 import { isPrintingWorkMonth, readD1PrintingWork } from "./printingD1Work.js";
 import { CloudStore } from "./store.js";
 import { CloudError, json, readJson, requireOwner, requireMaintenance } from "./access.js";
-import { assertSameOrigin, changeManagerPin, createManagerUser, listManagerUsers, loginWithPin, logoutManager, resetManagerPin, resolvePrincipal, setManagerStatus } from "./auth.js";
+import { assertSameOrigin, changeManagerPin, createManagerUser, listManagerUsers, loginWithPin, logoutWithPin, readOwnerPinSettings, removeOwnerPin, resetManagerPin, resolvePrincipal, ritmOwnerAccount, saveOwnerPin, setManagerStatus } from "./auth.js";
 import { createServices } from "./services.js";
 import { AssemblyTransferService } from "../../agent/assemblyTransfer.js";
 import { importMigration } from "./migration.js";
@@ -39,18 +39,33 @@ import { assemblyV2Configured } from "./assemblyV2Transport.js";
 import { evaluateArkadyWatch } from './arkadyWatch.js';
 import { evaluateStockWatch, formatStockCompletion } from './arkadyStockWatch.js';
 import { assignmentPresentation, stockCompletionPresentation, supplyWatchPresentation } from './arkadyCards.js';
-import { loadStockHistory, stockHistoryEntries, stockNotificationBatches } from './stockHistory.js';
+import { loadStockHistory, loadStockWorkspace, stockHistoryEntries, stockNotificationBatches } from './stockHistory.js';
+import { parseReadyStockId, resolveReadyStockEntry, stockCloseIsPending, stockTaskKey, stockTaskReadiness } from './stockCompletion.js';
 import { pendingStockDetails,inspectStockReceipts } from './stockDiagnostics.js';
 import { readStockSnapshot } from "../../agent/stockSheets.js";
-import { boxStockReadiness, readRollStockHistory, rollStockReadiness } from '../../agent/stockReadiness.js';
+import { readRollStockHistory } from '../../agent/stockReadiness.js';
+import { stockArticleKey } from '../../agent/stockClosePlan.js';
 import { closeStockTask } from '../../agent/stockCloseOperations.js';
 import { verifyArchivedStockClose } from './stockCloseRecovery.js';
 import { productionTabVisibility, reconcileProductionTabs } from "./productionTabs.js";
+import { syncProductionSheetCatalog } from "./productionSheetCatalog.js";
 import { importAssemblyProductionExtensions, readAssemblyItemCatalog, readWorkloadCatalog } from "./assemblyProductionCatalog.js";
 import { ARKADY_COMPLETION_RECIPIENTS, bitrixConfigured, decryptBitrixConfig, drainBitrixNotifications, encryptBitrixConfig, sendBitrixNotification, completionPraise, retireObsoleteBitrixNotifications } from './bitrixNotifications.js';
 import { saveBitrixPreference, saveBitrixConfiguration } from './bitrixSettings.js';
 
 const signIn = "/?page=supplies";
+
+async function requireAccessOwner(request, bindings) {
+  const caller = await resolvePrincipal(request, bindings);
+  const write = request.method !== "GET";
+  if (caller?.role === "owner") {
+    if (write) assertSameOrigin(request);
+    return caller.id;
+  }
+  if (caller?.role === "manager")
+    throw new CloudError("owner_required", "Управлять учётными записями может только владелец RITM.", 403);
+  return requireOwner(request, bindings, { write });
+}
 const methods = (request, allowed) => { if (!allowed.includes(request.method)) throw new CloudError("method_not_allowed", "Метод запроса не поддерживается.", 405); };
 const requireNoBoxRemoval = (scope) => {
   if (pendingBoxRemoval(scope)) throw new CloudError("box_remove_pending","Сначала завершите проверку удаления в разделе «Поставки».",409);
@@ -274,9 +289,9 @@ async function readCurrentPrinting(bindings, current, reader, supplyTarget = nul
   const retired = new Set(current.meta("retiredProductionTabs") || []);
   const source = { adapter: "printing", documentId: sourceId(bindings, "seasonalPrintingId") };
   const value = await loadSource(source, (url, init) => reader.authenticatedFetch(url, init), new Date(), {
-    googleReader: reader, boxJournalId: sourceId(bindings, "boxJournalId"), stockBoxJournalId: sourceId(bindings, "stockBoxJournalId"), stockBoxPrintingId: sourceId(bindings, "stockBoxPrintingId"), stockRollPrintingId: sourceId(bindings, "stockRollPrintingId"), photoSourceId: sourceId(bindings, "photosId"), printingAdditionalSheets: current.meta("rollPrintingAdditionalSheets") || [],
+    googleReader: reader, boxJournalId: sourceId(bindings, "boxJournalId"), stockBoxJournalId: sourceId(bindings, "stockBoxJournalId"), stockBoxPrintingId: sourceId(bindings, "stockBoxPrintingId"), stockRollPrintingId: sourceId(bindings, "stockRollPrintingId"), printingAdditionalSheets: current.meta("rollPrintingAdditionalSheets") || [],
     productionSupplies: current.meta("productionSupplies") || [], assemblyBoxLinks: transfer.links().filter(link => !retired.has(`box:${link.boxSheetId}`)), supplyTarget,
-    workloadCatalog: !supplyTarget && assemblyV2Configured(bindings)
+    workloadCatalog: !supplyTarget
       ? (orders, stock) => readWorkloadCatalog(bindings, orders, stock, fetcher)
       : null,
   });
@@ -494,33 +509,39 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
     if (path === '/api/assembly-v2/events') return await receiveAssemblyV2Events(request,bindings,new CloudStore(bindings.DB));
     if (path === "/api/auth/login") {
       methods(request, ["POST"]);
-      return await loginWithPin(request, bindings.DB);
+      return await loginWithPin(request, bindings);
     }
     if (path === "/api/auth/logout") {
       methods(request, ["POST"]);
-      return await logoutManager(request, bindings.DB);
+      return await logoutWithPin(request, bindings);
     }
     if (path === "/api/auth/change-pin") {
       methods(request, ["POST"]);
       const principal = await resolvePrincipal(request, bindings);
       return json(await changeManagerPin(request, bindings.DB, principal));
     }
+    if (path === "/api/auth/owner-pin") {
+      methods(request, ["GET", "POST", "DELETE"]);
+      const ownerId = await requireAccessOwner(request, bindings);
+      const canEdit = ritmOwnerAccount(request, bindings) === ownerId;
+      if (request.method === "GET") return json({ ok: true, canEdit, ...await readOwnerPinSettings(bindings, ownerId) });
+      if (!canEdit) throw new CloudError("owner_chatgpt_required", "Войдите через ChatGPT, чтобы изменить вход владельца по PIN.", 403);
+      const settings = request.method === "DELETE"
+        ? await removeOwnerPin(bindings, ownerId)
+        : await saveOwnerPin(bindings, ownerId, await readJson(request, 2048));
+      return json({ ok: true, canEdit, ...settings });
+    }
     if (path === "/api/auth/users") {
-      const caller = await resolvePrincipal(request, bindings);
-      if (caller?.role === "manager") throw new CloudError("owner_required", "Управлять учётными записями может только владелец RITM.", 403);
-      requireOwner(request, bindings, { write: request.method !== "GET" });
+      const ownerId = await requireAccessOwner(request, bindings);
       if (request.method === "GET") return json({ ok: true, users: await listManagerUsers(bindings.DB) });
       methods(request, ["POST"]);
-      return json({ ok: true, user: await createManagerUser(bindings.DB, await readJson(request, 2048), request.headers.get("oai-authenticated-user-id")) }, 201);
+      return json({ ok: true, user: await createManagerUser(bindings.DB, await readJson(request, 2048), ownerId) }, 201);
     }
     const managerAction = path.match(/^\/api\/auth\/users\/([0-9a-f-]{36})\/(reset-pin|status)$/i);
     if (managerAction) {
-      const caller = await resolvePrincipal(request, bindings);
-      if (caller?.role === "manager") throw new CloudError("owner_required", "Управлять учётными записями может только владелец RITM.", 403);
-      requireOwner(request, bindings, { write: true });
+      const ownerId = await requireAccessOwner(request, bindings);
       methods(request, ["POST"]);
       const [, id, action] = managerAction;
-      const ownerId = request.headers.get("oai-authenticated-user-id");
       if (action === "reset-pin") return json({ ok: true, ...await resetManagerPin(bindings.DB, id, ownerId) });
       const input = await readJson(request, 1024);
       if (input.status !== "active" && input.status !== "disabled") throw new CloudError("status_invalid", "Некорректный статус учётной записи.", 400);
@@ -552,8 +573,9 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
     else if (path === "/api/cloud/maintenance" && request.headers.has("authorization")) requireMaintenance(request, bindings);
     else {
       principal = await resolvePrincipal(request, bindings);
-      if (principal?.role === "owner") requireOwner(request, bindings, { write: request.method !== "GET" });
-      else if (principal?.role === "manager") {
+      if (principal?.role === "owner") {
+        if (request.method !== "GET") assertSameOrigin(request);
+      } else if (principal?.role === "manager") {
         if (!managerRouteAllowed(request.method, path)) throw new CloudError("manager_route_forbidden", "Этот раздел или служебная операция недоступны для учётной записи менеджера.", 403);
         if (principal.mustChangePin) throw new CloudError("pin_change_required", "Перед продолжением задайте личный PIN.", 403);
         if (request.method !== "GET") assertSameOrigin(request);
@@ -727,25 +749,67 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
     if (path === '/api/stocks/history') {
       methods(request,['GET']);
       if(assemblyControlApp||bridgeId)throw new CloudError('stock_manager_scope_required','Раздел доступен только из RITM.',403);
-      const scope=await store.scope(), services=await createServices(bindings,scope,{fetcher});
-      const entries=await loadStockHistory({operations:scope.operations.values(),reader:services.reader,boxId:sourceId(bindings,'stockBoxPrintingId'),rollId:sourceId(bindings,'stockRollPrintingId')});
-      return json({ok:true,entries});
+      const scopes=await Promise.all(['stock','stock-close'].map(kind=>store.operationReadScope(kind)));
+      const workspace=await loadStockWorkspace({
+        operations:scopes.flatMap(scope=>[...scope.operations.values()]),
+        reader:new CloudSheetsReader(bindings,{fetcher}),
+        boxId:sourceId(bindings,'stockBoxPrintingId'),rollId:sourceId(bindings,'stockRollPrintingId'),
+      });
+      return json({ok:true,...workspace});
     }
     if (path === '/api/stocks/close') {
       methods(request,['POST']);
       if(assemblyControlApp||bridgeId)throw new CloudError('stock_manager_scope_required','Действие доступно только из RITM.',403);
       const input=await readJson(request,2048);
+      if(typeof input?.entryId!=='string' || !/^[a-f0-9-]{36}$/i.test(String(input.operationId||'')))
+        throw new CloudError('stock_close_invalid','Не подтверждён запрос завершения.',400);
+      const readySource=parseReadyStockId(input.entryId);
+      const manager=principal?.displayName||principal?.username||'RITM';
       const operation=await store.withScope(async scope=>{
-        const entry=stockHistoryEntries(scope.operations.values()).find(item=>item.id===input.entryId);
-        if(!entry)throw new CloudError('stock_close_missing','Задание не найдено. Обновите историю.',409);
-        const services=await createServices(bindings,scope,{fetcher,manager:principal?.displayName||principal?.username||'RITM'});
+        const prior=scope.operations.get('stock-close:'+input.operationId)?.value;
+        if(prior && prior.entryId!==input.entryId) throw new CloudError('stock_close_conflict','Номер операции уже используется.',409);
+        let entry=prior ? {...prior,id:prior.entryId} : null;
+        if(!entry && !readySource) entry=stockHistoryEntries(scope.operations.values()).find(item=>item.id===input.entryId && !item.closedAt);
+        const source=entry||readySource;
+        if(!source)throw new CloudError('stock_close_missing','Задание не найдено. Обновите историю.',409);
+        const services=await createServices(bindings,scope,{fetcher,manager});
         await services.guard();
-        const id=sourceId(bindings,entry.department==='box'?'stockBoxPrintingId':'stockRollPrintingId');
-        const adapter=services.stock().adapters[entry.department];
-        const records={get:id=>scope.operations.get('stock-close:'+id)?.value||null,put:op=>scope.putOperation('stock-close',op),findPending:item=>[...scope.operations.values()].some(r=>r.kind==='stock-close'&&r.value?.uid===item.uid&&r.value?.sheetId===item.sheetId&&!['verified','not_saved'].includes(r.value?.status))};
-        try {return await closeStockTask({operationId:input.operationId,entry,store:records,manager:principal?.displayName||principal?.username||'RITM',checkpoint:()=>services.guard(),readSnapshot:()=>readStockSnapshot(services.reader,id,entry.destination),readiness:async (item,snapshot)=>{const current=snapshot.rows.find(r=>r.row===item.row);if(!current)throw new Error('Задание не найдено.');if(item.department==='box'){const ready=boxStockReadiness({current,change:{newQuantity:current.quantity},snapshot});return {print:ready.printing?'done':'partial',cut:ready.cutting?'done':'partial'};}const history=await readRollStockHistory(services.reader,id);const ready=rollStockReadiness({current,change:{newQuantity:current.quantity},snapshot,...history,sheetName:item.destination==='warehouse'?'Запасы склад':'Срочные 2 этаж'});return {print:ready.printing.complete?'done':'partial',cut:ready.cutting.complete?'done':'partial'};},archive:plan=>adapter.writer.closeStockTask(plan),verifyArchive:op=>verifyArchivedStockClose(services.reader,id,op)});}
-        catch(error){throw new CloudError('stock_close_unavailable',error.message||'Не удалось проверить задание.',409);}
-      });
+        const id=sourceId(bindings,source.department==='box'?'stockBoxPrintingId':'stockRollPrintingId');
+        const records={
+          get:operationId=>scope.operations.get('stock-close:'+operationId)?.value||null,
+          put:op=>scope.putOperation('stock-close',op),
+          findPending:item=>[...scope.operations.values()].some(({kind,value})=>{
+            if(kind==='stock-close') return stockCloseIsPending(value) && stockTaskKey(value)===stockTaskKey(item);
+            return kind==='stock' && !['verified','not_saved'].includes(value?.status) && value?.destination===item.destination &&
+              value.steps?.some(step=>step.department===item.department && step.plan?.sheetId===item.sheetId &&
+                step.plan.entries?.some(row=>row.row===item.row || stockArticleKey(row.article)===stockArticleKey(item.article)));
+          }),
+        };
+        const readSnapshot=()=>readStockSnapshot(services.reader,id,source.destination);
+        try {
+          const snapshot=prior ? null : await readSnapshot();
+          if(!entry) entry=resolveReadyStockEntry(input.entryId,source,snapshot);
+          const writer=prior ? null : services.stock().adapters[entry.department].writer;
+          const result=await closeStockTask({
+            operationId:input.operationId,entry,store:records,manager,
+            checkpoint:()=>services.guard(),readSnapshot:()=>snapshot,
+            readiness:async (item,fresh)=>{
+              const current=fresh.rows.find(row=>row.row===item.row);
+              if(!current)throw new Error('Задание не найдено.');
+              const history=item.department==='roll' ? await readRollStockHistory(services.reader,id) : null;
+              return stockTaskReadiness(item,current,fresh,history);
+            },
+            archive:plan=>writer.closeStockTask(plan),
+            verifyArchive:op=>verifyArchivedStockClose(services.reader,id,op),
+          });
+          if(result.status==='verified' && prior?.status!=='verified') appendAudit(scope,principal,path,result);
+          return result;
+        } catch(error) {
+          const message=error.message||'Не удалось проверить задание.';
+          if(readySource && !records.get(input.operationId)) return {id:input.operationId,status:'not_saved',message};
+          throw new CloudError('stock_close_unavailable',message,409);
+        }
+      },{waitMs:3000});
       return json({ok:true,operation});
     }
     if (path === '/api/stocks/preview') {
@@ -937,7 +1001,11 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
       }
       return json(await readSnapshot("printing", url, bindings, store, {
         fetcher, onFreshPrinting: ctx?.waitUntil && (principal?.role === "owner" || principal?.role === "manager")
-          ? report => ctx.waitUntil(reconcileProductionTabs(bindings, store, report, fetcher).catch(() => {})) : null,
+          ? report => ctx.waitUntil((async () => {
+            await reconcileProductionTabs(bindings, store, report, fetcher).catch(() => {});
+            if (url.searchParams.get("refresh") === "1" && !report.stale)
+              await syncProductionSheetCatalog(bindings, store, { fetcher, dryRun: false }).catch(() => {});
+          })()) : null,
       }));
     }
     if (path === "/api/production-tabs") {
@@ -1233,6 +1301,10 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
         await updateAssemblyAfterSupplyWrite(bindings,store,fetcher);
         if (!reconcileMove) {
           await drainBitrixNotifications(bindings, store, fetcher).catch(() => {});
+        }
+        const { action, status, name } = result.operation;
+        if (status === "verified" && ["create", "append"].includes(action) && name) {
+          await syncProductionSheetCatalog(bindings, store, { fetcher, dryRun: false, supplyName: name }).catch(() => {});
         }
       })().catch(() => {}));
       return json(result, result.operation?.status === "pending" ? 202 : 200);

@@ -1,9 +1,24 @@
 import type { Supply } from "./model";
 
+export function cartonNumberKey(label: string) {
+  return label.normalize("NFC").trim().toLocaleLowerCase("ru-RU");
+}
+
+export function cartonNumberList(input: string) {
+  return [...new Set(input.split(/[\s,;]+/u).map(cartonNumberKey).filter(Boolean))];
+}
+
+export function cartonStoreNumber(store: string): number | null {
+  const match = store.trim().match(/^(?:магазин\s*)?(\d+)$/iu);
+  if (!match) return null;
+  const storeNumber = Number(match[1]);
+  return Number.isSafeInteger(storeNumber) ? storeNumber : null;
+}
+
 // Same rule as nextCartonNumber_/cartonSupplyAbbreviation_ in the live Assembly.
 export function cartonPrefix(supply: Pick<Supply, "store" | "title">): string {
-  const shop = supply.store.trim().match(/^(?:магазин\s*)?(\d+)$/iu);
-  if (!shop || !Number.isSafeInteger(Number(shop[1])))
+  const shop = cartonStoreNumber(supply.store);
+  if (shop === null)
     throw new Error("Магазин товара не подтверждён. Короб не создан.");
   const letters = supply.title
     .replace(/^\s*(?:ozon|wildberries|wb)\s*/i, "")
@@ -15,7 +30,7 @@ export function cartonPrefix(supply: Pick<Supply, "store" | "title">): string {
     throw new Error(
       "В названии поставки не удалось определить первые три буквы для номера короба.",
     );
-  return String(Number(shop[1])) + letters.slice(0, 3);
+  return String(shop) + letters.slice(0, 3);
 }
 
 export function nextCartonLabel(

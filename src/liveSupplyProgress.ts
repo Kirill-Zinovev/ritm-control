@@ -1,5 +1,23 @@
 import type { LiveOrder } from "./livePrinting";
 
+export const formatPrintQuantity = new Intl.NumberFormat("ru-RU", {
+  maximumFractionDigits: 2,
+}).format;
+
+export function printingUnitConversion(order: LiveOrder) {
+  const machine = (order.sourceMachine || order.machine)?.trim() || "";
+  const xerox = /^(xerox|ксерокс|x|х)$/i.test(machine);
+  const factor = xerox
+    ? order.sheetsInProduct &&
+      order.multiplicity &&
+      order.sheetsInProduct > 0 &&
+      order.multiplicity > 0
+      ? order.sheetsInProduct / order.multiplicity
+      : null
+    : 1;
+  return { machine, xerox, factor };
+}
+
 export function rollPrinted(order: LiveOrder) {
   if (typeof order.printProgress === "number") return order.printProgress;
   if (
@@ -17,6 +35,35 @@ export function rollCut(order: LiveOrder) {
 export function rollPrintRemaining(order: LiveOrder) {
   if (typeof order.remainingPrint === "number") return order.remainingPrint;
   const printed = rollPrinted(order);
+  return printed === null ? null : Math.max(0, order.quantity - printed);
+}
+
+export function supplyPrinted(order: LiveOrder) {
+  const marked = rollPrinted(order);
+  const recorded = order.planningPrinted;
+  if (
+    order.sourceId !== "box-printing" ||
+    order.planningPhysicalUnits !== true ||
+    marked === order.quantity ||
+    typeof recorded !== "number" ||
+    !Number.isFinite(recorded) ||
+    recorded < 0
+  ) return marked;
+  if (recorded === 0) return marked ?? 0;
+
+  const { machine, xerox, factor } = printingUnitConversion(order);
+  const confirmed = marked !== null && marked > 0 ? marked : null;
+  if (!machine || factor === null) return confirmed;
+  const fromGoodOutput = recorded / factor;
+  // Some older Xerox rows use another unit. The completion mark can
+  // establish the plan. An unchecked row cannot establish excess output.
+  if (xerox && fromGoodOutput > order.quantity + 0.000001) return confirmed;
+  return Math.max(marked ?? 0, Math.min(order.quantity, fromGoodOutput));
+}
+
+export function supplyPrintRemaining(order: LiveOrder) {
+  if (order.sourceId !== "box-printing") return rollPrintRemaining(order);
+  const printed = supplyPrinted(order);
   return printed === null ? null : Math.max(0, order.quantity - printed);
 }
 
@@ -153,13 +200,31 @@ export function assemblyAreaTotal(
 }
 
 export function assemblyPackingTotal(
-  orders: Pick<LiveOrder, "packed">[],
+  orders: Pick<LiveOrder, "quantity" | "packed" | "packedConfirmed">[],
   missingPositions = 0,
 ) {
-  return observedTotal([
-    ...orders.map((order) =>
-      typeof order.packed === "number" ? order.packed : null,
-    ),
-    ...Array.from({ length: Math.max(0, missingPositions) }, () => null),
-  ]);
+  let plan = 0;
+  let total = 0;
+  let recorded = 0;
+  let observed = 0;
+  let known = 0;
+  for (const { quantity, packed, packedConfirmed } of orders) {
+    if (!Number.isFinite(quantity) || quantity <= 0) continue;
+    plan += quantity;
+    const exact = typeof packed === "number" && Number.isFinite(packed) && packed >= 0;
+    const confirmed = exact ? packed : packedConfirmed;
+    if (typeof confirmed !== "number" || !Number.isFinite(confirmed) || (!exact && confirmed <= 0)) continue;
+    total += Math.min(confirmed, quantity);
+    recorded += confirmed;
+    observed++;
+    if (exact) known++;
+  }
+  return {
+    plan,
+    total: observed > 0 ? total : null,
+    recorded: observed > 0 ? recorded : null,
+    observed,
+    known,
+    missing: orders.length - observed + Math.max(0, missingPositions),
+  };
 }

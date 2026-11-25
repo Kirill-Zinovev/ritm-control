@@ -51,7 +51,7 @@ export async function createServices(bindings, scope, { fetcher = fetch, refresh
   };
   // guardedFetch performs the durable guard immediately before every Sheets write.
   // A second beforeWrite hook would checkpoint the same lease twice per request.
-  const writers = reader.configured ? Object.fromEntries(Object.entries(DEPARTMENTS).map(([department, target]) => [department, new ProductionSupplyWriter({ department, credentialWriter: writerCredentials, fetcher: guardedFetch, documentId: target.documentId, template: target.template, ...(department === 'roll' ? { layoutLookup: () => readMachineLayoutArticles(reader, sourceId(bindings, 'machineLayoutsId')) } : {}) })])) : null;
+  const writers = reader.configured ? Object.fromEntries(Object.entries(DEPARTMENTS).map(([department, target]) => [department, new ProductionSupplyWriter({ department, credentialWriter: writerCredentials, fetcher: guardedFetch, documentId: target.documentId, template: target.template, assemblyCatalogOnly: true, ...(department === 'roll' ? { layoutLookup: () => readMachineLayoutArticles(reader, sourceId(bindings, 'machineLayoutsId')) } : {}) })])) : null;
   // Historical transfer receipts are still readable in cloud mode.
   const queue = new AssemblySyncQueue(scope);
   let latestPrinting = printing;

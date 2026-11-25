@@ -238,6 +238,24 @@
 }
 .ozon-label-review > p { margin: 2px 0 8px; font-size: 13px; }
 .ozon-label-footer { display: flex; justify-content: flex-end; }
+.wb-missing-codes { margin-top: 8px; color: #765519; font-size: 13px; }
+.wb-missing-codes ul { display: grid; gap: 4px; max-height: 160px; overflow: auto; margin: 8px 0 0; padding-left: 20px; }
+.wb-missing-codes summary, .wb-pair summary { cursor: pointer; }
+.wb-replace-codes { display: flex; align-items: start; gap: 8px; margin-top: 10px; }
+.wb-replace-codes input { flex: none; margin: 2px 0 0; }
+.wb-pairs { display: grid; gap: 7px; max-height: 420px; overflow: auto; }
+.wb-pair { border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
+.wb-pair summary { display: grid; grid-template-columns: minmax(74px, .6fr) minmax(110px, 1.5fr) auto;
+  gap: 12px; padding: 11px 14px; align-items: center; }
+.wb-pair summary strong { color: #174bc8; }
+.wb-pair summary span { overflow-wrap: anywhere; }
+.wb-pair summary span:last-child { justify-self: end; white-space: nowrap; }
+.wb-pair[open] summary { background: var(--canvas); }
+.wb-pair ul { list-style: none; padding: 0 14px; margin: 0; }
+.wb-pair li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 0; }
+.wb-pair li + li { border-top: 1px solid var(--line); }
+.wb-pair small { display: block; margin-top: 4px; color: var(--muted); }
+.wb-pair li > strong { white-space: nowrap; }
 .ozon-pairs { max-height: 300px; }
 .manager-app .ozon-pairs table { min-width: 0; width: 100%; background: var(--surface); }
 .manager-app .ozon-pairs thead th { color: #465c78; background: var(--canvas); font-size: 13px; }

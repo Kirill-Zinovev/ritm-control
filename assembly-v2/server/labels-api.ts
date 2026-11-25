@@ -9,7 +9,7 @@ import {
   type LabelEntry, type LabelManifest, type PrintableLabel,
 } from "../shared/labels";
 import type { Market } from "../shared/model";
-import { effectiveCatalogData } from "./catalog-store";
+import { effectiveCatalogData, positionCatalogJoin, positionWorkCatalogSql, selectableCatalog } from "./catalog-store";
 
 const shaPattern = /^[a-f0-9]{64}$/;
 const importPattern = /^labels:[a-f0-9]{64}$/;
@@ -47,7 +47,7 @@ async function readLabels(store: SqlStore, url: URL) {
   const ids = [...new Set(url.searchParams.getAll("position"))];
   const receiptId = url.searchParams.get("receipt"), entryId = url.searchParams.get("entry");
   check(Number(ids.length > 0) + Number(receiptId !== null) + Number(entryId !== null) === 1, "Выберите один источник этикеток.");
-  type Target = { id: string; sku: string; name: string; barcode: string; market: Market; store: string; catalogEntryId?: string | null };
+  type Target = { id: string; sku: string; name: string; barcode: string; market: Market; store: string; catalogEntryId?: string | null; catalog?: string | null };
   let positions: Target[];
   if (receiptId !== null) {
     check(receiptId.length > 0 && receiptId.length <= 300, "Выберите складскую запись.");
@@ -56,14 +56,17 @@ async function readLabels(store: SqlStore, url: URL) {
   } else if (entryId !== null) {
     const importId = url.searchParams.get("catalogImport") || "";
     check(entryId.length > 0 && entryId.length <= 1500 && importId.length > 0 && importId.length <= 300, "Выберите товар из справочника.");
-    const rows = await store.all<{ data: string }>(`select ${effectiveCatalogData()} data from av2_resolved_catalog_entries e where e.entry_id=? and e.import_id=? and e.import_id=(select active_catalog_id from av2_meta where id=1)`, [entryId, importId]);
+    const rows = await store.all<{ data: string }>(`select ${effectiveCatalogData()} data from ${selectableCatalog} e where e.entry_id=? and e.import_id=? and e.import_id=(select active_catalog_id from av2_meta where id=1)`, [entryId, importId]);
     check(rows.length === 1, "Справочник изменился. Найдите товар заново.");
     const entry = JSON.parse(rows[0].data) as Omit<Target, "id">;
     positions = [{ ...entry, id: entryId, catalogEntryId: entryId }];
   } else {
     check(ids.length > 0 && ids.length <= labelBatchLimit && ids.every(id => id.length > 0 && id.length <= 300), "Выберите от 1 до 150 товаров.");
     positions = await store.all<Target>(
-    `select p.id,p.sku,p.name,p.barcode,s.market,s.store,p.catalog_entry_id from av2_positions p join av2_supplies s on s.id=p.supply_id where p.id in (select value from json_each(?))`, [JSON.stringify(ids)]);
+      `select p.id,p.sku,p.name,p.barcode,s.market,s.store,p.catalog_entry_id,
+        ${positionWorkCatalogSql(false, true)} catalog
+        from av2_positions p join av2_supplies s on s.id=p.supply_id ${positionCatalogJoin("p", "pc", true)}
+        where p.id in (select value from json_each(?))`, [JSON.stringify(ids)]);
     check(positions.length === ids.length, "Часть выбранных товаров больше не найдена. Обновите поставку.");
   }
   const [active] = await store.all<{ id: string }>("select id from av2_label_imports where state='active'");
@@ -79,13 +82,19 @@ async function readLabels(store: SqlStore, url: URL) {
   const byId = new Map(positions.map(p => [p.id, p]));
   const items: PrintableLabel[] = (ids.length ? ids : positions.map(p => p.id)).map(id => {
     const p = byId.get(id)!;
+    const card = p.catalog ? JSON.parse(p.catalog) as ManagedProduct : null;
+    const currentCard = card?.market === p.market &&
+      (card.store === p.store || (p.store === "Не подтверждён" && /^[1-9]\d*$/.test(card.store) &&
+        (!p.barcode || card.barcode === p.barcode))) ? card : null;
+    const target = { positionId: p.id, sku: p.sku, name: currentCard?.name || p.name, market: p.market };
+    if (currentCard?.labelSha && shaPattern.test(currentCard.labelSha))
+      return { ...target, status: "found", imageUrl: mediaPath(currentCard.labelSha) };
     const entry = byKey.get(JSON.stringify([p.market, labelArticle(p.sku, p.market)]));
     const candidates = managedLabels.filter(m => m.market === p.market && m.store === p.store);
     const exact = candidates.find(m => m.id === p.catalogEntryId) ?? candidates.find(m => catalogKey(m.sku) === catalogKey(p.sku));
     const aliases = exact ? [exact] : candidates.filter(m =>
       m.aliases.some(a => labelArticle(a, m.market) === labelArticle(p.sku, p.market)));
     const hashes = [...new Set(aliases.flatMap(m => m.labelSha ? [m.labelSha] : []))];
-    const target = { positionId: p.id, sku: p.sku, name: p.name, market: p.market };
     if (hashes.length === 1) return { ...target, status: 'found', imageUrl: mediaPath(hashes[0]) };
     if (hashes.length > 1) return { ...target, status: 'conflict' };
     return {

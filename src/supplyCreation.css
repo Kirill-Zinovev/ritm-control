@@ -1,0 +1,551 @@
+.modal-content.supply-create-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(1160px, calc(100vw - 32px));
+  padding: 0;
+  overflow: hidden;
+  font-size: 15px;
+}
+
+.supply-create-modal > .modal-heading {
+  flex: none;
+  margin: 0;
+  padding: 22px 26px 16px;
+}
+
+.supply-create-modal > .modal-heading h2 {
+  font-size: 32px;
+  line-height: 1.2;
+  letter-spacing: -0.025em;
+}
+
+.supply-create-modal > .modal-heading p {
+  margin-top: 4px;
+  font-size: 15px;
+}
+
+.supply-create-modal > form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.supply-create-body {
+  display: grid;
+  min-height: 0;
+  align-content: start;
+  gap: 16px;
+  padding: 1px 26px 18px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.supply-create-modal .modal-actions {
+  flex: none;
+  margin: 0;
+  padding: 14px 26px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.supply-create-review-actions {
+  justify-content: space-between;
+}
+
+.supply-create-details {
+  display: grid;
+  grid-template-columns: minmax(0, 2.5fr) minmax(175px, 1fr);
+  gap: 16px;
+}
+
+.supply-create-details .field,
+.supply-deadline-step .field {
+  margin: 0;
+  font-size: 15px;
+}
+
+.supply-create-details input,
+.supply-create-details select,
+.supply-deadline-step input {
+  min-width: 0;
+  min-height: 42px;
+}
+
+.supply-deadline-timeline {
+  padding: 16px 18px 18px;
+  border: 1px solid #d9e7f8;
+  border-radius: var(--panel-radius);
+  background: var(--primary-soft);
+}
+
+.supply-deadline-timeline > header {
+  margin-bottom: 10px;
+}
+
+.supply-create-body h3,
+.supply-review h3 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.018em;
+}
+
+.supply-deadline-steps {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  column-gap: 18px;
+}
+
+.supply-deadline-steps::before {
+  position: absolute;
+  inset-inline: 16%;
+  top: 23px;
+  border-top: 2px solid #a9c4ef;
+  content: "";
+}
+
+.supply-deadline-step {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+}
+
+.supply-deadline-icon {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border: 1px solid #b8cdf0;
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--primary);
+}
+
+.supply-deadline-step.is-pack .supply-deadline-icon {
+  color: #6d38bd;
+}
+
+.supply-deadline-step.is-ship .supply-deadline-icon {
+  color: var(--success);
+}
+
+.supply-deadline-step .field {
+  width: min(100%, 254px);
+}
+
+.supply-deadline-step .field > span {
+  text-align: center;
+}
+
+.supply-create-composition > h3 {
+  margin-bottom: 10px;
+}
+
+.supply-create-items {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.95fr) minmax(0, 2fr);
+  gap: 18px;
+}
+
+.supply-create-upload {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid #dbe8f8;
+  border-radius: var(--panel-radius);
+  background: var(--primary-soft);
+}
+
+.supply-create-upload > .supply-file-name {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.supply-create-upload > .supply-file-name svg,
+.supply-create-source > div > .lucide-file-spreadsheet {
+  flex: none;
+  color: var(--success);
+}
+
+.supply-create-upload .supply-file-help,
+.supply-create-editor .supply-items-note {
+  font-size: 13px;
+}
+
+.supply-create-upload .button.ghost,
+.supply-create-editor-heading .button.ghost {
+  min-height: 32px;
+  padding: 4px 0;
+  color: var(--primary);
+}
+
+.supply-create-editor {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 4px;
+}
+
+.supply-create-editor-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.supply-create-editor textarea {
+  display: block;
+  width: 100%;
+  min-height: 120px;
+  padding: 11px 12px;
+}
+
+.supply-create-modal .supply-lock-option {
+  padding: 4px 0;
+  border-color: transparent;
+  background: transparent;
+}
+
+.supply-create-modal .supply-lock-option strong {
+  font-size: 14px;
+}
+
+.supply-create-modal .supply-lock-option small {
+  font-size: 12px;
+}
+
+.supply-create-source {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid #dbe8f8;
+  border-radius: var(--radius);
+  background: var(--primary-soft);
+}
+
+.supply-create-source > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+  overflow-wrap: anywhere;
+}
+
+.supply-create-source > div svg {
+  flex: none;
+}
+
+.supply-create-source > .button {
+  flex: none;
+  color: var(--primary);
+}
+
+.supply-review {
+  display: grid;
+  align-items: start;
+  gap: 18px;
+  margin-block: 8px;
+}
+
+.supply-create-modal .supply-review {
+  grid-template-columns: minmax(0, 1fr) minmax(250px, 0.415fr);
+  margin: 4px 0 0;
+}
+
+.supply-review-detail {
+  min-width: 0;
+}
+
+.supply-review-heading,
+.supply-review-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.supply-review-heading {
+  justify-content: space-between;
+}
+
+.supply-review-heading .button,
+.supply-review-filters .button,
+.supply-review-choices .button {
+  min-height: 34px;
+  padding: 5px 9px;
+  font-size: 13px;
+}
+
+.supply-review-guide {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.supply-review-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-variant-numeric: tabular-nums;
+}
+
+.supply-review-col-sku {
+  width: 18%;
+}
+.supply-review-col-machine {
+  width: 16%;
+}
+.supply-review-col-department {
+  width: 19%;
+}
+.supply-review-col-requested {
+  width: 16%;
+}
+.supply-review-col-planned {
+  width: 31%;
+}
+
+.supply-review-table th,
+.supply-review-table td {
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.supply-review-table thead th {
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.supply-review-table td > small,
+.supply-review-rounding > small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.supply-review-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.supply-review-choices .button {
+  white-space: nowrap;
+}
+
+.supply-review-table .supply-review-advice {
+  color: var(--warning);
+}
+
+.supply-review .supply-review-expand {
+  margin-top: 6px;
+  padding-inline: 7px;
+  color: var(--primary);
+}
+
+.supply-review-skip > td {
+  padding: 7px 0;
+  border: 0;
+}
+
+.supply-review-issue {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid #f1ddba;
+  border-radius: var(--radius);
+  background: var(--warning-bg);
+}
+
+.supply-review-issue-head {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.supply-review-issue-head small {
+  margin-left: 7px;
+  color: var(--muted);
+}
+
+.supply-review-skip-status {
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: #ffe9c4;
+  color: var(--warning);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.supply-review-reason {
+  color: var(--warning);
+}
+
+.supply-review-issue p {
+  margin: 0;
+}
+
+.supply-review-issue a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding-block: 3px;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.supply-launch-summary {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  padding: 19px;
+  border: 1px solid #d9e7f8;
+  border-radius: var(--panel-radius);
+  background: var(--primary-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.supply-create-modal .supply-launch-summary {
+  min-height: 400px;
+}
+
+.supply-launch-summary > span,
+.supply-launch-estimate {
+  color: var(--muted);
+}
+
+.supply-launch-total {
+  margin: 7px 0;
+  font-size: clamp(38px, 4vw, 53px);
+  line-height: 1.05;
+  letter-spacing: -0.045em;
+}
+
+.supply-launch-total small {
+  font-size: 0.68em;
+}
+
+.supply-launch-summary dl {
+  margin: 10px 0 4px;
+  border-top: 1px solid #d5e2f4;
+}
+
+.supply-launch-department {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 3px 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid #d5e2f4;
+}
+
+.supply-launch-department dt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.supply-launch-department dd {
+  margin: 0;
+}
+
+.supply-launch-department.is-roll svg {
+  color: var(--primary);
+}
+
+.supply-launch-department.is-box svg {
+  color: var(--success);
+}
+
+.supply-launch-skipped {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.supply-launch-skipped svg {
+  flex: none;
+}
+
+@media (max-width: 860px) {
+  .supply-create-modal .supply-review {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .supply-create-modal .supply-launch-summary {
+    grid-row: 1;
+    min-height: 0;
+  }
+}
+
+@media (max-width: 620px) {
+  .supply-create-modal > .modal-heading,
+  .supply-create-body,
+  .supply-create-modal .modal-actions {
+    padding-inline: 16px;
+  }
+
+  .supply-create-details,
+  .supply-create-items,
+  .supply-deadline-steps {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .supply-deadline-steps::before {
+    display: none;
+  }
+
+  .supply-deadline-step {
+    grid-template-columns: 48px minmax(0, 1fr);
+    align-items: center;
+    justify-items: stretch;
+    gap: 10px;
+  }
+
+  .supply-deadline-step .field {
+    width: 100%;
+  }
+
+  .supply-deadline-step .field > span {
+    text-align: left;
+  }
+
+  .supply-review-table th,
+  .supply-review-table td {
+    padding-inline: 4px;
+  }
+
+  .supply-create-source,
+  .supply-create-modal .modal-actions {
+    flex-wrap: wrap;
+  }
+}

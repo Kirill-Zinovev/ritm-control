@@ -4,11 +4,12 @@ import { catalogKey } from "../shared/catalog";
 import {
   dispatchHistoryPageSize, type DispatchHistoryDetail, type DispatchHistoryEntry, type DispatchHistoryPage,
 } from "../shared/dispatch-history";
-import { countLabel, dateTime, number, type Dispatch } from "../shared/model";
+import { countLabel, dateTime, number, type Dispatch, type Scope } from "../shared/model";
 import { ozonArticle, ozonCodesByCarton, summarizeOzonProducts, type OzonProduct } from "../shared/ozon-shipment";
 import { warehouseCity } from "../shared/warehouse-filter";
 import { Button, Empty, Pagination, Search } from "./ui";
 import { request } from "./useWorkspace";
+import { CatalogArticleLink } from "./CatalogArticleLink";
 import "./dispatch-history.css";
 
 const historyPath = "/api/dispatch-history";
@@ -286,7 +287,7 @@ function ShipmentDetails({ detail, matchedCartonId, searchedArticle, onExport }:
                     {isOzon && <OzonCode code={codes.get(box.id)} />}
                     <b className="history-carton-qty">{number(box.qty)} шт.</b>
                   </summary>
-                  <ProductTable products={summarizeOzonProducts([box], article)}
+                  <ProductTable products={summarizeOzonProducts([box], article)} scope={dispatch}
                     highlightedSku={box.id === matchedCartonId ? highlightedSku : undefined} />
                 </details>
               ))}
@@ -309,7 +310,7 @@ function ShipmentDetails({ detail, matchedCartonId, searchedArticle, onExport }:
           {productTotals.length ? (
             <>
               <p className="history-product-count">{countLabel(productTotals.length, ["артикул", "артикула", "артикулов"])}</p>
-              <ProductTable products={productTotals} />
+              <ProductTable products={productTotals} scope={dispatch} />
             </>
           ) : <p className="history-product-count">Доступен итог отгрузки.</p>}
           <div className="history-total"><span>Всего</span><strong>{number(quantity)} шт.</strong></div>
@@ -324,7 +325,9 @@ function OzonCode({ code }: { code: string | undefined }) {
     : <span className="history-missing-code">ШК не привязан</span>;
 }
 
-function ProductTable({ products, highlightedSku }: { products: OzonProduct[]; highlightedSku?: string }) {
+function ProductTable({ products, scope, highlightedSku }: {
+  products: OzonProduct[]; scope: Pick<Scope, "market" | "store">; highlightedSku?: string;
+}) {
   return (
     <div className="table-scroll history-products">
       <table>
@@ -333,7 +336,8 @@ function ProductTable({ products, highlightedSku }: { products: OzonProduct[]; h
           const matched = highlightedSku !== undefined && catalogKey(product.sku) === highlightedSku;
           return (
             <tr key={product.sku} data-article-match={matched || undefined}>
-              <td><strong>{product.sku}</strong>{product.name && product.name !== product.sku && <small>{product.name}</small>}</td>
+              <td><CatalogArticleLink sku={product.sku} scope={scope} />
+                {product.name && product.name !== product.sku && <small>{product.name}</small>}</td>
               <td>{matched ? <span className="history-match-qty">{number(product.qty)} шт.</span> : number(product.qty)}</td>
             </tr>
           );

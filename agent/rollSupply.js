@@ -3,9 +3,11 @@ import { createHash, randomInt } from "node:crypto";
 import {
   ROLL_PRINTING_SHEET,
   ROLL_PRINTING_SHEET_ID,
+  marketplaceForSupply,
 } from "../worker/printing.js";
 import { formulaFamily } from "./formulaFamily.js";
 import { RepairError } from "./repairError.js";
+import { productionCatalogFields, productionCatalogSheet, sheetCatalogFormula, supplyCatalogShop } from "./productionCatalogSheet.js";
 
 const DATA_START_ROW = ROLL_PRINTING_SHEET.dataStartRow;
 const HEADER_ROW = ROLL_PRINTING_SHEET.headerRow;
@@ -59,7 +61,7 @@ export function boxWorklogInitializationRequests(plan, sourceColumnCount) {
   const zero = () => ({userEnteredValue:{numberValue:0}});
   for (const columnIndex of [24,27])write(plan.startRow-1,columnIndex,plan.lines.map(()=>({values:[zero(),zero()]})));
   write(plan.startRow-1,23,plan.lines.map((_,i)=>{
-    const row=plan.startRow+i,den=`IFERROR(P${row}/N${row}*G${row};0)`;
+    const row=plan.startRow+i,den=`IFERROR(IF(REGEXMATCH(UPPER(TRIM(TO_TEXT(D${row})));"^(XEROX|КСЕРОКС|X|Х)$");P${row}/N${row}*G${row};P${row});0)`;
     const line=(label,col)=>`"${label} "&REPT("■";ROUND(MIN(1;${col}${row}/(${den}))*8;0))&REPT("□";8-ROUND(MIN(1;${col}${row}/(${den}))*8;0))&" "&TEXT(${col}${row}/(${den});"0%")`;
     return {values:[{userEnteredValue:{formulaValue:`=IFERROR(IF(${den}>0;${line("Печать","AB")}&CHAR(10)&${line("Порезка","AC")};"План не определён");"План не определён")`}}]};
   }));
@@ -688,7 +690,7 @@ function formulaColumnRequests(sheetId, repairs) {
 }
 
 export class RollSupplySheetsWriter {
-  constructor({ credentialWriter, fetcher = fetch, timeoutMs = 25000, beforeWrite = null, documentId = ROLL_PRINTING_SHEET_ID, template = ROLL_PRINTING_SHEET, box = false, layoutLookup = null } = {}) {
+  constructor({ credentialWriter, fetcher = fetch, timeoutMs = 25000, beforeWrite = null, documentId = ROLL_PRINTING_SHEET_ID, template = ROLL_PRINTING_SHEET, box = false, layoutLookup = null, assemblyCatalogOnly = false } = {}) {
     if (!credentialWriter || typeof credentialWriter.token !== "function")
       throw new TypeError("A configured production writer is required");
     this.credentials = credentialWriter;
@@ -696,12 +698,43 @@ export class RollSupplySheetsWriter {
     this.template = template;
     this.box = box;
     this.layoutLookup = layoutLookup;
+    this.assemblyCatalogOnly = assemblyCatalogOnly;
     this.layout = box ? BOX_LAYOUT : ROLL_LAYOUT;
     this.formulaColumns = box ? [6, 10] : ROLL_FORMULA_COLUMNS;
     this.fetcher = (...args) => fetcher(...args);
     this.timeoutMs = timeoutMs;
     this.beforeWrite = beforeWrite;
     this.preparedTemplates = new Map();
+  }
+
+  catalogFormulaRepairs(sheets, grid, name, lines, startRow) {
+    if (!this.assemblyCatalogOnly) {
+      const repairs = rollCatalogFormulaRepairs(startRow, lines.length, name, this.box, this.layout);
+      if (repairs.length && !sheets.some(sheet => sheet.title === "_RITM_WB_SOURCE"))
+        fail("roll_catalog_source_missing", "Не найден источник WB для проверки товаров. Запись остановлена.", 409);
+      return repairs;
+    }
+    if (!sheets.some(sheet => sheet.title === productionCatalogSheet))
+      fail("production_catalog_sheet_missing", "Справочник «RITM Сборка» ещё не синхронизирован с таблицей участка. Повторите запись после сверки.", 503);
+    const target = { market: marketplaceForSupply(name), shop: supplyCatalogShop(name), department: this.box ? "box" : "roll" };
+    const columns = productionCatalogFields.map(label => findHeaderColumn(grid, label, this.layout));
+    const machine = findHeaderColumn(grid, "Станок", this.layout);
+    const store = findHeaderColumn(grid, "Магазин", this.layout);
+    if (columns.some(column => !column) || machine !== 4)
+      fail("production_catalog_template_header", "Проверьте заголовки карточки товара в таблице участка.", 409);
+    return lines.flatMap((line, index) => {
+      const row = startRow + index;
+      const repair = (column, formula) => ({ row, column, cell: columnName(column) + row, sourceCell: "E" + row, formula });
+      const text = value => `="${String(value || "").replace(/"/g, '""')}"`;
+      const fields = columns.map((column, field) => repair(column, sheetCatalogFormula(target, row, field + 1)));
+      if (line.catalogMachine) fields.push(repair(machine, text(line.catalogMachine)));
+      if (store) fields.push(repair(store, text(line.store)));
+      if (this.box && line.xeroxFactor && line.xeroxMultiplicity) {
+        fields[1] = repair(columns[1], `=${line.xeroxFactor}`);
+        fields[4] = repair(columns[4], `=${line.xeroxMultiplicity}`);
+      }
+      return fields;
+    });
   }
 
   async request(url, { method = "GET", body, write = false } = {}) {
@@ -927,9 +960,7 @@ export class RollSupplySheetsWriter {
         "Заголовок A1 шаблона содержит формулу и не может быть безопасно заменён названием поставки.",
         409,
       );
-    const catalogRepairs = rollCatalogFormulaRepairs(DATA_START_ROW, lines.length, name, this.box, this.layout);
-    if (catalogRepairs.length && !sheets.some((sheet) => sheet.title === "_RITM_WB_SOURCE"))
-      fail("roll_catalog_source_missing", "Не найден источник WB для проверки товаров. Создание остановлено.", 409);
+    const catalogRepairs = this.catalogFormulaRepairs(sheets, sourceGrid, name, lines, DATA_START_ROW);
     const formulaRepairs = inferFormulaRepairs(
       sourceGrid,
       DATA_START_ROW,
@@ -967,7 +998,7 @@ export class RollSupplySheetsWriter {
       fail("production_catalog_template_header", `В шаблоне не найдена колонка «${label}».`);
     };
     lines.forEach((line, index) => {
-      if (!line.catalogMachine) return;
+      if (this.assemblyCatalogOnly || !line.catalogMachine) return;
       const row = DATA_START_ROW + index;
       const add = (column, formula) => formulaRepairs.push({
         row, column, cell: columnName(column) + row, sourceCell: "E" + row, formula,
@@ -1100,9 +1131,7 @@ export class RollSupplySheetsWriter {
     const startRow = preserveExistingRows ? scanRows + 1 : DATA_START_ROW;
     const templateRow = DATA_START_ROW;
     const layoutRepairs = !this.box && this.layoutLookup ? await this.layoutFormulaRepairs(lines, startRow) : [];
-    const catalogRepairs = rollCatalogFormulaRepairs(startRow, lines.length, name, this.box, this.layout);
-    if (catalogRepairs.length && !sheets.some((sheet) => sheet.title === "_RITM_WB_SOURCE"))
-      fail("roll_catalog_source_missing", "Не найден источник WB для проверки товаров. Добавление остановлено.", 409);
+    const catalogRepairs = this.catalogFormulaRepairs(sheets, grid, name, lines, startRow);
     const missingFormulaColumns = this.formulaColumns.filter(
       (column) => !gridCell(grid, templateRow, column).userEnteredValue?.formulaValue,
     );
@@ -1550,6 +1579,21 @@ export class RollSupplySheetsWriter {
     if (plan.manifest) requests.push(...supplyManifestRequests(sheetId, plan.manifest));
     if (plan.action === "create" && Number.isSafeInteger(plan.trimToRowCount) && plan.trimToRowCount < plan.templateRowCount)
       requests.push({ deleteDimension: { range: { sheetId, dimension: "ROWS", startIndex: plan.trimToRowCount, endIndex: plan.templateRowCount } } });
+    if (plan.action === "create") {
+      // A duplicate inherits the template's hidden state. Set its own layout
+      // after the progress headers and the box-specific resizing are in place.
+      requests.push(
+        { updateSheetProperties: { properties: { sheetId, hidden: false }, fields: "hidden" } },
+        { repeatCell: {
+          range: { sheetId },
+          cell: { userEnteredFormat: { horizontalAlignment: "CENTER", verticalAlignment: "MIDDLE" } },
+          fields: "userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment",
+        } },
+        { setBasicFilter: { filter: {
+          range: { sheetId, startRowIndex: HEADER_ROW - 1, startColumnIndex: 0, endColumnIndex: this.layout.maxColumn },
+        } } },
+      );
+    }
     const result = await this.request(
       `https://sheets.googleapis.com/v4/spreadsheets/${this.documentId}:batchUpdate`,
       { method: "POST", body: { requests }, write: true },

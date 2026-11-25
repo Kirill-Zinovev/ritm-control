@@ -163,6 +163,7 @@ function getShipmentLockIndicators(shipmentIds) {
   const states = {};
   shipmentIds.forEach(value => {
     const id = String(value || '');
+    if (isAssemblyStock_(id)) { states[id]='not_locked_locally'; return; }
     let key;
     try { key = ritmShipmentLockPropertyKey_(id); } catch (_) { states[id] = 'unknown'; return; }
     const raw = props.getProperty(key);
@@ -174,6 +175,7 @@ function getShipmentLockIndicators(shipmentIds) {
 }
 
 function assertLocalShipmentUnlocked_(shipmentId) {
+  if (isAssemblyStock_(shipmentId)) return;
   const key = ritmShipmentLockPropertyKey_(shipmentId);
   const raw = PropertiesService.getScriptProperties().getProperty(key);
   if (!raw) return;
@@ -184,6 +186,7 @@ function assertLocalShipmentUnlocked_(shipmentId) {
 }
 
 function assertRitmShipmentUnlocked_(shipmentId) {
+  if (isAssemblyStock_(shipmentId)) return;
   const id = String(shipmentId || '').trim();
   assertLocalShipmentUnlocked_(id);
   let result;
@@ -238,9 +241,61 @@ function getInitialData(shipmentId, forceSync) {
   return getAssemblySnapshot_(shipmentId, forceSync, false);
 }
 
+// A read-only navigation index. Grouping never changes a supply, position,
+// journal event, lock or carton identity. Stores come from the owning catalog.
+function getAssemblyDirections(fresh) {
+  const db = SpreadsheetApp.openById(DB_ID);
+  const shipments = assemblyShipments_(db);
+  const props = PropertiesService.getScriptProperties().getProperties();
+  const revision = ritmFingerprint_(Object.keys(props).filter(key => key.indexOf(RITM_SYNC_PREFIX) === 0)
+    .sort().map(key => [key, props[key]]));
+  const key = 'ritm.assembly.directions.v2.' + revision;
+  const cache = CacheService.getScriptCache();
+  if (fresh !== true) {
+    const saved = parseSyncJson_(cache.get(key), null);
+    if (saved && Array.isArray(saved.groups)) return saved;
+  }
+  const errors = [], sources = shipments.filter(shipment => !shipment.stockTask).map(shipment => {
+    try { return { shipment, rows: readShipmentItems_(db, shipment, true) }; }
+    catch (_) { errors.push(String(shipment.shipmentId)); return { shipment, rows: [] }; }
+  });
+  const lookups = sources.flatMap(source => source.rows.map(row => ({
+    sku: row['Артикул'], source: shipmentMarketplace_(source.shipment),
+  })));
+  let stores = Object.create(null);
+  try { stores = storeNumbersForItems_(lookups, fresh === true); }
+  catch (_) { errors.push('stores'); }
+  const groups = new Map();
+  sources.forEach(({ shipment, rows }) => {
+    const direction = cartonDirection_(shipment);
+    const byStore = new Map();
+    rows.forEach(row => {
+      const found = stores[storeNumberSkuKey_(row['Артикул'], shipmentMarketplace_(shipment))];
+      const store = Array.isArray(found) && found.length === 1 ? String(found[0]) : '';
+      if (!byStore.has(store)) byStore.set(store, []);
+      byStore.get(store).push(String(row.positionId));
+    });
+    if (!byStore.size) byStore.set('', []);
+    byStore.forEach((positionIds, store) => {
+      // Unknown destinations/stores remain source-specific rather than guessed.
+      const id = direction && store ? direction.key + '|store:' + store : 'source:' + shipment.shipmentId + '|store:' + store;
+      if (!groups.has(id)) groups.set(id, { id, name: direction ? direction.label : shipment['Название поставки'],
+        marketplace: shipmentMarketplace_(shipment), store, directionKey: direction ? direction.key : '', sources: [] });
+      groups.get(id).sources.push({ id: String(shipment.shipmentId), name: String(shipment['Название поставки']),
+        sourceAvailable: shipment.sourceAvailable !== false, positionIds });
+    });
+  });
+  groups.set('RITM-STOCK-WAREHOUSE',{id:'RITM-STOCK-WAREHOUSE',name:'Запасы',stockTask:true,marketplace:'OZON',store:'',directionKey:'',sources:[{id:'RITM-STOCK-WAREHOUSE',name:'Запасы склад · Бокс и рулонная печать',sourceAvailable:true,positionIds:[]}]});
+  const result = { groups: Array.from(groups.values()), errors, revision, updatedAt: new Date().toISOString() };
+  const json = JSON.stringify(result);
+  if (!errors.length && json.length < 90000) cache.put(key, json, 300);
+  return result;
+}
+
 // Return the already-synchronized composition first. The browser can paint the
 // shipment immediately, then request authoritative work, carton and norm facts.
 function getAssemblyPreview(shipmentId) {
+  if (isAssemblyStock_(shipmentId)) return getAssemblySnapshot_(shipmentId,false,false);
   const props = PropertiesService.getScriptProperties();
   const sync = parseSyncJson_(props.getProperty(RITM_SYNC_STATE), null);
   if (!sync) throw new Error('Сначала обновите состав поставки.');
@@ -254,7 +309,7 @@ function getAssemblyPreview(shipmentId) {
     operations: Object.keys(OPERATION_LABELS).map(id => ({ id, name: OPERATION_LABELS[id] })),
     employees: [], employeeShift: null, items: [], referenceIncomplete: true,
   };
-  const rows = readShipmentItems_(db, activeShipment)
+  const rows = readShipmentItems_(db, activeShipment, true)
     .filter(row => String(row.shipmentId) === String(activeShipment.shipmentId) && row.directionId === activeShipment.directionId);
   const items = rows.map(row => {
     const operations = {};
@@ -270,6 +325,7 @@ function getAssemblyPreview(shipmentId) {
       shipmentId: String(row.shipmentId), directionId: String(row.directionId),
       direction: String(row['Направление'] || ''), positionId: String(row.positionId),
       sku: String(row['Артикул'] || ''), productName: String(row['Название товара'] || ''),
+      stockTask: row.stockTask === true, productionDepartment: row.productionDepartment || '', productionPrint: row.productionPrint || '', productionCut: row.productionCut || '', productionArchivedAt: row.productionArchivedAt || '',
       productType: String(row['Вид товара'] || ''), boxType: '', unitsPerBox: null,
       boxNormError: '', photoAssetKey: String(row.photoAssetKey || ''),
       photoUrl: safeRitmPhotoUrl_(row['Фото']), sheetsPerUnit: toNumberOrNull_(row['Листов на штуку']),
@@ -286,12 +342,13 @@ function getAssemblyPreview(shipmentId) {
   return {
     version: 'ritm-supply-sync-1', environment: 'RITM', sync, dataVersion: readVersion,
     referenceKey: '', updatedAt: new Date().toISOString(), referenceIncomplete: true,
-    shipments: shipments.map(row => ({ id: String(row.shipmentId), name: String(row['Название поставки']), environment: row.environment, sourceAvailable: row.sourceAvailable !== false, itemCount: Number.isSafeInteger(row.itemCount) ? row.itemCount : null })),
+    shipments: shipments.map(row => ({ id: String(row.shipmentId), name: String(row['Название поставки']), stockTask: row.stockTask === true, environment: row.environment, sourceAvailable: row.sourceAvailable !== false, itemCount: Number.isSafeInteger(row.itemCount) ? row.itemCount : null })),
     shipment: {
       id: String(activeShipment.shipmentId), name: String(activeShipment['Название поставки'] || ''),
       directionId: String(activeShipment.directionId), direction: String(activeShipment['Направление'] || ''),
       sourceUrl: activeShipment.sourceUrl || '',
       assemblyUrl: activeShipment.sheetId ? 'https://docs.google.com/spreadsheets/d/' + DB_ID + '/edit#gid=' + activeShipment.sheetId : '',
+      stockTask: activeShipment.stockTask === true,
       sourceAvailable: activeShipment.sourceAvailable !== false, marketplace, labelSourceStatus: 'not_checked',
     },
     operations: Object.keys(OPERATION_LABELS).map(id => ({ id, name: OPERATION_LABELS[id] })),
@@ -318,6 +375,7 @@ function configureRitmControlApi(baseUrl) {
 }
 
 function getAssemblyControlTasks(shipmentId, directionId) {
+  if (isAssemblyStock_(shipmentId) && directionId === 'ROLL') return {ok:true,available:true,shipmentId,shipmentLock:{shipmentId,locked:false,status:'unlocked'},controls:[]};
   try {
     const db = SpreadsheetApp.openById(DB_ID);
     const shipment = requireRitmShipment_(db, shipmentId, directionId);
@@ -398,7 +456,7 @@ function ritmControlApiRequest_(method, path, body) {
   const secret = props.getProperty(RITM_EVENT_SECRET) || '';
   if (!/^https:\/\/[a-z0-9.-]+\.chatgpt\.site$/i.test(base) || !/^[a-f0-9]{64}$/i.test(secret))
     throw new Error('Связь с задачами RITM не настроена.');
-  if (!['GET', 'POST'].includes(method) || !['/api/assembly-controls?shipmentId=', '/api/assembly-controls/complete', '/api/assembly-only-items?shipmentId='].some(prefix => path.indexOf(prefix) === 0))
+  if (!['GET', 'POST'].includes(method) || (!(method === 'GET' && path === '/api/assembly-stocks') && !['/api/assembly-controls?shipmentId=', '/api/assembly-controls/complete', '/api/assembly-only-items?shipmentId='].some(prefix => path.indexOf(prefix) === 0)))
     throw new Error('Запрошено неподдерживаемое действие контроля.');
   const rawBody = method === 'POST' ? JSON.stringify(body || {}) : '';
   const bodyHash = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, rawBody, Utilities.Charset.UTF_8)
@@ -441,8 +499,8 @@ function getAssemblySnapshot_(shipmentId, forceSync, progressOnly) {
   // remains visible to the next cheap version poll instead of being marked as included.
   const readVersion = getDataVersion();
   const savedSync = parseSyncJson_(props.getProperty(RITM_SYNC_STATE), null);
-  if (progressOnly && !savedSync) throw new Error('Сначала обновите состав поставки.');
-  const sync = forceSync === true || !savedSync
+  if (progressOnly && !savedSync && !isAssemblyStock_(shipmentId)) throw new Error('Сначала обновите состав поставки.');
+  const sync = isAssemblyStock_(shipmentId) ? {status:'current',errors:[]} : forceSync === true || !savedSync
     ? syncRitmSupplies(forceSync === true)
     : savedSync;
   const db = SpreadsheetApp.openById(DB_ID);
@@ -603,6 +661,7 @@ function getAssemblySnapshot_(shipmentId, forceSync, progressOnly) {
       sku: String(row['Артикул']),
       storeNumbers: storeNumbers[storeNumberSkuKey_(row['Артикул'], shipmentMarketplace_(activeShipment))] ?? null,
       productName: String(row['Название товара'] || ''),
+      stockTask: row.stockTask === true, productionDepartment: row.productionDepartment || '', productionPrint: row.productionPrint || '', productionCut: row.productionCut || '', productionArchivedAt: row.productionArchivedAt || '',
       productType: String(row['Вид товара'] || ''),
       boxType: boxNorm && boxNorm.boxType ? boxNorm.boxType : '',
       unitsPerBox: boxNorm && boxNorm.confirmed ? boxNorm.unitsPerBox : null,
@@ -616,6 +675,7 @@ function getAssemblySnapshot_(shipmentId, forceSync, progressOnly) {
         ? (cartonSnapshots[String(row.positionId)] || []).map(box => box.number).filter(Boolean)
         : [],
       cartonsSnapshot: boxSummary === null ? null : (cartonSnapshots[String(row.positionId)] || []),
+      assignedQtySnapshot: boxSummary === null ? null : (boxSummary.assignedQuantity || 0),
       boxedQtySnapshot: boxSummary === null ? toNumberOrNull_(row['В коробах, шт · срез']) : (boxSummary.quantity ? boxSummary.quantity : null),
       unboxedQtySnapshot: boxSummary === null ? toNumberOrNull_(row['Не распределено, шт · срез']) : (boxSummary.quantity && packingPlan !== null ? Math.max(0, packingPlan - boxSummary.quantity) : null),
       source: String(row['Источник'] || ''),
@@ -656,7 +716,7 @@ function getAssemblySnapshot_(shipmentId, forceSync, progressOnly) {
   });
   if (progressOnly) return {
     shipmentId: String(activeShipment.shipmentId), referenceKey,
-    shipments: shipments.map(row => ({ id: String(row.shipmentId), name: String(row['Название поставки']), environment: row.environment, sourceAvailable: row.sourceAvailable !== false, itemCount: Number.isSafeInteger(row.itemCount) ? row.itemCount : null })),
+    shipments: shipments.map(row => ({ id: String(row.shipmentId), name: String(row['Название поставки']), stockTask: row.stockTask === true, environment: row.environment, sourceAvailable: row.sourceAvailable !== false, itemCount: Number.isSafeInteger(row.itemCount) ? row.itemCount : null })),
     sync,
     dataVersion: readVersion, updatedAt: new Date().toISOString(), employeeShift,
     items: items.map(item => ({
@@ -668,7 +728,7 @@ function getAssemblySnapshot_(shipmentId, forceSync, progressOnly) {
         return result;
       }, {}),
       boxCountSnapshot: item.boxCountSnapshot, boxNumbersSnapshot: item.boxNumbersSnapshot,
-      cartonsSnapshot: item.cartonsSnapshot, boxedQtySnapshot: item.boxedQtySnapshot,
+      cartonsSnapshot: item.cartonsSnapshot, assignedQtySnapshot: item.assignedQtySnapshot, boxedQtySnapshot: item.boxedQtySnapshot,
       unboxedQtySnapshot: item.unboxedQtySnapshot,
     })),
   };
@@ -684,7 +744,7 @@ function getAssemblySnapshot_(shipmentId, forceSync, progressOnly) {
     dataVersion: readVersion,
     referenceKey,
     updatedAt: new Date().toISOString(),
-    shipments: shipments.map(row => ({ id: String(row.shipmentId), name: String(row['Название поставки']), environment: row.environment, sourceAvailable: row.sourceAvailable !== false, itemCount: Number.isSafeInteger(row.itemCount) ? row.itemCount : null })),
+    shipments: shipments.map(row => ({ id: String(row.shipmentId), name: String(row['Название поставки']), stockTask: row.stockTask === true, environment: row.environment, sourceAvailable: row.sourceAvailable !== false, itemCount: Number.isSafeInteger(row.itemCount) ? row.itemCount : null })),
     shipment: {
       id: String(activeShipment.shipmentId),
       name: String(activeShipment['Название поставки'] || ''),
@@ -692,6 +752,7 @@ function getAssemblySnapshot_(shipmentId, forceSync, progressOnly) {
       direction: String(activeShipment['Направление'] || ''),
       sourceUrl: activeShipment.sourceUrl || '',
       assemblyUrl: activeShipment.sheetId ? 'https://docs.google.com/spreadsheets/d/' + DB_ID + '/edit#gid=' + activeShipment.sheetId : '',
+      stockTask: activeShipment.stockTask === true,
       sourceAvailable: activeShipment.sourceAvailable !== false,
       marketplace,
       labelSourceStatus: 'not_checked',
@@ -752,11 +813,11 @@ function normalizeLabelArticle_(value, marketplace) {
   return article;
 }
 
-function labelIndex_(marketplace) {
+function labelIndex_(marketplace, forceRefresh) {
   const cache = CacheService.getScriptCache();
   const key = LABEL_CACHE_PREFIX + marketplace;
   const manifest = cache.get(key + '.manifest');
-  if (manifest) {
+  if (manifest && !forceRefresh) {
     const count = Number(manifest);
     let json = '';
     for (let i = 0; i < count; i++) {
@@ -848,7 +909,13 @@ function getLabelImages(shipmentId, directionId, positionIds) {
   if (items.length !== ids.length) throw new Error('Часть выбранных артикулов не относится к этой поставке. Обновите список.');
   const marketplace = labelMarketplace_(shipment.marketplace, shipment['Название поставки']);
   if (!marketplace) throw new Error('Не удалось однозначно определить Ozon или Wildberries по поставке.');
-  const index = labelIndex_(marketplace);
+  let index = labelIndex_(marketplace);
+  // A previously conflicting catalog may have been corrected while its index
+  // was cached. Re-read once before blocking printing; real conflicts stay blocked.
+  if (items.some(item => {
+    const match = index.labels[normalizeLabelArticle_(item['Артикул'], marketplace)];
+    return match && match.conflict;
+  })) index = labelIndex_(marketplace, true);
   let totalBytes = 0;
   const itemsById = Object.create(null);
   items.forEach(item => { itemsById[String(item.positionId)] = item; });
@@ -887,7 +954,9 @@ function readBoxTotalsForShipment_(db, shipment) {
     const cartonId = String(row.cartonId || '');
     const quantity = validBoxQuantity_(row['Количество, шт']);
     if (!positionId || !cartonId || !quantity) return;
-    if (!totals[positionId]) totals[positionId] = { boxes: new Set(), quantity: 0, byCarton: Object.create(null) };
+    if (!totals[positionId]) totals[positionId] = { boxes: new Set(), quantity: 0, assignedQuantity: 0, byCarton: Object.create(null) };
+    totals[positionId].assignedQuantity += quantity;
+    if (isWarehouseCartonId_(cartonId) && !shipment.stockTask) return;
     totals[positionId].boxes.add(cartonId);
     totals[positionId].quantity += quantity;
     totals[positionId].byCarton[cartonId] = (totals[positionId].byCarton[cartonId] || 0) + quantity;
@@ -907,10 +976,11 @@ function readCartonSnapshotsForShipment_(db, shipment, boxTotals) {
   const contentsSheet = db.getSheetByName(TABLES.cartonContents);
   const cartonsById = Object.create(null);
   readRowsByKey_(cartonSheet, 'cartonId', cartonIds).forEach(carton => {
-    if (cartonMatchesShipment_(carton, shipment)) cartonsById[String(carton.cartonId)] = carton;
+    // The per-position totals prove that this shipment has an allocation in it.
+    cartonsById[String(carton.cartonId)] = carton;
   });
   const contents = normalizeCartonContents_(readRowsByKey_(contentsSheet, 'cartonId', cartonIds));
-  const normsBySku = cachedBoxNormsForSkus_(contents.map(row => row['Артикул']), shipmentMarketplace_(shipment));
+  const normsBySku = sharedCartonNorms_(db, contents, shipment, false, true);
   Object.keys(boxTotals || {}).forEach(positionId => {
     const summary = boxTotals[positionId];
     const cards = Object.keys(summary.byCarton || {}).map(cartonId => {
@@ -1082,11 +1152,53 @@ function getWorkStatus(idempotencyKey) {
 // Carton reads are a compact view over the existing Cartons, CartonContents,
 // WorkLog and visible RITM catalog. A legacy per-carton piece count is never
 // treated as a mixed-SKU capacity.
-function getBoxesForItem(shipmentId, directionId, positionId) {
+var cartonRequestReads_ = null;
+function cartonCatalogRead_(marketplace) {
+  const key=String(marketplace);
+  if(cartonRequestReads_&&cartonRequestReads_.catalogs[key])return cartonRequestReads_.catalogs[key];
+  const sheet=SpreadsheetApp.openById(RITM_CATALOG_ID).getSheetByName(key);
+  if(!sheet||sheet.isSheetHidden())throw new Error('Видимая вкладка «'+key+'» не найдена в базе.');
+  const lastRow=sheet.getLastRow(),lastColumn=sheet.getLastColumn();
+  if(lastRow<1||lastColumn<2)throw new Error('Структура базы не подтверждена.');
+  const result={sheet,lastRow,lastColumn,headers:sheet.getRange(1,1,1,lastColumn).getDisplayValues()[0].map(String),keyRows:lastRow>1?sheet.getRange(2,1,lastRow-1,2).getDisplayValues():[],columns:Object.create(null)};
+  if(cartonRequestReads_)cartonRequestReads_.catalogs[key]=result;
+  return result;
+}
+function cartonCatalogColumns_(catalog,first,width){
+  const key=first+':'+width;
+  if(!catalog.columns[key])catalog.columns[key]=catalog.lastRow>1?catalog.sheet.getRange(2,first,catalog.lastRow-1,width).getDisplayValues():[];
+  return catalog.columns[key];
+}
+function withCartonRequestReads_(write,task) {
+  const previous=cartonRequestReads_;
+  cartonRequestReads_={write:write===true,tables:Object.create(null),rosters:Object.create(null),catalogs:Object.create(null)};
+  try{return task();}finally{cartonRequestReads_=previous;}
+}
+function getBoxesForItem(shipmentId, directionId, positionId, boxSourceShipmentId) {
+  return withCartonRequestReads_(false,()=>getBoxesForItemFresh_(shipmentId,directionId,positionId,boxSourceShipmentId));
+}
+function getBoxesForItemFresh_(shipmentId, directionId, positionId, boxSourceShipmentId) {
   const db = SpreadsheetApp.openById(DB_ID);
   const context = boxItemContext_(db, shipmentId, directionId, positionId);
   const sheets = getBoxTableSheets_(db);
-  const cartons = readOpenCartonsForShipment_(sheets.cartons.sheet, context.shipment);
+  const direction = cartonDirection_(context.shipment);
+  const automatic = String(boxSourceShipmentId || '') === '__direction__';
+  const scope = !automatic && boxSourceShipmentId && String(boxSourceShipmentId) !== String(shipmentId)
+    ? requireRitmShipment_(db, boxSourceShipmentId, directionId) : context.shipment;
+  const scopes = automatic && direction ? assemblyShipments_(db).filter(s => {
+    const group = cartonDirection_(s);
+    return s.sourceAvailable !== false && group && group.key === direction.key;
+  }) : [scope];
+  if (!scopes.some(s => String(s.shipmentId) === String(scope.shipmentId))) scopes.push(scope);
+  const cartons = context.shipment.stockTask ? {sheet:sheets.cartons.sheet,headers:sheets.cartons.headers,records:[]} : readOpenCartonsForShipment_(sheets.cartons.sheet, scopes);
+  if (automatic || String(scope.shipmentId) === String(context.shipment.shipmentId)) {
+    const allocations = normalizeCartonContents_(readRowsByKey_(sheets.contents.sheet, 'positionId', new Set([String(context.item.positionId)])));
+    const linkedIds = new Set(itemAllocationsFor_(allocations, context).filter(row => !isWarehouseCartonId_(row.cartonId)).map(row => String(row.cartonId)));
+    if (linkedIds.size) {
+      const linked = readRowsByKey_(sheets.cartons.sheet, 'cartonId', linkedIds).filter(row => isOpenCarton_(row['Статус']));
+      cartons.records = Array.from(new Map(cartons.records.concat(linked).map(row => [String(row.cartonId), row])).values());
+    }
+  }
   const openIds = new Set(cartons.records.map(row => String(row.cartonId)));
   const activeContents = normalizeCartonContents_(readCartonPositionContents_(sheets.contents.sheet, openIds, context.item.positionId));
   const contentsHeaders = sheets.contents.sheet.getRange(1, 1, 1, sheets.contents.sheet.getLastColumn()).getValues()[0].map(String);
@@ -1094,28 +1206,53 @@ function getBoxesForItem(shipmentId, directionId, positionId) {
     cartons,
     contents: { sheet: sheets.contents.sheet, headers: contentsHeaders, records: activeContents },
     closedCount: null,
+    db, listShipments: scopes,
   };
   return buildBoxOverview_(context, tables);
 }
 
-function getBoxDetails(shipmentId, directionId, cartonId) {
+function getBoxDetails(shipmentId, directionId, cartonId, boxSourceShipmentId) {
+  return withCartonRequestReads_(false,()=>getBoxDetailsFresh_(shipmentId,directionId,cartonId,boxSourceShipmentId));
+}
+function getBoxDetailsFresh_(shipmentId, directionId, cartonId, boxSourceShipmentId) {
   const db = SpreadsheetApp.openById(DB_ID);
   const shipment = requireRitmShipment_(db, shipmentId, directionId);
   const sheets = getBoxTableSheets_(db);
   const carton = findBoxRecordByHeaderValue_(sheets.cartons.sheet, 'cartonId', String(cartonId));
-  if (!carton || !cartonMatchesShipment_(carton, shipment)) throw new Error('Короб не найден в этой поставке. Обновите список.');
+  if (!carton) throw new Error('Короб не найден. Обновите список.');
   const linked = normalizeCartonContents_(readRowsByKey_(sheets.contents.sheet, 'cartonId', new Set([String(carton.cartonId)])));
-  const norms = boxNormsForSkus_(linked.map(row => row['Артикул']), false, shipmentMarketplace_(shipment));
+  const automatic = String(boxSourceShipmentId || '') === '__direction__';
+  const source = !automatic && boxSourceShipmentId && String(boxSourceShipmentId) !== String(shipmentId)
+    ? requireRitmShipment_(db, boxSourceShipmentId, directionId) : shipment;
+  const direction = cartonDirection_(shipment);
+  const owner = automatic ? assemblyShipments_(db).find(s => cartonMatchesShipment_(carton, s)) : null;
+  const ownerDirection = owner && cartonDirection_(owner);
+  const sameDirection = direction && ownerDirection && direction.key === ownerDirection.key;
+  if (!cartonMatchesShipment_(carton, source) && !cartonLinkedToShipment_(carton, shipment, linked) && !sameDirection) throw new Error('Короб не найден в выбранной поставке.');
+  const norms = sharedCartonNorms_(db, linked, shipment, false);
   const ids = new Set(linked.map(row => String(row.positionId || '')).filter(Boolean));
   const sheet = db.getSheetById(Number(shipment.sheetId));
   const sourceId = String(shipment.shipmentId).replace('RITM-ROLL-', '');
-  if (!sheet || sheet.getRange(1, 1).getNote() !== (shipment.marker || RITM_SHEET_MARKER + sourceId)) throw new Error('Не удалось подтвердить источник позиций поставки.');
-  const items = readRowsByKey_(sheet, 'positionId', ids).filter(row => String(row.shipmentId) === String(shipment.shipmentId) && String(row.directionId) === String(shipment.directionId));
+  if (!shipment.stockTask && (!sheet || sheet.getRange(1, 1).getNote() !== (shipment.marker || RITM_SHEET_MARKER + sourceId))) throw new Error('Не удалось подтвердить источник позиций поставки.');
+  const items = (shipment.stockTask ? readAssemblyStockItems_().filter(row=>ids.has(String(row.positionId))) : readRowsByKey_(sheet, 'positionId', ids)).filter(row => String(row.shipmentId) === String(shipment.shipmentId) && String(row.directionId) === String(shipment.directionId));
   if (Array.from(ids).some(id => id.indexOf('|manual:') >= 0)) {
     readShipmentItems_(db, shipment).filter(row => ids.has(String(row.positionId)) && String(row.positionId).indexOf('|manual:') >= 0).forEach(row => items.push(row));
   }
   const itemByPosition = Object.create(null);
   items.forEach(row => { itemByPosition[String(row.positionId)] = row; });
+  const origins = assemblyShipments_(db);
+  const shipmentNames = new Map(origins.map(row => [String(row.shipmentId), String(row['Название поставки'] || '')]));
+  origins.filter(origin => String(origin.shipmentId) !== String(shipment.shipmentId)).forEach(origin => {
+    const originIds = new Set(linked.filter(row => String(row.shipmentId) === String(origin.shipmentId)).map(row => String(row.positionId || '')));
+    if (!originIds.size) return;
+    const originSheet = db.getSheetById(Number(origin.sheetId));
+    const marker = origin.marker || RITM_SHEET_MARKER + String(origin.shipmentId).replace('RITM-ROLL-', '');
+    if (!originSheet || originSheet.getRange(1, 1).getNote() !== marker) return;
+    readRowsByKey_(originSheet, 'positionId', originIds).filter(row => String(row.shipmentId) === String(origin.shipmentId)).forEach(row => { itemByPosition[String(row.positionId)] = row; });
+    if (Array.from(originIds).some(id => id.indexOf('|manual:') >= 0)) {
+      readShipmentItems_(db, origin).filter(row => originIds.has(String(row.positionId))).forEach(row => { itemByPosition[String(row.positionId)] = row; });
+    }
+  });
   const box = publicCarton_(carton, linked, carton._rowNumber, norms, true);
   box.contents.forEach(entry => {
     const item = itemByPosition[String(entry.positionId)];
@@ -1125,16 +1262,23 @@ function getBoxDetails(shipmentId, directionId, cartonId) {
     entry.photoUrl = item ? safeRitmPhotoUrl_(item['Фото']) : '';
     entry.boxType = entry.norm && entry.norm.boxType ? entry.norm.boxType : '';
     entry.unitsPerBox = entry.norm && entry.norm.unitsPerBox ? entry.norm.unitsPerBox : null;
+    entry.shipmentName = shipmentNames.get(String(entry.shipmentId)) || '';
   });
-  return { ok: true, shipment: { id: String(shipment.shipmentId), name: String(shipment['Название поставки']) }, carton: box, dataVersion: getDataVersion() };
+  return { ok: true, shipment: { id: String(shipment.shipmentId), directionId: String(shipment.directionId), name: String(shipment['Название поставки']) }, carton: box, closeRevision: cartonCloseRevision_(carton, linked), dataVersion: getDataVersion() };
 }
 
-function getClosedCartons(shipmentId, directionId, query, beforeRow) {
+function getClosedCartons(shipmentId, directionId, query, beforeRow, boxSourceShipmentId) {
   const db = SpreadsheetApp.openById(DB_ID);
   const shipment = requireRitmShipment_(db, shipmentId, directionId);
+  const automatic = String(boxSourceShipmentId || '') === '__direction__';
+  const scope = !automatic && boxSourceShipmentId && String(boxSourceShipmentId) !== String(shipmentId)
+    ? requireRitmShipment_(db, boxSourceShipmentId, directionId) : shipment;
+  const direction = automatic && cartonDirection_(shipment);
+  const scopes = direction ? assemblyShipments_(db).filter(s => { const d = cartonDirection_(s); return d && d.key === direction.key; }) : [scope];
   const cartonSheet = db.getSheetByName(TABLES.cartons);
   const contentsSheet = db.getSheetByName(TABLES.cartonContents);
   if (!cartonSheet || !contentsSheet) throw new Error('В хранилище не найдены таблицы коробов.');
+  const linkedCartonIds = new Set(normalizeCartonContents_(readRowsByKey_(contentsSheet, 'shipmentId', new Set([String(shipment.shipmentId)]))).map(row => String(row.cartonId)));
   const needle = normalizeCartonNumber_(query);
   const pageSize = 25;
   const sheetLastRow = cartonSheet.getLastRow();
@@ -1155,16 +1299,16 @@ function getClosedCartons(shipmentId, directionId, query, beforeRow) {
       if (!cells.some(value => value !== '' && value !== null)) continue;
       const row = headers.reduce((record, header, index) => { record[header] = cells[index]; return record; }, {});
       row._rowNumber = startRow + offset;
-      if (cartonMatchesShipment_(row, shipment) && isClosedCarton_(row) && (!needle || normalizeCartonNumber_(row['Номер']).includes(needle))) candidates.push(row);
+      if (!isWarehouseCartonId_(row.cartonId) && (scopes.some(s => cartonMatchesShipment_(row, s)) || ((automatic || scope === shipment) && linkedCartonIds.has(String(row.cartonId)))) && isClosedCarton_(row) && (!needle || normalizeCartonNumber_(row['Номер']).includes(needle))) candidates.push(row);
     }
     scanEnd = startRow - 1;
   }
   const page = candidates.slice(0, pageSize);
   const pageIds = new Set(page.map(box => String(box.cartonId)));
   const contents = normalizeCartonContents_(readRowsByKey_(contentsSheet, 'cartonId', pageIds));
-  const norms = boxNormsForSkus_(contents.map(row => row['Артикул']), false, shipmentMarketplace_(shipment));
+  const norms = sharedCartonNorms_(db, contents, shipment, false);
   return {
-    boxes: page.map(row => publicCarton_(row, contents, row._rowNumber, norms, false)),
+    boxes: page.map(row => publicCarton_(row, contents, row._rowNumber, norms, true)),
     hasMore: candidates.length > pageSize,
     nextCursor: page.length ? Number(page[page.length - 1]._rowNumber) : null,
   };
@@ -1212,12 +1356,18 @@ function getCartonCreationStatus(idempotencyKey) {
 }
 
 function saveBoxPlacement(payload) {
+  // Catalog data is read freshly once in this request. Operational rows are
+  // deliberately never memoized on a write: the ScriptLock recheck stays fresh.
+  return withCartonRequestReads_(true,()=>saveBoxPlacementFresh_(payload));
+}
+function saveBoxPlacementFresh_(payload) {
   let db, tables, allocationId, existing, quote = null, snapshot;
   const hasPreview = Boolean(payload && String(payload.previewId || '').trim());
   try {
     validateBoxPlacementPayload_(payload, false);
     db = SpreadsheetApp.openById(DB_ID);
     tables = getBoxTableSheets_(db);
+    assertStockReservation_(payload);
     allocationId = 'allocation-' + String(payload.idempotencyKey);
     existing = findBoxRecordByHeaderValue_(tables.contents.sheet, 'allocationId', allocationId);
   } catch (error) {
@@ -1244,10 +1394,15 @@ function saveBoxPlacement(payload) {
   // the existing quote-and-confirm safety check until those tabs are reloaded.
   try { snapshot = boxPlacementSnapshot_(db, payload, true); }
   catch (error) { return boxPlacementNotWritten_(error); }
+  try { assertStockPlan_(payload, snapshot.context); }
+  catch (error) { return boxPlacementNotWritten_(error); }
   if (quote && (!quote.scopeFingerprint || boxPlacementScopeFingerprint_(snapshot) !== String(quote.scopeFingerprint)))
     return boxPlacementNotWritten_('Данные этого артикула или короба изменились после проверки. Обновите короб и подтвердите размещение ещё раз.');
   if (snapshot.context.shipment.environment === 'RITM') {
-    try { assertRitmShipmentUnlocked_(snapshot.context.shipment.shipmentId); }
+    try {
+      assertRitmShipmentUnlocked_(snapshot.context.shipment.shipmentId);
+      if (String(snapshot.boxOwner.shipmentId) !== String(snapshot.context.shipment.shipmentId)) assertRitmShipmentUnlocked_(snapshot.boxOwner.shipmentId);
+    }
     catch (error) { return boxPlacementNotWritten_(error); }
   }
 
@@ -1258,6 +1413,7 @@ function saveBoxPlacement(payload) {
   let rejected = null;
   let mutationStarted = false;
   try {
+    assertStockReservation_(payload);
     const prior = findBoxRecordByHeaderValue_(tables.contents.sheet, 'allocationId', allocationId);
     if (prior) {
       if (!boxAllocationMatchesPayload_(prior, payload)) rejected = boxPlacementNotWritten_('Ключ повтора уже использован для другого размещения. Новая запись не добавлена.');
@@ -1266,8 +1422,13 @@ function saveBoxPlacement(payload) {
     else {
       let liveScope;
       try {
-        if (snapshot.context.shipment.environment === 'RITM') { assertLocalShipmentUnlocked_(snapshot.context.shipment.shipmentId); assertAssemblyOnlyNotDeleted_(payload.positionId); }
+        if (snapshot.context.shipment.environment === 'RITM') {
+          assertLocalShipmentUnlocked_(snapshot.context.shipment.shipmentId);
+          if (String(snapshot.boxOwner.shipmentId) !== String(snapshot.context.shipment.shipmentId)) assertLocalShipmentUnlocked_(snapshot.boxOwner.shipmentId);
+          assertAssemblyOnlyNotDeleted_(payload.positionId);
+        }
         liveScope = boxPlacementCurrentScope_(db, payload, snapshot);
+        assertStockPlan_(payload, liveScope.context);
         if (quote && boxPlacementScopeFingerprint_(liveScope) !== String(quote.scopeFingerprint))
           throw new Error('Данные этого артикула или короба изменились после проверки. Обновите короб и подтвердите размещение ещё раз.');
 
@@ -1291,7 +1452,9 @@ function saveBoxPlacement(payload) {
             const byShipment = readRowsByKey_(tables.cartons.sheet, 'shipmentId', new Set([String(snapshot.context.shipment.shipmentId)]));
             const byDirection = readRowsByKey_(tables.cartons.sheet, 'directionId', new Set([String(snapshot.context.shipment.directionId)]));
             const currentCartons = uniqueCartonRows_(byShipment.concat(byDirection)).filter(row => cartonMatchesShipment_(row, snapshot.context.shipment));
-            snapshot.carton.number = nextCartonNumber_(snapshot.context.shipment, currentCartons, snapshot.itemStoreNumber);
+            snapshot.carton.number = payload.warehouse === true
+              ? nextWarehouseCartonNumber_(snapshot.itemStoreNumber, tables.cartons.sheet)
+              : nextCartonNumber_(snapshot.context.shipment, currentCartons, snapshot.itemStoreNumber, tables.cartons.sheet);
             snapshot.cartonRecord['Номер'] = snapshot.carton.number;
           }
         }
@@ -1324,7 +1487,7 @@ function saveBoxPlacement(payload) {
             'Тип короба': snapshot.norm.boxType,
             createdAt: new Date().toISOString(),
             closedAt: '',
-            source: 'RITM_ASSEMBLY',
+            source: payload.warehouse === true ? 'RITM_ASSEMBLY_STOCK' : 'RITM_ASSEMBLY',
           };
           appendRecordByHeaders_(tables.cartons.sheet, cartonHeaders, newRecord);
           carton = Object.assign({ _rowNumber: tables.cartons.sheet.getLastRow() }, newRecord);
@@ -1344,6 +1507,12 @@ function saveBoxPlacement(payload) {
           createdAt: new Date().toISOString(),
           eventId: Utilities.getUuid(),
         };
+        if (payload.warehouse === true) {
+          const operation = parseSyncJson_(PropertiesService.getScriptProperties().getProperty(stockOperationKey_(payload.parentKey)), null);
+          if (!operation) throw new Error('Не подтверждён автор складского размещения.');
+          record.employeeId = String(operation.employeeId || '');
+          record['Сотрудник'] = String(operation.employeeName || '');
+        }
         appendRecordByHeaders_(tables.contents.sheet, snapshot.tables.contents.headers, record);
         snapshot.tables.contents.records.push(record);
         const status = String(carton['Статус'] || '');
@@ -1380,7 +1549,191 @@ function boxPlacementNotWritten_(error) {
   };
 }
 
+// Only recognized marketplace/city pairs are combined automatically. Unknown
+// names retain the existing per-supply sheet instead of guessing a direction.
+function cartonDirection_(shipment) {
+  const market = shipmentMarketplace_(shipment);
+  const name = String(shipment && (shipment['Название поставки'] || shipment['Направление']) || '').toLocaleUpperCase('ru-RU');
+  if (!market) return null;
+  const cities = [
+    ['SPB','СПБ',/(^|[^A-ZА-ЯЁ0-9])(?:СПБ|САНКТ[ -]?ПЕТЕРБУРГ|САНКТ[ -]?ПЕТЕРБУРГА|ПИТЕР)(?=$|[^A-ZА-ЯЁ0-9])/],
+    ['MOSCOW','МОСКВА',/(^|[^A-ZА-ЯЁ0-9])(?:МОСКВА|МОСКВЫ|МСК)(?=$|[^A-ZА-ЯЁ0-9])/],
+    ['EKATERINBURG','ЕКАТЕРИНБУРГ',/(^|[^A-ZА-ЯЁ0-9])(?:ЕКБ|ЕКАТЕРИНБУРГ)(?=$|[^A-ZА-ЯЁ0-9])/],
+    ['NOVOSIBIRSK','НОВОСИБИРСК',/(^|[^A-ZА-ЯЁ0-9])(?:НОВОСИБ|НОВОСИБИРСК)(?=$|[^A-ZА-ЯЁ0-9])/],
+    ['KAZAN','КАЗАНЬ',/(^|[^A-ZА-ЯЁ0-9])(?:КАЗАНЬ|КАЗАНИ)(?=$|[^A-ZА-ЯЁ0-9])/],
+    ['ROSTOV','РОСТОВ',/(^|[^A-ZА-ЯЁ0-9])(?:РОСТОВ|РОСТОВА)(?=$|[^A-ZА-ЯЁ0-9])/],
+    ['KOSTROMA','КОСТРОМА',/(^|[^A-ZА-ЯЁ0-9])(?:КОСТРОМА|КОСТРОМЫ)(?=$|[^A-ZА-ЯЁ0-9])/],
+  ];
+  const matches = cities.filter(city => city[2].test(name));
+  return matches.length === 1 ? { key: market + '_' + matches[0][0], label: market + ' ' + matches[0][1] } : null;
+}
+
+function boxViewFormulaWhenEntriesExist_(formula) {
+  return '=IF(COUNT(CartonContents!G2:G)=0;"";' + formula.slice(1) + ')';
+}
+
+function directionBoxViewFormula_(shipments) {
+  const entries = (shipments || []).map(s => ({ id: String(s.shipmentId || '').trim(), name: String(s['Название поставки'] || '').trim() }));
+  if (!entries.length || entries.some(s => !/^[A-Za-z0-9_-]{1,120}$/.test(s.id) || !s.name)) throw new Error('Не подтверждены поставки направления.');
+  if (new Set(entries.map(s => s.id)).size !== entries.length) throw new Error('Повторяется ID поставки направления.');
+  const nameExpr = entries.reduceRight((fallback, entry) => 'IF(CartonContents!C2:C="' + entry.id + '";"' + entry.name.replace(/"/g, '""') + '";' + fallback + ')', '"Поставка не найдена"');
+  const ids = entries.map(s => s.id).join('|');
+  const query = "select Col1,Col2,Col3,sum(Col4) where Col5 matches '" + ids + "' and Col3 is not null and not Col6 matches 'carton-stock-.*' group by Col1,Col2,Col3 order by Col1,Col2,Col3 label Col1 '',Col2 '',Col3 '',sum(Col4) ''";
+  return boxViewFormulaWhenEntriesExist_('=IFNA(QUERY(QUERY(HSTACK(ARRAYFORMULA(IF(CartonContents!B2:B="";"";IFNA(VLOOKUP(CartonContents!B2:B;Cartons!A2:K;4;FALSE);"Номер не найден")));ARRAYFORMULA(IF(CartonContents!C2:C="";"";' + nameExpr + '));CartonContents!F2:F;CartonContents!G2:G;CartonContents!C2:C;CartonContents!B2:B);"' + query + '";0);"select * where Col4 > 0";0);"")');
+}
+
+// The stock report uses carton identity, not article names or allocation
+// quantity, so corrections remain attached to the original physical carton.
+function warehouseBoxViewFormula_() {
+  const q = "select Col1,Col2,Col3,sum(Col4),Col6,Col7 where Col5 matches 'carton-stock-.*' and Col3 is not null and Col4 > 0 group by Col1,Col2,Col3,Col6,Col7 order by Col1,Col3,Col7 label Col1 '',Col2 '',Col3 '',sum(Col4) '',Col6 '',Col7 ''";
+  return boxViewFormulaWhenEntriesExist_('=IFNA(QUERY(HSTACK(ARRAYFORMULA(IF(CartonContents!B2:B="";"";IFNA(VLOOKUP(CartonContents!B2:B;Cartons!A2:K;4;FALSE);"Номер не найден")));ARRAYFORMULA(IF(CartonContents!B2:B="";"";IFNA(VLOOKUP(CartonContents!B2:B;Cartons!A2:K;3;FALSE);"Поставка не найдена")));CartonContents!F2:F;ARRAYFORMULA(IF(CartonContents!J2:J="REMOVE";0;CartonContents!G2:G+SUMIF(CartonContents!K2:K;CartonContents!A2:A;CartonContents!G2:G)));CartonContents!B2:B;ARRAYFORMULA(IF(CartonContents!O2:O="";"Не указан · старая запись";CartonContents!O2:O));ARRAYFORMULA(IF(CartonContents!H2:H="";"";IFERROR(TEXT(DATEVALUE(LEFT(CartonContents!H2:H;10))+TIMEVALUE(MID(CartonContents!H2:H;12;8))+3/24;"dd.mm.yyyy hh:mm");CartonContents!H2:H))));"' + q + '";0);"")');
+}
+
+function refreshLegacyViewsForWarehouse_(db, shipment) {
+  const shipmentId = String(shipment.shipmentId || '');
+  const marker = BOX_VIEW_MARKER + ':' + shipmentId;
+  db.getSheets().forEach(sheet => {
+    if (String(sheet.getRange(1, 1).getNote() || '') !== marker) return;
+    const old = String(sheet.getRange(2, 1).getFormula() || '');
+    if (!old || old.charAt(0) !== '=') throw new Error('Старый лист коробов изменён вручную; излишек не записан.');
+    const updated = shipmentBoxViewFormula_(shipmentId, shipment['Название поставки']);
+    if (old !== updated) sheet.getRange(2, 1).setFormula(updated);
+  });
+  SpreadsheetApp.flush();
+}
+
+function ensureWarehouseBoxViewSheet_(db) {
+  const name = BOX_VIEW_PREFIX + 'На склад';
+  const marker = BOX_VIEW_MARKER + ':warehouse:v1';
+  const props = PropertiesService.getScriptProperties();
+  const key = 'ritm.assembly.boxView.warehouse';
+  const saved = Number(props.getProperty(key) || 0);
+  let sheet = saved ? db.getSheetById(saved) : null;
+  if (sheet && String(sheet.getRange(1, 1).getNote() || '') !== marker) sheet = null;
+  if (!sheet) {
+    const existing = db.getSheetByName(name);
+    if (existing && String(existing.getRange(1, 1).getNote() || '') !== marker) throw new Error('Лист «' + name + '» уже существует и не принадлежит системе. Данные не изменены.');
+    sheet = existing || db.insertSheet(name);
+  }
+  const note = String(sheet.getRange(1, 1).getNote() || '');
+  if (!note) {
+    sheet.getRange(1, 1, 1, 4).setValues([['Номер короба','Поставка','Артикул','Количество']]);
+    sheet.setFrozenRows(1);
+    sheet.setColumnWidth(1, 145); sheet.setColumnWidth(2, 260); sheet.setColumnWidth(3, 170); sheet.setColumnWidth(4, 125);
+    sheet.getRange(1, 1, 1, 4).setBackground('#e7f6ed').setFontWeight('bold');
+    sheet.getRange(1, 1).setNote(marker);
+  }
+  const auditHeaders = sheet.getRange(1, 5, 1, 2).getValues()[0].map(String);
+  if (auditHeaders.some((value, i) => value && value !== ['Отправил на склад', 'Дата · МСК'][i])) throw new Error('Колонки складского отчёта заняты другими данными.');
+  sheet.getRange(1, 5, 1, 2).setValues([['Отправил на склад', 'Дата · МСК']]);
+  sheet.setColumnWidth(5, 220); sheet.setColumnWidth(6, 175);
+  const formula = warehouseBoxViewFormula_();
+  if (sheet.getRange(2, 1).getFormula() !== formula) sheet.getRange(2, 1).setFormula(formula);
+  SpreadsheetApp.flush();
+  const value = String(sheet.getRange(2, 1).getDisplayValues()[0][0] || '');
+  if (sheet.getRange(2, 1).getFormula().charAt(0) !== '=' || /^#(?:ERROR!|REF!|N\/A|VALUE!|NAME\?|NUM!)/i.test(value)) throw new Error('Не удалось подтвердить отчёт по складским коробам.');
+  props.setProperty(key, String(sheet.getSheetId()));
+  return sheet;
+}
+
+function ensureDirectionBoxViewSheet_(db, direction, shipments) {
+  const marker = BOX_VIEW_MARKER + ':direction:' + direction.key;
+  const property = 'ritm.assembly.boxView.direction.' + direction.key;
+  const props = PropertiesService.getScriptProperties();
+  const saved = Number(props.getProperty(property) || 0);
+  let sheet = saved ? db.getSheetById(saved) : null;
+  if (sheet && String(sheet.getRange(1, 1).getNote() || '') !== marker) sheet = null;
+  const base = BOX_VIEW_PREFIX + direction.label;
+  if (!sheet) {
+    const names = [base, (base + ' · общий').slice(0, 100)];
+    for (const candidate of names) {
+      const existing = db.getSheetByName(candidate);
+      if (!existing) { sheet = db.insertSheet(candidate); break; }
+      if (String(existing.getRange(1, 1).getNote() || '') === marker) { sheet = existing; break; }
+    }
+    if (!sheet) throw new Error('Имена общего листа направления заняты. Существующие листы не изменены.');
+  }
+  const note = String(sheet.getRange(1, 1).getNote() || '');
+  if (note !== marker && sheet.getLastRow() > 0 && sheet.getRange(1, 1, 1, 4).getValues()[0].some(Boolean)) throw new Error('Общий лист содержит данные без служебной метки.');
+  if (note !== marker) {
+    sheet.getRange(1, 1, 1, 4).setValues([['Номер короба','Поставка','Артикул','Количество']]);
+    sheet.setFrozenRows(1);
+    sheet.setColumnWidth(1, 145); sheet.setColumnWidth(2, 260); sheet.setColumnWidth(3, 170); sheet.setColumnWidth(4, 125);
+    sheet.getRange(1, 1, 1, 4).setBackground('#eaf2ff').setFontWeight('bold');
+    sheet.getRange(1, 1).setNote(marker);
+  }
+  const formula = directionBoxViewFormula_(shipments);
+  if (sheet.getRange(2, 1).getFormula() !== formula) sheet.getRange(2, 1).setFormula(formula);
+  SpreadsheetApp.flush();
+  const confirmedFormula = sheet.getRange(2, 1).getFormula();
+  const displayed = String(sheet.getRange(2, 1).getDisplayValues()[0][0] || '');
+  if (confirmedFormula.charAt(0) !== '=' || /^#(?:ERROR!|REF!|N\/A|VALUE!|NAME\?|NUM!)/i.test(displayed))
+    throw new Error('Не удалось подтвердить формулу общего листа «' + sheet.getName() + '». Старые листы сохранены.');
+  props.setProperty(property, String(sheet.getSheetId()));
+  return { sheet, created: !note };
+}
+
+function directionBoxShipments_(props, direction, current) {
+  const all = props.getProperties();
+  const byId = new Map();
+  Object.keys(all).filter(key => key.indexOf(RITM_SYNC_PREFIX) === 0).forEach(key => {
+    const row = parseSyncJson_(all[key], null);
+    if (!row || !row.shipmentId || !row.name) return;
+    const item = { shipmentId: String(row.shipmentId), 'Название поставки': String(row.name) };
+    const candidate = cartonDirection_(item);
+    if (candidate && candidate.key === direction.key) byId.set(item.shipmentId, item);
+  });
+  if (current && current.shipmentId) byId.set(String(current.shipmentId), current);
+  return Array.from(byId.values()).sort((a, b) => String(a.shipmentId).localeCompare(String(b.shipmentId)));
+}
+
+function syncDirectionBoxViews_(db, props) {
+  const all = props.getProperties();
+  const groups = new Map();
+  Object.keys(all).filter(key => key.indexOf(RITM_SYNC_PREFIX) === 0).forEach(key => {
+    const row = parseSyncJson_(all[key], null);
+    if (!row || !row.shipmentId || !row.name) return;
+    const item = { shipmentId: String(row.shipmentId), 'Название поставки': String(row.name) };
+    const direction = cartonDirection_(item);
+    if (direction) groups.set(direction.key, direction);
+  });
+  const results = [];
+  groups.forEach(direction => {
+    const shipments = directionBoxShipments_(props, direction);
+    const signature = JSON.stringify(['v2-stock-separated', shipments.map(s => [s.shipmentId, s['Название поставки']])]);
+    const signatureKey = 'ritm.assembly.boxView.direction.sig.' + direction.key;
+    const sheetKey = 'ritm.assembly.boxView.direction.' + direction.key;
+    const sheetId = Number(props.getProperty(sheetKey) || 0);
+    if (props.getProperty(signatureKey) === signature && sheetId && db.getSheetById(sheetId)) return;
+    const view = ensureDirectionBoxViewSheet_(db, direction, shipments);
+    shipments.forEach(item => props.setProperty(boxViewPropertyKey_(item.shipmentId), String(view.sheet.getSheetId())));
+    props.setProperty(signatureKey, signature);
+    results.push({ direction: direction.label, sheet: view.sheet.getName(), created: view.created });
+  });
+  return results;
+}
+
 function ensureShipmentBoxViewSheet_(db, shipment) {
+  const direction = cartonDirection_(shipment);
+  if (direction) {
+    const props = PropertiesService.getScriptProperties();
+    const group = directionBoxShipments_(props, direction, shipment);
+    const view = ensureDirectionBoxViewSheet_(db, direction, group);
+    group.forEach(item => props.setProperty(boxViewPropertyKey_(item.shipmentId), String(view.sheet.getSheetId())));
+    return view;
+  }
+  return ensureLegacyShipmentBoxViewSheet_(db, shipment);
+}
+
+function ensureShipmentBoxViewBestEffort_(db, shipment) {
+  try { return ensureShipmentBoxViewSheet_(db, shipment); }
+  catch (error) {
+    console.warn('Общий лист коробов не обновлён; состав поставки сохранён: ' + String(error.message || error).slice(0, 160));
+    return null;
+  }
+}
+
+function ensureLegacyShipmentBoxViewSheet_(db, shipment) {
   const shipmentId = String(shipment.shipmentId || '').trim();
   if (!shipmentId) throw new Error('Не удалось определить поставку для листа коробов.');
   if (!/^[A-Za-z0-9_-]{1,120}$/.test(shipmentId)) throw new Error('ID поставки содержит недопустимые символы для автоматического листа коробов.');
@@ -1432,16 +1785,18 @@ function ensureShipmentBoxViewSheet_(db, shipment) {
     sheet.getRange(1, 1, 1, 4).setBackground('#eaf2ff').setFontWeight('bold');
   }
   sheet.getRange(1, 1).setNote(markerPrefix);
-  sheet.getRange(2, 1).setFormula(shipmentBoxViewFormula_(shipmentId));
+  sheet.getRange(2, 1).setFormula(shipmentBoxViewFormula_(shipmentId, shipment['Название поставки']));
   props.setProperty(propKey, String(sheet.getSheetId()));
   return { sheet, created: !existingNote };
 }
 
-function shipmentBoxViewFormula_(shipmentId) {
+function shipmentBoxViewFormula_(shipmentId, shipmentName) {
   const id = String(shipmentId || '').trim();
   if (!/^[A-Za-z0-9_-]{1,120}$/.test(id)) throw new Error('Недопустимый ID поставки.');
-  const query = "select Col1,Col2,Col3,sum(Col4) where Col5 = '" + id + "' and Col3 is not null group by Col1,Col2,Col3 order by Col1,Col2,Col3 label Col1 '',Col2 '',Col3 '',sum(Col4) ''";
-  return '=IFNA(QUERY(QUERY(HSTACK(ARRAYFORMULA(IF(CartonContents!B2:B="";"";IFNA(VLOOKUP(CartonContents!B2:B;Cartons!A2:K;4;FALSE);"Номер не найден")));ARRAYFORMULA(IF(CartonContents!B2:B="";"";IFNA(VLOOKUP(CartonContents!B2:B;Cartons!A2:K;3;FALSE);"Поставка не найдена")));CartonContents!F2:F;CartonContents!G2:G;CartonContents!C2:C);"' + query + '";0);"select * where Col4 > 0";0);"")';
+  const query = "select Col1,Col2,Col3,sum(Col4) where Col5 = '" + id + "' and Col3 is not null and not Col6 matches 'carton-stock-.*' group by Col1,Col2,Col3 order by Col1,Col2,Col3 label Col1 '',Col2 '',Col3 '',sum(Col4) ''";
+  const name = String(shipmentName || '').replace(/"/g, '""');
+  const supplyColumn = name ? 'ARRAYFORMULA(IF(CartonContents!B2:B="";"";"' + name + '"))' : 'ARRAYFORMULA(IF(CartonContents!B2:B="";"";IFNA(VLOOKUP(CartonContents!B2:B;Cartons!A2:K;3;FALSE);"Поставка не найдена")))';
+  return boxViewFormulaWhenEntriesExist_('=IFNA(QUERY(QUERY(HSTACK(ARRAYFORMULA(IF(CartonContents!B2:B="";"";IFNA(VLOOKUP(CartonContents!B2:B;Cartons!A2:K;4;FALSE);"Номер не найден")));' + supplyColumn + ';CartonContents!F2:F;CartonContents!G2:G;CartonContents!C2:C;CartonContents!B2:B);"' + query + '";0);"select * where Col4 > 0";0);"")');
 }
 
 function boxViewBaseName_(shipment) {
@@ -1469,7 +1824,7 @@ function buildShipmentBoxViews() {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) throw new Error('Короба сейчас обновляются. Повторите построение листов через несколько секунд.');
   try {
-    const shipments = assemblyShipments_(db);
+    const shipments = assemblyShipments_(db).filter(row=>!row.stockTask);
     return shipments.map(shipment => {
       const view = ensureShipmentBoxViewSheet_(db, shipment);
       return { shipment: String(shipment['Название поставки']), sheet: view.sheet.getName(), created: view.created };
@@ -1495,12 +1850,31 @@ function getBoxPlacementStatus(idempotencyKey) {
   const byPosition = readRowsByKey_(sheets.contents.sheet, 'positionId', new Set([String(allocation.positionId)]));
   const contents = normalizeCartonContents_(uniqueCartonRows_(byCarton.concat(byPosition)));
   const cartonContents = contents.filter(row => String(row.cartonId) === String(allocation.cartonId));
-  const norms = boxNormsForSkus_(cartonContents.map(row => row['Артикул']), false, shipmentMarketplace_(context.shipment));
+  const norms = sharedCartonNorms_(db, cartonContents, context.shipment, false);
   const tables = {
     cartons: { sheet: sheets.cartons.sheet, headers: [], records: [carton] },
     contents: { sheet: sheets.contents.sheet, headers: [], records: contents },
   };
   return boxPlacementResult_(context, allocation, tables, 0, true, norms);
+}
+
+function cartonCloseRevision_(carton, contents) {
+  const items = normalizeCartonContents_(contents || []).filter(row => String(row.cartonId) === String(carton.cartonId)).map(row => [String(row.allocationId || ''),String(row.shipmentId || ''),String(row.directionId || ''),String(row.positionId || ''),String(row['Артикул'] || ''),Number(row['Количество, шт'])]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  return stockDigest_(JSON.stringify([String(carton.cartonId),String(carton['Статус']),items]));
+}
+
+function cartonCloseAllowed_(db, carton, shipment, contents) {
+  if (isWarehouseCartonId_(carton.cartonId) || isCancelledCarton_(carton)) return false;
+  if (cartonLinkedToShipment_(carton, shipment, contents)) return true;
+  const owner = assemblyShipments_(db).find(origin => cartonMatchesShipment_(carton, origin));
+  const selectedDirection = cartonDirection_(shipment), ownerDirection = owner && cartonDirection_(owner);
+  return !!(selectedDirection && ownerDirection && selectedDirection.key === ownerDirection.key);
+}
+
+function assertCartonCloseRevision_(payload, carton, contents) {
+  if (payload.closeRevision) {
+    if (typeof payload.closeRevision !== 'string' || payload.closeRevision !== cartonCloseRevision_(carton, contents)) throw new Error('Состав короба изменился. Откройте его заново и подтвердите закрытие ещё раз.');
+  } else if (!Number.isFinite(Number(payload.dataVersion)) || Number(payload.dataVersion) !== getDataVersion()) throw new Error('Состав короба изменился. Откройте его заново и подтвердите закрытие ещё раз.');
 }
 
 function closeCarton(payload) {
@@ -1510,27 +1884,45 @@ function closeCarton(payload) {
   const db = SpreadsheetApp.openById(DB_ID);
   const shipment = requireRitmShipment_(db, payload.shipmentId, payload.directionId);
   const tables = readBoxTables_(db);
-  const index = tables.cartons.records.findIndex(row => String(row.cartonId) === String(payload.cartonId));
-  if (index < 0 || !cartonMatchesShipment_(tables.cartons.records[index], shipment)) throw new Error('Короб не найден в этой поставке.');
-  const carton = tables.cartons.records[index];
-  if (isClosedCarton_(carton)) return { ok: true, duplicate: true, carton: publicCarton_(carton, tables.contents.records, carton._rowNumber, boxNormsForSkus_(tables.contents.records.filter(row => String(row.cartonId) === String(carton.cartonId)).map(row => row['Артикул']), false, shipmentMarketplace_(shipment)), true), dataVersion: getDataVersion() };
-  assertRitmShipmentUnlocked_(shipment.shipmentId);
-  if (!isOpenCarton_(carton['Статус'])) throw new Error('Статус короба не подтверждён. Обновите данные, закрытие не выполнено.');
-  const expectedVersion = Number(payload.dataVersion);
-  if (!Number.isFinite(expectedVersion) || expectedVersion !== getDataVersion()) throw new Error('Состав короба изменился. Откройте его заново и подтвердите закрытие ещё раз.');
+  const carton = tables.cartons.records.find(row => String(row.cartonId) === String(payload.cartonId));
+  if (!carton || !cartonCloseAllowed_(db,carton,shipment,tables.contents.records)) throw new Error('Короб не найден в этой поставке или направлении.');
+  if (isClosedCarton_(carton)) return {ok:true,duplicate:true,dataVersion:getDataVersion()};
+  const relatedIds = new Set(normalizeCartonContents_(tables.contents.records).filter(row => String(row.cartonId) === String(carton.cartonId)).map(row => String(row.shipmentId || '')).filter(Boolean));
+  relatedIds.add(String(shipment.shipmentId)); if(carton.shipmentId)relatedIds.add(String(carton.shipmentId));
+  relatedIds.forEach(id => assertRitmShipmentUnlocked_(id));
   const lock = LockService.getScriptLock();
-  if (!lock.tryLock(5000)) throw new Error('Короба сейчас обновляются. Закрытие не выполнено — повторите через несколько секунд.');
+  if (!lock.tryLock(5000)) throw new Error('Короба сейчас обновляются. Повторите закрытие через несколько секунд.');
   try {
-    if (getDataVersion() !== expectedVersion) throw new Error('Состав короба изменился. Откройте его заново и подтвердите закрытие ещё раз.');
-    assertLocalShipmentUnlocked_(shipment.shipmentId);
-    const headers = tables.cartons.headers;
-    updateCartonField_(tables.cartons.sheet, headers, carton._rowNumber, 'Статус', 'Закрыт');
-    updateCartonField_(tables.cartons.sheet, headers, carton._rowNumber, 'closedAt', new Date().toISOString());
-    const dataVersion = bumpDataVersion_();
-    return { ok: true, duplicate: false, dataVersion };
-  } finally {
-    lock.releaseLock();
-  }
+    const fresh=readBoxTables_(db), current=fresh.cartons.records.find(row=>String(row.cartonId)===String(payload.cartonId));
+    if(!current || !cartonCloseAllowed_(db,current,shipment,fresh.contents.records)) throw new Error('Короб больше не доступен в этом направлении. Обновите список.');
+    if(isClosedCarton_(current))return {ok:true,duplicate:true,dataVersion:getDataVersion()};
+    if(!isOpenCarton_(current['Статус']))throw new Error('Статус короба не подтверждён. Обновите данные.');
+    assertCartonCloseRevision_(payload,current,fresh.contents.records);
+    relatedIds.forEach(id=>assertLocalShipmentUnlocked_(id));
+    updateCartonField_(fresh.cartons.sheet,fresh.cartons.headers,current._rowNumber,'Статус','Закрыт');
+    updateCartonField_(fresh.cartons.sheet,fresh.cartons.headers,current._rowNumber,'closedAt',new Date().toISOString());
+    return {ok:true,duplicate:false,dataVersion:bumpDataVersion_()};
+  } finally {lock.releaseLock();}
+}
+
+function closeWarehouseCarton(payload) {
+  validateBoxIdempotencyKey_(payload && payload.idempotencyKey);
+  if(!isWarehouseCartonId_(payload && payload.cartonId))throw new Error('Выберите складской короб.');
+  const lock=LockService.getScriptLock();if(!lock.tryLock(5000))throw new Error('Склад обновляется. Повторите закрытие с тем же запросом.');
+  try {
+    const db=SpreadsheetApp.openById(DB_ID),tables=readBoxTables_(db);
+    const carton=tables.cartons.records.find(row=>String(row.cartonId)===String(payload.cartonId));
+    if(!carton || isCancelledCarton_(carton))throw new Error('Складской короб не найден. Обновите список.');
+    if(isClosedCarton_(carton))return {ok:true,duplicate:true,cartonId:String(carton.cartonId),number:String(carton['Номер']),dataVersion:getDataVersion()};
+    if(!isOpenCarton_(carton['Статус']))throw new Error('Статус складского короба не подтверждён.');
+    assertCartonCloseRevision_(payload,carton,tables.contents.records);
+    const market=shipmentMarketplace_(carton),store=cartonStoreNumberFromNumber_(carton['Номер']);
+    const props=PropertiesService.getScriptProperties(),property=warehouseCartonKey_(store,market);
+    updateCartonField_(tables.cartons.sheet,tables.cartons.headers,carton._rowNumber,'Статус','Закрыт');
+    updateCartonField_(tables.cartons.sheet,tables.cartons.headers,carton._rowNumber,'closedAt',new Date().toISOString());
+    if(props.getProperty(property)===String(carton.cartonId))props.deleteProperty(property);
+    return {ok:true,duplicate:false,cartonId:String(carton.cartonId),number:String(carton['Номер']),dataVersion:bumpDataVersion_()};
+  } finally {lock.releaseLock();}
 }
 
 function boxItemContext_(db, shipmentId, directionId, positionId) {
@@ -1563,6 +1955,45 @@ function cartonMatchesShipment_(carton, shipment) {
   if (savedShipmentId) return savedShipmentId === String(shipment.shipmentId);
   return String(carton.directionId) === String(shipment.directionId) &&
     normalizeCartonScope_(carton['Направление']) === normalizeCartonScope_(shipment['Направление']);
+}
+
+// CartonContents is the source of truth for the shipments represented in a
+// carton. Never infer an item's origin from the owner of the physical carton.
+function cartonLinkedToShipment_(carton, shipment, contents) {
+  if (cartonMatchesShipment_(carton, shipment)) return true;
+  return (contents || []).some(row => String(row.cartonId || '') === String(carton.cartonId || '') &&
+    String(row.shipmentId || '') === String(shipment.shipmentId || '') &&
+    String(row.directionId || '') === String(shipment.directionId || ''));
+}
+
+function sharedCartonNormKey_(row) {
+  return String(row.shipmentId || '') + '|' + normalizeBoxSku_(row['Артикул']);
+}
+
+// Preserve the marketplace of every allocation: the same article can have
+// different capacity norms in WB and OZON.
+function sharedCartonNorms_(db, rows, extraShipment, forceFresh, cacheOnly) {
+  const shipments = new Map(assemblyShipments_(db).map(s => [String(s.shipmentId), s]));
+  if (extraShipment) shipments.set(String(extraShipment.shipmentId), extraShipment);
+  const grouped = { OZON: [], WB: [] };
+  (rows || []).forEach(row => {
+    const shipment = shipments.get(String(row.shipmentId || ''));
+    const market = shipment && shipmentMarketplace_(shipment);
+    if (grouped[market]) grouped[market].push(row);
+  });
+  const result = Object.create(null);
+  Object.keys(grouped).forEach(market => {
+    const entries = grouped[market];
+    if (!entries.length) return;
+    const skus = entries.map(row => row['Артикул']);
+    const bySku = cacheOnly ? cachedBoxNormsForSkus_(skus, market) : boxNormsForSkus_(skus, forceFresh, market);
+    entries.forEach(row => { result[sharedCartonNormKey_(row)] = bySku[normalizeBoxSku_(row['Артикул'])]; });
+  });
+  return result;
+}
+
+function cartonRowNorm_(row, normsBySku) {
+  return normsBySku[sharedCartonNormKey_(row)] || normsBySku[normalizeBoxSku_(row['Артикул'])] || null;
 }
 
 function ensureCartonShipmentIdColumn_(sheet) { return ensureCartonColumn_(sheet, 'shipmentId'); }
@@ -1612,6 +2043,8 @@ function boxPlacementTableHeaders_(sheet, requiredHeaders) {
   return headers;
 }
 
+function isWarehouseCartonId_(cartonId) { return String(cartonId || '').startsWith('carton-stock-'); }
+
 function normalizeCartonContents_(rows) {
   const removedByAllocation = Object.create(null);
   const additions = [];
@@ -1651,6 +2084,7 @@ function readBoxRecords_(sheet, requiredHeaders) {
 }
 
 function readOpenCartonsForShipment_(sheet, shipment) {
+  const shipments = Array.isArray(shipment) ? shipment : [shipment];
   const lastRow = sheet.getLastRow();
   const lastColumn = sheet.getLastColumn();
   if (lastRow < 1 || lastColumn < 1) throw new Error('Лист коробов пуст: отсутствуют заголовки.');
@@ -1659,34 +2093,58 @@ function readOpenCartonsForShipment_(sheet, shipment) {
   const missing = required.filter(header => headers.indexOf(header) < 0);
   if (missing.length) throw new Error('В листе коробов отсутствуют колонки: ' + missing.join(', ') + '.');
   const records = [];
-  const chunkSize = 2000;
-  for (let end = lastRow; end >= 2; end -= chunkSize) {
-    const start = Math.max(2, end - chunkSize + 1);
+  if (lastRow < 2) return { sheet, headers, records };
+  // Closed cartons form the bulk of the history. Read their single status
+  // column first and fetch full rows only around open cartons.
+  const statusColumn = headers.indexOf('Статус') + 1;
+  const statuses = sheet.getRange(2, statusColumn, lastRow - 1, 1).getValues();
+  const blocks = [];
+  statuses.forEach((cells, index) => {
+    if (!isOpenCarton_(cells[0])) return;
+    const row = index + 2;
+    const previous = blocks[blocks.length - 1];
+    if (previous && row <= previous.end + 21) previous.end = row;
+    else blocks.push({ start: row, end: row });
+  });
+  // A dense or scattered set is cheaper as one read than many small requests.
+  const totalRows = blocks.reduce((sum, block) => sum + block.end - block.start + 1, 0);
+  const ranges = blocks.length > 30 || totalRows > (lastRow - 1) * 0.6
+    ? [{ start: 2, end: lastRow }]
+    : blocks;
+  ranges.forEach(({ start, end }) => {
     const values = sheet.getRange(start, 1, end - start + 1, lastColumn).getValues();
     values.forEach((cells, offset) => {
       if (!cells.some(value => value !== '' && value !== null)) return;
       const row = headers.reduce((record, header, index) => { record[header] = cells[index]; return record; }, {});
       row._rowNumber = start + offset;
-      if (isOpenCarton_(row['Статус']) && cartonMatchesShipment_(row, shipment)) records.push(row);
+      if (!isWarehouseCartonId_(row.cartonId) && isOpenCarton_(row['Статус']) && shipments.some(scope => cartonMatchesShipment_(row, scope))) records.push(row);
     });
-  }
+  });
   return { sheet, headers, records };
 }
 
 function buildBoxOverview_(context, tables) {
   const itemAllocations = itemAllocationsFor_(tables.contents.records, context);
   const assigned = sumBoxQuantities_(itemAllocations);
-  const openRecords = tables.cartons.records.filter(row => cartonMatchesShipment_(row, context.shipment) && isOpenCarton_(row['Статус']));
+  const shipmentAssigned = sumBoxQuantities_(itemAllocations.filter(row => !isWarehouseCartonId_(row.cartonId)));
+  const openRecords = tables.cartons.records.filter(row => isOpenCarton_(row['Статус']) &&
+    ((tables.listShipments || [context.shipment]).some(scope => cartonMatchesShipment_(row, scope)) || cartonLinkedToShipment_(row, context.shipment, tables.contents.records)));
   const openIds = new Set(openRecords.map(row => String(row.cartonId)));
   const openContents = tables.contents.records.filter(row => openIds.has(String(row.cartonId)));
   const normSkus = openContents.map(row => row['Артикул']).concat([context.item['Артикул']]);
-  const norms = boxNormsForSkus_(normSkus, false, shipmentMarketplace_(context.shipment));
-  const boxes = openRecords.map(row => publicCarton_(row, tables.contents.records, row._rowNumber, norms, false, context.item.positionId));
+  const norms = sharedCartonNorms_(tables.db, openContents.concat([{ shipmentId: context.shipment.shipmentId, 'Артикул': context.item['Артикул'] }]), context.shipment, false);
+  const contentsByCarton = new Map();
+  openContents.forEach(row => {
+    const id = String(row.cartonId);
+    if (!contentsByCarton.has(id)) contentsByCarton.set(id, []);
+    contentsByCarton.get(id).push(row);
+  });
+  const boxes = openRecords.map(row => publicCarton_(row, contentsByCarton.get(String(row.cartonId)) || [], row._rowNumber, norms, true, context.item.positionId));
   boxes.sort((a, b) => Number(b.itemQuantity > 0) - Number(a.itemQuantity > 0) || String(a.number).localeCompare(String(b.number), 'ru'));
-  const itemNorm = norms[normalizeBoxSku_(context.item['Артикул'])] || getBoxPackNorm_(context.item['Артикул'], false, shipmentMarketplace_(context.shipment));
+  const itemNorm = norms[sharedCartonNormKey_({ shipmentId: context.shipment.shipmentId, 'Артикул': context.item['Артикул'] })] || getBoxPackNorm_(context.item['Артикул'], false, shipmentMarketplace_(context.shipment));
   const packedKnown = context.packingKnown;
   const available = packedKnown ? Math.max(0, context.packed - assigned) : null;
-  const itemBoxCount = new Set(itemAllocations.map(row => String(row.cartonId)).filter(Boolean)).size;
+  const itemBoxCount = new Set(itemAllocations.filter(row => !isWarehouseCartonId_(row.cartonId)).map(row => String(row.cartonId)).filter(Boolean)).size;
   return {
     shipment: { id: String(context.shipment.shipmentId), name: String(context.shipment['Название поставки']), directionId: String(context.shipment.directionId), direction: String(context.shipment['Направление']) },
     item: {
@@ -1700,7 +2158,7 @@ function buildBoxOverview_(context, tables) {
     boxes,
     itemBoxes: boxes.filter(box => box.itemQuantity > 0),
     itemBoxCount,
-    assigned,
+    assigned, shipmentAssigned,
     available,
     overAllocated: packedKnown && assigned > context.packed,
     closedCount: Number.isFinite(tables.closedCount) ? tables.closedCount : null,
@@ -1718,19 +2176,19 @@ function publicCarton_(record, contents, rowNumber, normsBySku, includeContents,
     ? linked.filter(row => String(row.positionId) === String(selectedPositionId)).reduce((sum, row) => sum + validBoxQuantity_(row['Количество, шт']), 0)
     : pieces;
   const result = {
-    cartonId: String(record.cartonId || ''), directionId: String(record.directionId || ''),
-    number: String(record['Номер'] || ''), boxType: space.boxType,
+    cartonId: String(record.cartonId || ''), directionId: String(record.directionId || ''), shipmentId: String(record.shipmentId || ''),
+    number: String(record['Номер'] || ''), storeNumber: cartonStoreNumberFromNumber_(record['Номер']), boxType: space.boxType,
     legacyCapacity: toNumberOrNull_(record['Подтверждённая вместимость, шт']),
     occupied: pieces, pieceCount: pieces, remaining: null,
     spaceUsed: space.spaceUsed, spaceRemaining: space.spaceRemaining, fillRatio: space.spaceUsed,
     spaceKnown: space.known, blockedReason: space.reason,
     status, open: isOpenCarton_(status), closed: isClosedCarton_(record),
     createdAt: normalizeDateString_(record.createdAt), rowNumber,
-    itemQuantity,
+    itemQuantity, closeRevision:cartonCloseRevision_(record,contents),
     skuCount: new Set(linked.map(row => normalizeBoxSku_(row['Артикул'])).filter(Boolean)).size,
   };
   if (includeContents) result.contents = linked.map(row => {
-    const norm = normsBySku[normalizeBoxSku_(row['Артикул'])] || null;
+    const norm = cartonRowNorm_(row, normsBySku);
     return {
       shipmentId: String(row.shipmentId || ''), positionId: String(row.positionId || ''),
       sku: String(row['Артикул'] || ''), quantity: validBoxQuantity_(row['Количество, шт']),
@@ -1743,7 +2201,7 @@ function publicCarton_(record, contents, rowNumber, normsBySku, includeContents,
 function cartonTypeSummary_(linked, normsBySku, declaredType) {
   const types = Object.create(null);
   (linked || []).forEach(row => {
-    const norm = normsBySku[normalizeBoxSku_(row['Артикул'])];
+    const norm = cartonRowNorm_(row, normsBySku);
     if (!norm || !norm.confirmed || !norm.boxType) return;
     const key = normalizeCartonScope_(norm.boxType);
     if (key && !types[key]) types[key] = String(norm.boxType).trim();
@@ -1759,7 +2217,7 @@ function cartonSpace_(carton, linked, normsBySku) {
   let reason = '';
   linked.forEach(row => {
     const quantity = validBoxQuantity_(row['Количество, шт']);
-    const norm = normsBySku[normalizeBoxSku_(row['Артикул'])];
+    const norm = cartonRowNorm_(row, normsBySku);
     if (!norm || !norm.confirmed || !norm.unitsPerBox || !norm.boxType) {
       known = false;
       reason = reason || ('Не найдена подтверждённая норма короба для ' + String(row['Артикул'] || 'артикула') + '.');
@@ -1779,15 +2237,16 @@ function cartonSpace_(carton, linked, normsBySku) {
 
 function boxPlacementResult_(context, allocation, tables, cartonIndex, duplicate, normsBySku) {
   const carton = tables.cartons.records[cartonIndex];
-  const publicCarton = publicCarton_(carton, tables.contents.records, carton._rowNumber || cartonIndex + 2, normsBySku, false, allocation.positionId);
+  const publicCarton = publicCarton_(carton, tables.contents.records, carton._rowNumber || cartonIndex + 2, normsBySku, true, allocation.positionId);
   const itemAllocations = itemAllocationsFor_(tables.contents.records, context);
   const assigned = sumBoxQuantities_(itemAllocations);
-  const itemBoxCount = new Set(itemAllocations.map(row => String(row.cartonId)).filter(Boolean)).size;
+  const shipmentAssigned = sumBoxQuantities_(itemAllocations.filter(row => !isWarehouseCartonId_(row.cartonId)));
+  const itemBoxCount = new Set(itemAllocations.filter(row => !isWarehouseCartonId_(row.cartonId)).map(row => String(row.cartonId)).filter(Boolean)).size;
   return {
     ok: true, duplicate,
     allocation: { allocationId: String(allocation.allocationId), cartonId: String(allocation.cartonId), shipmentId: String(allocation.shipmentId), directionId: String(allocation.directionId), positionId: String(allocation.positionId), quantity: Number(allocation['Количество, шт']), sku: String(allocation['Артикул'] || ''), createdAt: normalizeDateString_(allocation.createdAt) },
     carton: publicCarton,
-    assigned,
+    assigned, shipmentAssigned,
     available: context.packingKnown ? Math.max(0, context.packed - assigned) : null,
     itemBoxCount,
     dataVersion: getDataVersion(),
@@ -1829,6 +2288,8 @@ function validateBoxPlacementPayload_(payload, requirePreview) {
   if (!String(payload.shipmentId || '').trim() || !String(payload.directionId || '').trim() || !String(payload.positionId || '').trim()) throw new Error('Выберите товар из поставки.');
   if (payload.mode !== 'new' && payload.mode !== 'existing') throw new Error('Выберите существующий короб или «Новый короб».');
   if (payload.mode === 'existing' && !String(payload.cartonId || '').trim()) throw new Error('Выберите открытый короб.');
+  if (payload.mode === 'existing' && isWarehouseCartonId_(payload.cartonId) && payload.warehouse !== true) throw new Error('Складской короб нельзя использовать как короб поставки.');
+  if (payload.warehouse === true && (!String(payload.parentKey || '').trim() || !String(payload.idempotencyKey || '').startsWith('stock-') || (payload.mode === 'existing' && !isWarehouseCartonId_(payload.cartonId)))) throw new Error('Складской короб используется только при подтверждённом распределении излишка.');
   if (requirePreview && !String(payload.previewId || '').trim()) throw new Error('Сначала нажмите «Проверить и добавить».');
   const quantity = Number(payload.quantity);
   if (!Number.isSafeInteger(quantity) || quantity < 1) throw new Error('Количество должно быть целым числом больше нуля.');
@@ -1853,6 +2314,8 @@ function boxPlacementRequestKey_(payload) {
     idempotencyKey: String(payload.idempotencyKey), mode: String(payload.mode),
     shipmentId: String(payload.shipmentId), directionId: String(payload.directionId),
     positionId: String(payload.positionId), cartonId: String(payload.cartonId || ''), quantity: Number(payload.quantity),
+    boxSourceShipmentId: String(payload.boxSourceShipmentId || ''),
+    ...(payload.employeeId ? { employeeId: String(payload.employeeId) } : {}),
   };
 }
 
@@ -1873,7 +2336,9 @@ function readPackedQuantityForItem_(db, shipment, item) {
   const required = ['eventId', 'shipmentId', 'directionId', 'positionId', 'operationId', 'Количество, шт'];
   const missing = required.filter(header => headers.indexOf(header) < 0);
   if (missing.length) return { known: false, quantity: null, reason: 'В WorkLog отсутствуют поля: ' + missing.join(', ') + '.' };
-  const rows = readRowsByKey_(sheet, 'shipmentId', new Set([String(shipment.shipmentId)]));
+  // Position IDs are stable and selective. Still verify shipment, direction,
+  // operation, source and cancellations below before using any quantity.
+  const rows = readRowsByKey_(sheet, 'positionId', new Set([String(item.positionId)]));
   const matchingRows = rows.filter(row =>
     String(row.shipmentId) === String(shipment.shipmentId) &&
     String(row.directionId) === String(shipment.directionId) &&
@@ -2019,7 +2484,7 @@ function auditCancelledPackingCartons_(db) {
   const tables = readBoxTables_(db);
   const groups = new Map();
   tables.contents.records.forEach(row => {
-    if (!/^RITM-ROLL-\d+$/.test(String(row.shipmentId || '')) || String(row.directionId) !== 'ROLL') return;
+    if (!(/^RITM-ROLL-\d+$/.test(String(row.shipmentId || '')) || isAssemblyStock_(row.shipmentId)) || String(row.directionId) !== 'ROLL') return;
     const key = JSON.stringify([String(row.shipmentId), String(row.directionId), String(row.positionId)]);
     if (!groups.has(key)) groups.set(key, {
       shipmentId: String(row.shipmentId), directionId: String(row.directionId),
@@ -2038,7 +2503,7 @@ function auditCancelledPackingCartons_(db) {
   }
   // Include fully reversed allocations too: their empty cartons may still have
   // an old open/closed status from before audited carton cancellation existed.
-  const shipmentIds = new Set(tables.contents.rawRecords.map(row => String(row.shipmentId || '')).filter(id => /^RITM-ROLL-\d+$/.test(id)));
+  const shipmentIds = new Set(tables.contents.rawRecords.map(row => String(row.shipmentId || '')).filter(id => /^RITM-ROLL-\d+$/.test(id) || isAssemblyStock_(id)));
   const rows = readRowsByKey_(workLog, 'shipmentId', shipmentIds);
   const cancellations = readWorkCancellationState_(db, rows).byEventId;
   const seen = new Set();
@@ -2123,17 +2588,15 @@ function boxNormsForSkus_(skus, forceFresh, marketplace) {
   const matchesBySku = Object.create(null);
   missing.forEach(sku => { matchesBySku[sku] = []; });
   try {
-    const catalog = SpreadsheetApp.openById(RITM_CATALOG_ID);
     [marketplace].forEach(tabName => {
-      const sheet = catalog.getSheetByName(tabName);
-      if (!sheet || sheet.isSheetHidden()) return;
-      const lastRow = sheet.getLastRow();
-      const lastColumn = sheet.getLastColumn();
+      const catalog=cartonCatalogRead_(tabName),sheet=catalog.sheet;
+      const lastRow = catalog.lastRow;
+      const lastColumn = catalog.lastColumn;
       if (lastRow < 2 || lastColumn < 2) return;
       const width = Math.min(30, lastColumn);
-      const headers = sheet.getRange(1, 1, 1, width).getDisplayValues()[0].map(String);
+      const headers = catalog.headers.slice(0,width);
       const keyWidth = Math.min(2, lastColumn);
-      const keyRows = sheet.getRange(2, 1, lastRow - 1, keyWidth).getDisplayValues();
+      const keyRows = catalog.keyRows;
       const matchedRows = new Set();
       keyRows.forEach((cells, offset) => {
         const rowNumber = offset + 2;
@@ -2150,7 +2613,7 @@ function boxNormsForSkus_(skus, forceFresh, marketplace) {
       const normColumns = ['В коробке', 'Кол-во вида', 'Тип короба'].map(name => headers.indexOf(name)).filter(index => index >= 0);
       if (!normColumns.length) return;
       const firstColumn = Math.min(...normColumns), normLastColumn = Math.max(...normColumns);
-      const normRows = sheet.getRange(2, firstColumn + 1, lastRow - 1, normLastColumn - firstColumn + 1).getDisplayValues();
+      const normRows = cartonCatalogColumns_(catalog,firstColumn+1,normLastColumn-firstColumn+1);
       matchedRows.forEach(rowNumber => {
         const rowValues = normRows[rowNumber - 2];
         const row = {};
@@ -2230,23 +2693,20 @@ function storeNumbersForItems_(items, forceFresh) {
   const storesBySku = Object.create(null);
   missing.forEach(entry => { storesBySku[storeNumberSkuKey_(entry.sku, entry.source)] = new Set(); });
   try {
-    const catalog = SpreadsheetApp.openById(RITM_CATALOG_ID);
     // Store is the final column on each marketplace's product tab. Read it
     // beside that tab's article aliases so similarly named SKUs cannot cross stores.
     ['OZON', 'WB'].forEach(tabName => {
       const relevant = missing.filter(entry => entry.source === tabName);
       if (!relevant.length) return;
-      const sheet = catalog.getSheetByName(tabName);
-      if (!sheet || sheet.isSheetHidden() || sheet.getLastRow() < 1)
-        throw new Error('Видимая вкладка «' + tabName + '» не найдена в базе.');
-      const lastRow = sheet.getLastRow(), lastColumn = sheet.getLastColumn();
-      const headers = sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0]
+      const catalog=cartonCatalogRead_(tabName),sheet=catalog.sheet;
+      const lastRow = catalog.lastRow, lastColumn = catalog.lastColumn;
+      const headers = catalog.headers
         .map(value => String(value || '').trim().toLocaleLowerCase('ru-RU'));
       const storeIndex = headers.indexOf('магазин');
       if (storeIndex < 0) throw new Error('Во вкладке «' + tabName + '» не найдена колонка «Магазин».');
       if (lastRow < 2) return;
-      const articleRows = sheet.getRange(2, 1, lastRow - 1, Math.min(2, lastColumn)).getDisplayValues();
-      const storeRows = sheet.getRange(2, storeIndex + 1, lastRow - 1, 1).getDisplayValues();
+      const articleRows = catalog.keyRows;
+      const storeRows = cartonCatalogColumns_(catalog,storeIndex+1,1);
       articleRows.forEach((row, offset) => {
         const store = String(storeRows[offset][0] || '').trim();
         if (!store || /^#(?:N\/A|REF!|VALUE!|ERROR!)/i.test(store)) return;
@@ -2295,8 +2755,356 @@ function boxPackNormFromCatalogRow_(record, tabName, rowNumber) {
   return { confirmed: true, boxType, unitsPerBox, source: 'БАЗА FBO · ' + tabName + ' · строка ' + rowNumber };
 }
 
+// Split a single request using confirmed quantities, never the total amount
+// entered in previous work events. Physical cartons already on the warehouse
+// are included in totalAssigned but not shipmentAssigned.
+function planExcessPlacement_(input) {
+  const keys = ['plan', 'packed', 'totalAssigned', 'shipmentAssigned', 'quantity', 'capacity'];
+  const values = Object.create(null);
+  keys.forEach(key => {
+    if (input[key] === null || input[key] === undefined || input[key] === '') throw new Error('Не подтверждены целые количества плана, упаковки или короба.');
+    const value = Number(input[key]);
+    if (!Number.isSafeInteger(value) || value < 0) throw new Error('Не подтверждены целые количества плана, упаковки или короба.');
+    values[key] = value;
+  });
+  if (!values.quantity || !values.capacity) throw new Error('Количество и вместимость должны быть больше нуля.');
+  if (values.shipmentAssigned > values.totalAssigned || values.totalAssigned > values.packed) throw new Error('Распределение не совпадает с подтверждённой упаковкой.');
+  if (values.quantity > values.packed - values.totalAssigned) throw new Error('Недостаточно подтверждённой упаковки для размещения.');
+  const shipment = Math.min(values.quantity, Math.max(0, values.plan - values.shipmentAssigned));
+  const excess = values.quantity - shipment;
+  // Warehouse containers are changed manually. Capacity limits still apply to
+  // shipment cartons, but never split warehouse excess into a carton per SKU.
+  const stockBoxes = excess ? [excess] : [];
+  return { shipment, excess, stockBoxes };
+}
+
+function stockDigest_(text) {
+  return Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text))).slice(0, 32);
+}
+
+function stockReservationKey_(shipmentId, positionId) {
+  return 'ritm.assembly.stock.reservation.' + stockDigest_(String(shipmentId) + '|' + String(positionId));
+}
+
+function stockOperationKey_(idempotencyKey) { return 'ritm.assembly.stock.operation.' + stockDigest_(idempotencyKey); }
+
+function ensureStockAuditColumns_(db) {
+  const sheet = db.getSheetByName(TABLES.cartonContents);
+  if (!sheet) throw new Error('Журнал состава коробов не найден.');
+  ['action', 'sourceAllocationId', 'sourceWorkEventId', 'reason'].forEach(header => ensureCartonColumn_(sheet, header));
+  const expected = ['employeeId', 'Сотрудник'];
+  const current = sheet.getRange(1, 14, 1, 2).getValues()[0].map(String);
+  if (current.some((value, i) => value && value !== expected[i])) throw new Error('Колонки автора в журнале заняты другими данными.');
+  if (current.some((value, i) => value !== expected[i])) sheet.getRange(1, 14, 1, 2).setValues([expected]);
+}
+
+// Read-only warehouse view: corrections are normalized, packing and shipment boxes are untouched.
+function getWarehouseStock() {
+  const db = SpreadsheetApp.openById(DB_ID);
+  const cartons = readTable_(db, TABLES.cartons).filter(row => isWarehouseCartonId_(row.cartonId) && !isCancelledCarton_(row));
+  const ids = new Set(cartons.map(row => String(row.cartonId)));
+  const contents = normalizeCartonContents_(readTable_(db, TABLES.cartonContents).filter(row => ids.has(String(row.cartonId))));
+  const products = warehouseStockProducts_(db, cartons, contents);
+  let sourceNames = new Map();
+  try { sourceNames = new Map(assemblyShipments_(db).map(shipment => [String(shipment.shipmentId),String(shipment['Направление'] || shipment['Название поставки'] || '')])); } catch (_) { /* Physical stock remains visible with historical source IDs. */ }
+  const props = PropertiesService.getScriptProperties();
+  return { ok: true, dataVersion:getDataVersion(), checkedAt: new Date().toISOString(), cartons: cartons.map(carton => ({
+    cartonId: String(carton.cartonId), number: String(carton['Номер'] || ''), shipment: String(carton['Направление'] || ''), status: String(carton['Статус'] || ''),
+    current: isCurrentWarehouseCarton_(carton, cartons, props),
+    open:isOpenCarton_(carton['Статус']), closedAt:normalizeDateString_(carton.closedAt), closeRevision:cartonCloseRevision_(carton,contents),
+    marketplace: shipmentMarketplace_(carton), storeNumber: cartonStoreNumberFromNumber_(carton['Номер']),
+    contents: contents.filter(row => String(row.cartonId) === String(carton.cartonId)).map(row => ({
+      allocationId: String(row.allocationId), sku: String(row['Артикул'] || ''), quantity: validBoxQuantity_(row['Количество, шт']),
+      employee: String(row['Сотрудник'] || ''), createdAt: normalizeDateString_(row.createdAt),
+      shipment: sourceNames.get(String(row.shipmentId)) || (/^RITM-WAREHOUSE-MANUAL-(OZON|WB)-\d+$/.test(String(row.shipmentId)) ? 'Ручное поступление на склад' : String(row.shipmentId || '')),
+      comment: String(row.reason || ''),
+      ...(products.get(String(row.shipmentId) + '|' + String(row.positionId)) || { productName: '', photoUrl: '', photoAssetKey: '' }),
+    })),
+  })).filter(carton => carton.contents.length || carton.current) };
+}
+
+function warehouseCartonKey_(store, market) {
+  if (!['OZON','WB'].includes(market)) throw new Error('Не подтверждён маркетплейс складского короба.');
+  return 'ritm.assembly.warehouse.current.' + market + '.' + confirmedStoreNumber_([store]);
+}
+
+function warehouseCartonCompatible_(carton, store, market) {
+  return isWarehouseCartonId_(carton.cartonId) && !isCancelledCarton_(carton) && isOpenCarton_(carton['Статус']) &&
+    cartonStoreNumberFromNumber_(carton['Номер']) === store && shipmentMarketplace_(carton) === market;
+}
+
+function chooseWarehouseCarton_(cartons, store, market, currentId) {
+  const candidates = cartons.filter(carton => warehouseCartonCompatible_(carton,store,market));
+  return candidates.find(carton => String(carton.cartonId) === String(currentId || '')) || candidates.sort((a,b) =>
+    (cartonNumberParts_(a['Номер'])?.sequence || 0) - (cartonNumberParts_(b['Номер'])?.sequence || 0))[0] || null;
+}
+
+function isCurrentWarehouseCarton_(carton, cartons, props) {
+  const market = shipmentMarketplace_(carton), store = cartonStoreNumberFromNumber_(carton['Номер']);
+  if (!market || !store) return false;
+  const current = chooseWarehouseCarton_(cartons,store,market,props.getProperty(warehouseCartonKey_(store,market)));
+  return !!current && String(current.cartonId) === String(carton.cartonId);
+}
+
+// Called only under ScriptLock. Empty carton creation is idempotent; quantity
+// and employee history remain append-only in the original allocation journal.
+function createWarehouseCartonRecord_(db, shipment, store, market, key, props) {
+  const tables = getBoxTableSheets_(db), id = 'carton-stock-' + stockDigest_(key);
+  const previous = findBoxRecordByHeaderValue_(tables.cartons.sheet,'cartonId',id);
+  if (previous) {
+    if (!warehouseCartonCompatible_(previous,store,market)) throw new Error('Ключ создания уже связан с другим коробом.');
+    return previous;
+  }
+  let headers = boxPlacementTableHeaders_(tables.cartons.sheet,['cartonId','directionId','Направление','Номер','Подтверждённая вместимость, шт','Занято, шт','Статус','createdAt','closedAt','source']);
+  if (!headers.includes('shipmentId')) headers = ensureCartonColumn_(tables.cartons.sheet,'shipmentId');
+  if (!headers.includes('Тип короба')) headers = ensureCartonColumn_(tables.cartons.sheet,'Тип короба');
+  const record = {cartonId:id,shipmentId:String(shipment.shipmentId || ''),directionId:String(shipment.directionId || ''),
+    'Направление':String(shipment['Направление'] || shipment['Название поставки'] || market),
+    'Номер':nextWarehouseCartonNumber_(store,tables.cartons.sheet),'Подтверждённая вместимость, шт':'','Занято, шт':0,
+    'Статус':'Открыт','Тип короба':'Склад',createdAt:new Date().toISOString(),closedAt:'',source:'RITM_ASSEMBLY_STOCK'};
+  appendRecordByHeaders_(tables.cartons.sheet,headers,record);
+  props.setProperty(warehouseCartonKey_(store,market),id);
+  return Object.assign({_rowNumber:tables.cartons.sheet.getLastRow()},record);
+}
+
+function createWarehouseCarton(payload) {
+  const key = validateBoxIdempotencyKey_(payload && payload.idempotencyKey);
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) throw new Error('Склад сейчас обновляется. Повторите с тем же запросом.');
+  try {
+    const db = SpreadsheetApp.openById(DB_ID), tables = getBoxTableSheets_(db);
+    const source = findBoxRecordByHeaderValue_(tables.cartons.sheet,'cartonId',String(payload.sourceCartonId || ''));
+    if (!source || !isWarehouseCartonId_(source.cartonId) || isCancelledCarton_(source)) throw new Error('Исходный складской короб не подтверждён.');
+    const store = cartonStoreNumberFromNumber_(source['Номер']), market = shipmentMarketplace_(source);
+    const carton = createWarehouseCartonRecord_(db,source,store,market,'manual-' + key,PropertiesService.getScriptProperties());
+    ensureWarehouseBoxViewSheet_(db); bumpDataVersion_();
+    return {ok:true,cartonId:String(carton.cartonId),number:String(carton['Номер'])};
+  } finally {lock.releaseLock();}
+}
+
+
+// Read only the stock positions from existing marked Assembly mirrors. These
+// details are already enriched from the correct marketplace during supply sync.
+function warehouseStockProducts_(db, cartons, contents) {
+  const result = new Map();
+  let origins = [];
+  try { origins = assemblyShipments_(db); } catch (_) { /* Physical stock remains visible without a current roster. */ }
+  origins.forEach(origin => {
+    const wanted = contents.filter(row => String(row.shipmentId) === String(origin.shipmentId));
+    if (!wanted.length) return;
+    let rows = [];
+    try {
+      if (origin.environment !== 'RITM') rows = readTable_(db, TABLES.items);
+      else {
+        const sheet = db.getSheetById(Number(origin.sheetId));
+        const marker = origin.marker || RITM_SHEET_MARKER + String(origin.shipmentId).replace('RITM-ROLL-', '');
+        if (sheet && sheet.getRange(1, 1).getNote() === marker)
+          rows = readRowsByKey_(sheet, 'positionId', new Set(wanted.map(row => String(row.positionId))));
+        wanted.filter(row => String(row.positionId).includes('|manual:')).forEach(row => {
+          const item = readShipmentItem_(db, origin, row.positionId);
+          if (item) rows.push(item);
+        });
+      }
+    } catch (_) { /* Optional product details must not hide stock or its audit. */ }
+    wanted.forEach(row => {
+      const matches = rows.filter(item => String(item.shipmentId) === String(row.shipmentId) && String(item.positionId) === String(row.positionId) && normalizeBoxSku_(item['Артикул']) === normalizeBoxSku_(row['Артикул']));
+      if (matches.length !== 1) return;
+      const item = matches[0];
+      result.set(String(row.shipmentId) + '|' + String(row.positionId), { productName: String(item['Название товара'] || ''), photoUrl: safeRitmPhotoUrl_(item['Фото']), photoAssetKey: String(item.photoAssetKey || '') });
+    });
+  });
+  const missing = contents.filter(row => !result.has(String(row.shipmentId) + '|' + String(row.positionId)));
+  if (missing.length) {
+    let catalog = new Map();
+    try { catalog = readRitmCatalog_(); } catch (_) { /* Unavailable catalog is shown as missing text/photo, not missing stock. */ }
+    const cartonById = new Map(cartons.map(carton => [String(carton.cartonId), carton]));
+    missing.forEach(row => {
+      const carton = cartonById.get(String(row.cartonId));
+      const market = labelMarketplace_('', carton && carton['Направление']);
+      const product = market ? catalog.get(market + '|' + normalizeBoxSku_(row['Артикул'])) : null;
+      if (product) result.set(String(row.shipmentId) + '|' + String(row.positionId), { productName: String(product.name || ''), photoUrl: safeRitmPhotoUrl_(product.photoUrl), photoAssetKey: '' });
+    });
+  }
+  return result;
+}
+
+
+function stockOperationSheet_(db) {
+  const name = 'StockPlacementOperations';
+  const marker = 'RITM_ASSEMBLY_STOCK_OPERATIONS_V1';
+  const expected = ['operationId', 'request', 'shipmentQuantity', 'stockQuantity', 'completedAt'];
+  let sheet = db.getSheetByName(name);
+  if (!sheet) {
+    sheet = db.insertSheet(name);
+    sheet.getRange(1, 1, 1, expected.length).setValues([expected]);
+    sheet.getRange(1, 1).setNote(marker);
+    if (typeof sheet.hideSheet === 'function') sheet.hideSheet();
+  }
+  if (String(sheet.getRange(1, 1).getNote() || '') !== marker) throw new Error('Имя журнала складских операций занято другим листом; данные не изменены.');
+  const headers = sheet.getRange(1, 1, 1, expected.length).getValues()[0].map(String);
+  if (headers.some((header, i) => header !== expected[i])) throw new Error('Журнал складских операций имеет неизвестный формат; данные не изменены.');
+  return { sheet, headers };
+}
+
+function assertStockReservation_(payload) {
+  const props = PropertiesService.getScriptProperties();
+  const owner = props.getProperty(stockReservationKey_(payload.shipmentId, payload.positionId));
+  const parent = String(payload.parentKey || '');
+  if (owner && owner !== parent) throw new Error('Для этого товара ещё сохраняется распределение излишка. Сначала проверьте его результат.');
+  if (parent) {
+    const operation = parseSyncJson_(props.getProperty(stockOperationKey_(parent)), null);
+    if (!owner || owner !== parent || !operation || operation.status !== 'pending') throw new Error('Распределение излишка не подтверждено.');
+    const part = (operation.parts || []).find(row => row.idempotencyKey === String(payload.idempotencyKey));
+    if (!part || JSON.stringify(boxPlacementRequestKey_(part)) !== JSON.stringify(boxPlacementRequestKey_(payload)) || Boolean(part.warehouse) !== Boolean(payload.warehouse)) throw new Error('Состав распределения излишка изменился. Обновите данные.');
+  } else if (payload.warehouse === true) throw new Error('Складской короб создаётся только при распределении излишка.');
+}
+
+function assertStockPlan_(payload, context) {
+  if (!payload.parentKey) return;
+  const operation = parseSyncJson_(PropertiesService.getScriptProperties().getProperty(stockOperationKey_(payload.parentKey)), null);
+  if (!operation || Number(context.plan) !== operation.plan) throw new Error('План изменился во время распределения. Требуется сверка.');
+}
+
+function nextWarehouseCartonNumber_(storeNumber, cartonSheet) {
+  const prefix = confirmedStoreNumber_([storeNumber]) + 'скл';
+  const highest = readCartonNumbers_(cartonSheet).map(cartonNumberParts_).filter(Boolean)
+    .filter(part => part.prefix.toLocaleLowerCase('ru-RU') === prefix.toLocaleLowerCase('ru-RU'))
+    .reduce((value, part) => Math.max(value, part.sequence), 0);
+  if (!Number.isSafeInteger(highest) || highest >= Number.MAX_SAFE_INTEGER) throw new Error('Не удалось определить номер складского короба.');
+  return prefix + String(highest + 1);
+}
+
+function finalizeStockSplitPart_(db, part) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) throw new Error('Короба заняты, проверяем сохранение.');
+  try {
+    assertStockReservation_(part);
+    const tables = getBoxTableSheets_(db);
+    const allocation = findBoxRecordByHeaderValue_(tables.contents.sheet, 'allocationId', 'allocation-' + part.idempotencyKey);
+    if (!allocation || !boxAllocationMatchesPayload_(allocation, part)) throw new Error('Размещение ещё не подтверждено.');
+    const carton = findBoxRecordByHeaderValue_(tables.cartons.sheet, 'cartonId', String(allocation.cartonId));
+    if (!carton || isCancelledCarton_(carton)) throw new Error('Короб не подтверждён или отменён.');
+    const contents = normalizeCartonContents_(readRowsByKey_(tables.contents.sheet, 'cartonId', new Set([String(carton.cartonId)])));
+    const headers = boxPlacementTableHeaders_(tables.cartons.sheet, ['cartonId', 'Занято, шт', 'Статус']);
+    updateCartonDerived_(tables.cartons.sheet, headers, carton._rowNumber, { occupied: sumBoxQuantities_(contents) });
+    if (String(carton['Статус'] || '') === 'Подготовка') updateCartonField_(tables.cartons.sheet, headers, carton._rowNumber, 'Статус', 'Открыт');
+  } finally { lock.releaseLock(); }
+}
+
+function saveStockSplitPlacement(payload) {
+  let db, key, request, operation;
+  try {
+    validateBoxPlacementPayload_(payload, false);
+    if (payload.warehouse || payload.parentKey) throw new Error('Не удалось подтвердить распределение.');
+    db = SpreadsheetApp.openById(DB_ID);
+    key = String(payload.idempotencyKey);
+    request = boxPlacementRequestKey_(payload);
+    const props = PropertiesService.getScriptProperties();
+    const operationKey = stockOperationKey_(key);
+    const reservationKey = stockReservationKey_(payload.shipmentId, payload.positionId);
+    const lock = LockService.getScriptLock();
+    if (!lock.tryLock(5000)) return boxPlacementPending_('Короба сейчас обновляются. Проверяем сохранение операции.');
+    try {
+      const journal = stockOperationSheet_(db);
+      const completed = findRowByHeaderValue_(journal.sheet, 'operationId', key);
+      if (completed) {
+        if (String(completed.request || '') !== JSON.stringify(request)) throw new Error('Ключ повтора уже использован для другого распределения.');
+        if (props.getProperty(reservationKey) === key) props.deleteProperty(reservationKey);
+        props.deleteProperty(operationKey);
+        return { ok: true, duplicate: true, shipmentQuantity: Number(completed.shipmentQuantity), stockQuantity: Number(completed.stockQuantity), dataVersion: getDataVersion() };
+      }
+      operation = parseSyncJson_(props.getProperty(operationKey), null);
+      if (operation && JSON.stringify(operation.request) !== JSON.stringify(request)) throw new Error('Ключ повтора уже использован для другого распределения.');
+      if (!operation) {
+        if (props.getProperty(reservationKey)) throw new Error('Для товара уже выполняется другое распределение.');
+        const employee = readTable_(db, TABLES.employees).find(row => String(row.employeeId) === String(payload.employeeId || '') && (row.Активен === true || String(row.Активен).toLowerCase() === 'true'));
+        if (!employee) throw new Error('Выберите сотрудника, который отправляет излишек на склад.');
+        const employeeName = String(employee.Имя || '').trim();
+        if (!employeeName) throw new Error('Имя сотрудника не подтверждено.');
+        ensureStockAuditColumns_(db);
+        const context = boxItemContext_(db, payload.shipmentId, payload.directionId, payload.positionId);
+        if (!context.packingKnown || context.packed === null || context.plan === null) throw new Error('План или упаковка не подтверждены. Обновите данные.');
+        if (context.shipment.environment === 'RITM') { assertLocalShipmentUnlocked_(payload.shipmentId); assertAssemblyOnlyNotDeleted_(payload.positionId); }
+        const sheets = getBoxTableSheets_(db);
+        const records = normalizeCartonContents_(readRowsByKey_(sheets.contents.sheet, 'positionId', new Set([String(context.item.positionId)])));
+        const allocations = itemAllocationsFor_(records, context);
+        const norm = getBoxPackNorm_(context.item['Артикул'], true, shipmentMarketplace_(context.shipment));
+        if (!norm || !norm.confirmed) throw new Error(norm && norm.reason ? norm.reason : 'Не подтверждена вместимость короба.');
+        const split = planExcessPlacement_({ plan: context.shipment.stockTask ? 0 : context.plan, packed: context.packed, totalAssigned: sumBoxQuantities_(allocations), shipmentAssigned: sumBoxQuantities_(allocations.filter(row => !isWarehouseCartonId_(row.cartonId))), quantity: Number(payload.quantity), capacity: norm.unitsPerBox });
+        if (!split.excess) throw new Error('В указанном количестве нет излишка для склада.');
+        const digest = stockDigest_(key);
+        const base = { shipmentId: String(payload.shipmentId), directionId: String(payload.directionId), positionId: String(payload.positionId), parentKey: key, employeeId: String(payload.employeeId) };
+        const parts = [];
+        if (split.shipment) parts.push(Object.assign({}, base, { mode: payload.mode, cartonId: String(payload.cartonId || ''), boxSourceShipmentId: String(payload.boxSourceShipmentId || ''), quantity: split.shipment, idempotencyKey: 'ship-' + digest }));
+        // Validate the selected shipment carton before creating a warehouse container.
+        if (split.shipment) boxPlacementSnapshot_(db, parts[0], true);
+        const market = shipmentMarketplace_(context.shipment);
+        const storeMap = storeNumbersForItems_([{sku:context.item['Артикул'],source:market}],true);
+        const store = confirmedStoreNumber_(storeMap[storeNumberSkuKey_(context.item['Артикул'],market)]);
+        const warehouseRows = readTable_(db,TABLES.cartons).filter(row => isWarehouseCartonId_(row.cartonId));
+        let stockCarton = chooseWarehouseCarton_(warehouseRows,store,market,props.getProperty(warehouseCartonKey_(store,market)));
+        if (!stockCarton) stockCarton = createWarehouseCartonRecord_(db,context.shipment,store,market,'auto-' + key,props);
+        parts.push(Object.assign({},base,{mode:'existing',cartonId:String(stockCarton.cartonId),boxSourceShipmentId:'',quantity:split.excess,idempotencyKey:'stock-' + digest + '-' + parts.length,warehouse:true}));
+        const direction = cartonDirection_(context.shipment);
+        if (direction) ensureDirectionBoxViewSheet_(db, direction, directionBoxShipments_(props, direction, context.shipment));
+        else if (!context.shipment.stockTask) ensureLegacyShipmentBoxViewSheet_(db, context.shipment);
+        refreshLegacyViewsForWarehouse_(db, context.shipment);
+        ensureWarehouseBoxViewSheet_(db);
+        operation = { status: 'pending', request, parts, shipment: split.shipment, excess: split.excess, plan: context.plan, employeeId: String(payload.employeeId), employeeName };
+        if (JSON.stringify(operation).length > 7500) { operation = null; throw new Error('Слишком много коробов для одной операции. Разделите количество на несколько добавлений.'); }
+        const initialProperties = {};
+        initialProperties[operationKey] = JSON.stringify(operation);
+        initialProperties[reservationKey] = key;
+        props.setProperties(initialProperties);
+      } else if (operation.status === 'complete') {
+        return { ok: true, duplicate: true, shipmentQuantity: operation.shipment, stockQuantity: operation.excess, dataVersion: getDataVersion() };
+      } else if (props.getProperty(reservationKey) !== key) throw new Error('Не удалось подтвердить незавершённое распределение.');
+    } finally { lock.releaseLock(); }
+    for (const part of operation.parts) {
+      let result;
+      try { result = saveBoxPlacement(part); }
+      catch (error) { return boxPlacementPending_('Проверяем сохранение распределения: ' + String(error.message || error)); }
+      if (!result || result.ok !== true) {
+        if (result && result.notWritten === true) {
+          const check = LockService.getScriptLock();
+          if (check.tryLock(5000)) {
+            try {
+              const sheets = getBoxTableSheets_(db);
+              const started = operation.parts.some(row => findBoxRecordByHeaderValue_(sheets.contents.sheet, 'allocationId', 'allocation-' + row.idempotencyKey) || (row.mode === 'new' && findBoxRecordByHeaderValue_(sheets.cartons.sheet, 'cartonId', 'carton-' + row.idempotencyKey)));
+              if (!started && props.getProperty(reservationKey) === key) {
+                props.deleteProperty(reservationKey);
+                props.deleteProperty(operationKey);
+                operation = null;
+                return boxPlacementNotWritten_(result.message || 'Распределение не сохранено.');
+              }
+            } finally { check.releaseLock(); }
+          }
+        }
+        return boxPlacementPending_((result && result.message) || 'Проверяем сохранение распределения.');
+      }
+      try { finalizeStockSplitPart_(db, part); }
+      catch (error) { return boxPlacementPending_('Проверяем состояние коробов: ' + String(error.message || error)); }
+    }
+    const finish = LockService.getScriptLock();
+    if (!finish.tryLock(5000)) return boxPlacementPending_('Проверяем завершение распределения.');
+    try {
+      const journal = stockOperationSheet_(db);
+      const completed = findRowByHeaderValue_(journal.sheet, 'operationId', key);
+      if (!completed) appendRecordByHeaders_(journal.sheet, journal.headers, { operationId: key, request: JSON.stringify(request), shipmentQuantity: operation.shipment, stockQuantity: operation.excess, completedAt: new Date().toISOString() });
+      else if (String(completed.request || '') !== JSON.stringify(request)) throw new Error('Ключ повтора уже использован для другого распределения.');
+      if (props.getProperty(reservationKey) === key) props.deleteProperty(reservationKey);
+      props.deleteProperty(operationKey);
+    } finally { finish.releaseLock(); }
+    return { ok: true, duplicate: false, shipmentQuantity: operation.shipment, stockQuantity: operation.excess, dataVersion: getDataVersion() };
+  } catch (error) {
+    return operation ? boxPlacementPending_('Проверяем сохранение распределения: ' + String(error.message || error)) : boxPlacementNotWritten_(error);
+  }
+}
+
 function boxPlacementSnapshot_(db, payload, forceFreshNorm) {
   const context = boxItemContext_(db, payload.shipmentId, payload.directionId, payload.positionId);
+  const boxOwner = payload.mode === 'existing' && payload.boxSourceShipmentId && String(payload.boxSourceShipmentId) !== String(payload.shipmentId)
+    ? requireRitmShipment_(db, payload.boxSourceShipmentId, payload.directionId) : context.shipment;
   if (!context.packingKnown || context.packed === null) throw new Error(context.packingReason || 'Фактическое количество упаковки не подтверждено. Размещение заблокировано.');
   const storeSource = shipmentMarketplace_(context.shipment);
   const itemStoreKey = storeNumberSkuKey_(context.item['Артикул'], storeSource);
@@ -2324,16 +3132,19 @@ function boxPlacementSnapshot_(db, payload, forceFreshNorm) {
   const quantity = Number(payload.quantity);
   if (quantity > available) throw new Error('Доступно для размещения только ' + available + ' шт. по факту WorkLog.');
   const cartonContents = relevantContents.filter(row => String(row.cartonId) === cartonId);
-  const normsBySku = boxNormsForSkus_(cartonContents.map(row => row['Артикул']).concat([context.item['Артикул']]), forceFreshNorm === true, shipmentMarketplace_(context.shipment));
-  const norm = normsBySku[normalizeBoxSku_(context.item['Артикул'])];
+  const currentRow = { shipmentId: context.shipment.shipmentId, 'Артикул': context.item['Артикул'] };
+  const normsBySku = sharedCartonNorms_(db, cartonContents.concat([currentRow]), context.shipment, forceFreshNorm === true);
+  const norm = cartonRowNorm_(currentRow, normsBySku);
   if (!norm || !norm.confirmed) throw new Error(norm && norm.reason ? norm.reason : 'В базе нет подтверждённой нормы в коробе. Размещение заблокировано.');
+  const shipmentMarkets = new Map(assemblyShipments_(db).map(s => [String(s.shipmentId), shipmentMarketplace_(s)]));
+  shipmentMarkets.set(String(context.shipment.shipmentId), storeSource);
   const storeNumbers = storeNumbersForItems_([
     { sku: context.item['Артикул'], source: storeSource },
-  ].concat(cartonContents.map(row => ({ sku: row['Артикул'], source: storeSource }))), true);
+  ].concat(cartonContents.map(row => ({ sku: row['Артикул'], source: shipmentMarkets.get(String(row.shipmentId)) || '' }))), true);
   const itemStoreNumber = confirmedStoreNumber_(storeNumbers[itemStoreKey]);
   if (cartonContents.length) {
     cartonContents.forEach(row => {
-      const cartonItemStore = confirmedStoreNumber_(storeNumbers[storeNumberSkuKey_(row['Артикул'], storeSource)]);
+      const cartonItemStore = confirmedStoreNumber_(storeNumbers[storeNumberSkuKey_(row['Артикул'], shipmentMarkets.get(String(row.shipmentId)) || '')]);
       if (cartonItemStore !== itemStoreNumber)
         throw new Error('В один короб нельзя добавлять товары разных магазинов. В этом коробе уже есть магазин ' + cartonItemStore + ', выбран магазин ' + itemStoreNumber + '.');
     });
@@ -2353,7 +3164,7 @@ function boxPlacementSnapshot_(db, payload, forceFreshNorm) {
       number = String(cartonRecord['Номер'] || '');
     } else {
       cartonRecord = null;
-      number = nextCartonNumber_(context.shipment, tables.cartons.records, itemStoreNumber);
+      number = payload.warehouse === true ? nextWarehouseCartonNumber_(itemStoreNumber, sheets.cartons.sheet) : nextCartonNumber_(context.shipment, tables.cartons.records, itemStoreNumber, sheets.cartons.sheet);
       const duplicateNumber = findBoxRecordByHeaderValue_(sheets.cartons.sheet, 'Номер', number);
       if (duplicateNumber) throw new Error('Следующий номер короба уже занят. Обновите список коробов и повторите.');
     }
@@ -2366,7 +3177,7 @@ function boxPlacementSnapshot_(db, payload, forceFreshNorm) {
     if (!cartonRecord) throw new Error('Короб не найден. Обновите список.');
     cartonIndex = 0;
     tables.cartons.records = [cartonRecord];
-    if (!cartonMatchesShipment_(cartonRecord, context.shipment)) throw new Error('Короб относится к другой поставке. Выберите короб из текущей поставки.');
+    if (payload.warehouse === true ? !warehouseCartonCompatible_(cartonRecord,itemStoreNumber,storeSource) : !cartonMatchesShipment_(cartonRecord, boxOwner)) throw new Error(payload.warehouse === true ? 'Складской короб относится к другому магазину или маркетплейсу.' : 'Короб относится к другой поставке. Выберите её в списке и повторите.');
     if (!isOpenCarton_(cartonRecord['Статус'])) throw new Error('Короб закрыт или его статус не подтверждён. Выберите открытый короб.');
     cartonId = String(cartonRecord.cartonId);
     number = String(cartonRecord['Номер'] || '');
@@ -2376,18 +3187,18 @@ function boxPlacementSnapshot_(db, payload, forceFreshNorm) {
   }
   if (cartonStoreNumberFromNumber_(number) !== itemStoreNumber)
     throw new Error('Нельзя смешивать магазины: номер короба должен начинаться с ' + itemStoreNumber + '.');
-  const space = cartonSpace_(cartonRecord, cartonContents, normsBySku);
+  const space = payload.warehouse === true ? {known:true,spaceUsed:0,spaceRemaining:1,boxType:'Склад'} : cartonSpace_(cartonRecord, cartonContents, normsBySku);
   if (!space.known) throw new Error(space.reason || 'Вместимость короба не подтверждена. Размещение заблокировано.');
   const fillAfter = space.spaceUsed + quantity / norm.unitsPerBox;
-  if (fillAfter > 1 + 1e-9) throw new Error('В коробе осталось ' + Math.max(0, Math.floor((1 - space.spaceUsed) * norm.unitsPerBox)) + ' шт. этого артикула по подтверждённой норме.');
-  const boxTypeAfter = cartonTypeSummary_(cartonContents.concat([{ 'Артикул': context.item['Артикул'] }]), normsBySku, cartonRecord['Тип короба']);
+  if (payload.warehouse !== true && fillAfter > 1 + 1e-9) throw new Error('В коробе осталось ' + Math.max(0, Math.floor((1 - space.spaceUsed) * norm.unitsPerBox)) + ' шт. этого артикула по подтверждённой норме.');
+  const boxTypeAfter = cartonTypeSummary_(cartonContents.concat([currentRow]), normsBySku, cartonRecord['Тип короба']);
   // Global revisions change for unrelated articles too. Commit-time checks
   // compare only the selected article and carton under the script lock.
   const versionAfter = getDataVersion();
   return {
     mode: payload.mode, context, tables, cartonRecord, cartonIndex, carton: { cartonId, number },
     normsBySku, norm, space, fillAfter, boxTypeAfter, quantity, assigned, available, dataVersion: versionAfter,
-    itemStoreNumber,
+    itemStoreNumber, boxOwner,
   };
 }
 
@@ -2439,7 +3250,7 @@ function boxPlacementCurrentScope_(db, payload, snapshot) {
   const cartonRecord = findBoxRecordByHeaderValue_(sheets.cartons.sheet, 'cartonId', cartonId);
   if (payload.mode === 'existing') {
     if (!cartonRecord) throw new Error('Короб больше не найден. Обновите список коробов и подтвердите размещение ещё раз.');
-    if (!cartonMatchesShipment_(cartonRecord, context.shipment)) throw new Error('Короб относится к другой поставке. Выберите короб из текущей поставки.');
+    if (payload.warehouse === true ? !warehouseCartonCompatible_(cartonRecord,snapshot.itemStoreNumber,shipmentMarketplace_(context.shipment)) : !cartonMatchesShipment_(cartonRecord, snapshot.boxOwner || context.shipment)) throw new Error('Короб не относится к выбранному магазину или направлению. Обновите список.');
     if (!isOpenCarton_(cartonRecord['Статус'])) throw new Error('Короб уже закрыт. Обновите список коробов и выберите открытый.');
   } else if (cartonRecord && !cartonMatchesShipment_(cartonRecord, context.shipment)) {
     throw new Error('Ключ операции уже связан с коробом другой поставки.');
@@ -2455,10 +3266,10 @@ function boxPlacementCurrentScope_(db, payload, snapshot) {
   if (snapshot.quantity > available) throw new Error('Теперь доступно только ' + available + ' шт. Обновите короба и проверьте количество ещё раз.');
 
   const effectiveCarton = cartonRecord || snapshot.cartonRecord;
-  const space = cartonSpace_(effectiveCarton, cartonContents, snapshot.normsBySku);
+  const space = payload.warehouse === true ? {known:true,spaceUsed:0,spaceRemaining:1,boxType:'Склад'} : cartonSpace_(effectiveCarton, cartonContents, snapshot.normsBySku);
   if (!space.known) throw new Error(space.reason || 'Вместимость короба больше нельзя подтвердить.');
   const fillAfter = space.spaceUsed + snapshot.quantity / snapshot.norm.unitsPerBox;
-  if (fillAfter > 1 + 1e-9) throw new Error('В коробе осталось место максимум для ' + Math.max(0, Math.floor((1 - space.spaceUsed) * snapshot.norm.unitsPerBox)) + ' шт. Обновите короб и проверьте количество ещё раз.');
+  if (payload.warehouse !== true && fillAfter > 1 + 1e-9) throw new Error('В коробе осталось место максимум для ' + Math.max(0, Math.floor((1 - space.spaceUsed) * snapshot.norm.unitsPerBox)) + ' шт. Обновите короб и проверьте количество ещё раз.');
 
   return {
     mode: snapshot.mode, context, tables: { cartons: { sheet: sheets.cartons.sheet, headers: [], records: cartonRecord ? [cartonRecord] : [] }, contents: { sheet: sheets.contents.sheet, headers: [], records: contents } },
@@ -2490,15 +3301,34 @@ function uniqueCartonRows_(rows) {
   return Array.from(byKey.values());
 }
 
-function nextCartonNumber_(shipment, cartons, storeNumber) {
+function nextCartonNumber_(shipment, cartons, storeNumber, cartonSheet) {
   const shop = confirmedStoreNumber_([storeNumber]);
   const prefix = shop + cartonSupplyAbbreviation_(shipment);
   const matching = (cartons || [])
     .filter(row => cartonMatchesShipment_(row, shipment))
     .map(row => ({ number: String(row['Номер'] || ''), parts: cartonNumberParts_(row['Номер']) }))
     .filter(entry => entry.parts && cartonStoreNumberFromNumber_(entry.number) === shop);
-  const max = Math.max(0, ...matching.map(entry => entry.parts.sequence));
+  // Numbers are globally unique, although the visible list is shipment-scoped.
+  // Scan only the number column, including closed/cancelled cartons. Re-run
+  // under the existing placement ScriptLock immediately before creation.
+  const globalNumbers = cartonSheet ? readCartonNumbers_(cartonSheet) : [];
+  const taken = globalNumbers.map(cartonNumberParts_).filter(parts => parts &&
+    parts.prefix.toLocaleLowerCase('ru-RU') === prefix.toLocaleLowerCase('ru-RU'));
+  const max = matching.map(entry => entry.parts.sequence).concat(taken.map(parts => parts.sequence))
+    .reduce((highest, sequence) => {
+      if (!Number.isSafeInteger(sequence) || sequence < 0 || sequence >= Number.MAX_SAFE_INTEGER)
+        throw new Error('Некорректный номер короба. Требуется проверка журнала.');
+      return Math.max(highest, sequence);
+    }, 0);
   return prefix + String(max + 1);
+}
+
+function readCartonNumbers_(sheet) {
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+  const index = headers.indexOf('Номер');
+  if (index < 0) throw new Error('В журнале коробов не найдена колонка «Номер». Короб не создан.');
+  return sheet.getRange(2, index + 1, sheet.getLastRow() - 1, 1).getValues().map(row => String(row[0] || '').trim());
 }
 
 function cartonSupplyAbbreviation_(shipment) {
@@ -2705,9 +3535,14 @@ function readWorkSnapshot_(db, shipmentId, day) {
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
   const valid = ['shipmentId', 'createdAt', 'employeeId', 'eventId', 'idempotencyKey', 'Источник', 'operationId', 'Количество, шт', 'Коэффициент', 'Норма, шт/чел'].every(header => headers.includes(header));
   if (!valid) return { rows: readRowsByKey_(sheet, 'shipmentId', new Set([shipmentId])), available: false };
+  // Work day is today's Moscow date. Compare numeric boundaries instead of
+  // invoking Google's timezone formatter once per historical WorkLog row.
+  const dayStart = Date.parse(String(day) + 'T00:00:00+03:00');
+  const dayEnd = dayStart + 24 * 60 * 60 * 1000;
   return { available: true, rows: readIndexedRows_(sheet, ['shipmentId', 'createdAt'], row => {
-    const date = moscowWorkDate_(row.createdAt);
-    return String(row.shipmentId) === String(shipmentId) || date === day || !date;
+    const time = row.createdAt instanceof Date ? row.createdAt.getTime() : Date.parse(String(row.createdAt || '').trim());
+    return String(row.shipmentId) === String(shipmentId) || !Number.isFinite(time) ||
+      (Number.isFinite(dayStart) && time >= dayStart && time < dayEnd);
   }, headers, 20) };
 }
 
@@ -2774,6 +3609,7 @@ function cancelWork(eventId, reason) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1500)) throw new Error('Журнал сейчас занят другой операцией. Запись не изменилась — повторите через несколько секунд.');
   try {
+    if (String(event.operationId || '') === 'packing' && PropertiesService.getScriptProperties().getProperty(stockReservationKey_(event.shipmentId, event.positionId))) throw new Error('Сначала дождитесь завершения распределения излишка этого товара.');
     const corrections = db.getSheetByName(TABLES.workCorrections);
     const duplicate = findRowByHeaderValue_(corrections, 'eventId', id);
     if (duplicate && String(duplicate.action || '').trim().toUpperCase() === 'CANCEL') {
@@ -2852,10 +3688,16 @@ function summarizeEmployeeShift_(snapshot, day, cancellations) {
 // grow over time; loading their full historical/payload columns on every shipment switch is costly.
 function readRowsByKey_(sheet, keyHeader, wantedValues) {
   if (!sheet || !wantedValues || !wantedValues.size) return [];
-  return readIndexedRows_(sheet, [keyHeader], row => wantedValues.has(String(row[keyHeader] || '')));
+  // Coalesce nearby journal rows into fewer Sheets requests. Photos can contain
+  // large base64 values, so retain exact row reads for that payload-heavy sheet.
+  const gap = sheet.getName() === TABLES.photos ? 0 : 20;
+  return readIndexedRows_(sheet, [keyHeader], row => wantedValues.has(String(row[keyHeader] || '')), undefined, gap);
 }
 
 function readIndexedRows_(sheet, keyHeaders, predicate, knownHeaders, maxGapRows) {
+  const name=sheet.getName();
+  if(cartonRequestReads_&&!cartonRequestReads_.write&&[TABLES.cartons,TABLES.cartonContents].includes(name))
+    return readCartonRequestRows_(sheet,keyHeaders,predicate,knownHeaders,maxGapRows);
   const lastRow = sheet.getLastRow();
   const lastColumn = sheet.getLastColumn();
   if (lastRow < 2 || lastColumn < 1) return [];
@@ -2878,6 +3720,13 @@ function readIndexedRows_(sheet, keyHeaders, predicate, knownHeaders, maxGapRows
     if (last && row <= last.end + allowedGap + 1) last.end = row;
     else blocks.push({ start: row, end: row });
   });
+  // Reduce remote Sheets calls for fragmented operational journals. Keep photo
+  // rows separate because their large payloads can make a broad read expensive.
+  // The same predicate below is still applied to every returned row.
+  if (sheet.getName() !== TABLES.photos && blocks.length > 3 &&
+      (blocks[blocks.length - 1].end - blocks[0].start + 1) * lastColumn <= 100000) {
+    blocks.splice(0, blocks.length, { start: blocks[0].start, end: blocks[blocks.length - 1].end });
+  }
   const records = [];
   blocks.forEach(block => sheet.getRange(block.start, 1, block.end - block.start + 1, lastColumn).getValues().forEach(values => {
     if (!values.some(value => value !== '' && value !== null)) return;
@@ -2889,6 +3738,39 @@ function readIndexedRows_(sheet, keyHeaders, predicate, knownHeaders, maxGapRows
     records.push(record);
   }));
   return records;
+}
+
+// Cache narrow key columns and only the matched row blocks, never download the
+// entire historical contents table merely to display several open cartons.
+function readCartonRequestRows_(sheet,keyHeaders,predicate,knownHeaders,maxGapRows){
+  const name=sheet.getName();
+  let memo=cartonRequestReads_.tables[name];
+  if(!memo){
+    const lastRow=sheet.getLastRow(),lastColumn=sheet.getLastColumn();
+    if(lastRow<2||lastColumn<1)return [];
+    memo={lastRow,lastColumn,headers:knownHeaders||sheet.getRange(1,1,1,lastColumn).getValues()[0].map(String),keys:Object.create(null),rows:Object.create(null)};
+    cartonRequestReads_.tables[name]=memo;
+  }
+  const indices=keyHeaders.map(header=>memo.headers.indexOf(header));
+  if(indices.some(index=>index<0))return [];
+  const missing=indices.filter(index=>!memo.keys[index]);
+  if(missing.length){
+    const first=Math.min(...missing),last=Math.max(...missing);
+    const values=sheet.getRange(2,first+1,memo.lastRow-1,last-first+1).getValues();
+    for(let c=first;c<=last;c++)memo.keys[c]=values.map(row=>row[c-first]);
+  }
+  const matches=[];
+  for(let i=0;i<memo.lastRow-1;i++){
+    const key={};keyHeaders.forEach((header,j)=>{key[header]=memo.keys[indices[j]][i];});
+    if(predicate(key))matches.push(i+2);
+  }
+  const absent=matches.filter(row=>!memo.rows[row]),gap=Number.isSafeInteger(maxGapRows)?Math.max(0,Math.min(100,maxGapRows)):0,blocks=[];
+  absent.forEach(row=>{const last=blocks[blocks.length-1];if(last&&row<=last.end+gap+1)last.end=row;else blocks.push({start:row,end:row});});
+  if(blocks.length>3&&(blocks[blocks.length-1].end-blocks[0].start+1)*memo.lastColumn<=100000)blocks.splice(0,blocks.length,{start:blocks[0].start,end:blocks[blocks.length-1].end});
+  blocks.forEach(block=>sheet.getRange(block.start,1,block.end-block.start+1,memo.lastColumn).getValues().forEach((values,i)=>{
+    const row={};memo.headers.forEach((header,c)=>{row[header]=values[c];});memo.rows[block.start+i]=row;
+  }));
+  return matches.filter(row=>predicate(memo.rows[row])).map(row=>Object.assign({},memo.rows[row]));
 }
 
 function emptyTotals_() {
@@ -3043,7 +3925,7 @@ function syncRitmSupplies(force, fromEvent) {
           if (prior.sourceAvailable === false || prior.order !== index) report.updated.push(sheet.getName());
           props.setProperty(key, JSON.stringify(Object.assign({}, prior, { sourceAvailable: true, order: index })));
           if (!props.getProperty(boxViewPropertyKey_(prior.shipmentId))) {
-            ensureShipmentBoxViewSheet_(db, { shipmentId: prior.shipmentId, 'Название поставки': sheet.getName() });
+            ensureShipmentBoxViewBestEffort_(db, { shipmentId: prior.shipmentId, 'Название поставки': sheet.getName() });
           }
           return;
         }
@@ -3094,7 +3976,7 @@ function syncRitmSupplies(force, fromEvent) {
           transferSelection: !!(prior && prior.transferSelection),
         }));
         if (isNew || !props.getProperty(boxViewPropertyKey_(shipmentId)) || (prior && prior.name !== sheet.getName())) {
-          ensureShipmentBoxViewSheet_(db, { shipmentId, 'Название поставки': sheet.getName() });
+          ensureShipmentBoxViewBestEffort_(db, { shipmentId, 'Название поставки': sheet.getName() });
         }
         report[isNew ? 'created' : 'updated'].push(sheet.getName());
       } catch (error) {
@@ -3116,6 +3998,9 @@ function syncRitmSupplies(force, fromEvent) {
         props.setProperty(key, JSON.stringify(Object.assign({}, record, { sourceAvailable: false })));
       }
     });
+    // A reporting-view problem must never block receiving production jobs.
+    try { syncDirectionBoxViews_(db, props); }
+    catch (error) { report.boxViewWarning = 'Общие листы коробов: ' + String(error.message || error).slice(0, 200); }
     if (report.errors.length) report.status = 'partial';
   } catch (error) {
     report.status = 'error';
@@ -3310,7 +4195,7 @@ function syncRitmDepartmentSupplies_(rollSource, db, props, report, loadCatalog,
       const catalogDue = force === true || !prior || startedAt - Number(prior.catalogAt || 0) > 15 * 60000;
       if (target && prior.fingerprint === fingerprint && !catalogDue) {
         if (prior.sourceAvailable === false) report.updated.push(manifest.name);
-        props.setProperty(key, JSON.stringify(Object.assign({}, prior, { sourceAvailable: true })));
+        props.setProperty(key, JSON.stringify(Object.assign({}, prior, { sourceAvailable: true, manifestRevision: manifest.revision })));
         return;
       }
       if (!target) {
@@ -3343,9 +4228,9 @@ function syncRitmDepartmentSupplies_(rollSource, db, props, report, loadCatalog,
       if (actual.some((row, i) => row.some((cell, c) => String(cell) !== String(values[i][c])))) throw new Error('Общий состав не прошёл проверку записи.');
       props.setProperty(key, JSON.stringify({ shipmentId: manifest.id, name: manifest.name, sheetId: target.getSheetId(),
         sourceSheetId: parts[0].ref.sheetId, parts: manifest.parts, marker, routed: true, rows: items.length,
-        sourceAvailable: true, fingerprint, order: prior ? prior.order : 1000 + groups.size,
+        sourceAvailable: true, fingerprint, manifestRevision: manifest.revision, order: prior ? prior.order : 1000 + groups.size,
         syncedAt: new Date().toISOString(), catalogAt: startedAt }));
-      ensureShipmentBoxViewSheet_(db, { shipmentId: manifest.id, 'Название поставки': manifest.name });
+      ensureShipmentBoxViewBestEffort_(db, { shipmentId: manifest.id, 'Название поставки': manifest.name });
       report[isNew ? 'created' : 'updated'].push(manifest.name);
     } catch (error) {
       if (onlyId && error.transferConflict) throw error;
@@ -3457,19 +4342,31 @@ function ritmItemRow_(shipmentId, name, sheetId, row, catalog) {
 }
 
 function assemblyShipments_(db) {
+  if(!cartonRequestReads_)return assemblyShipmentsFresh_(db);
+  const key=typeof db.getId==='function'?String(db.getId()):'request-db';
+  if(cartonRequestReads_&&cartonRequestReads_.rosters[key])return cartonRequestReads_.rosters[key].map(row=>Object.assign({},row));
+  const result=assemblyShipmentsFresh_(db);
+  if(cartonRequestReads_)cartonRequestReads_.rosters[key]=result;
+  return result;
+}
+function assemblyShipmentsFresh_(db) {
   const props = PropertiesService.getScriptProperties().getProperties();
+  // Resolve the existing sheets once instead of making a separate lookup for
+  // every shipment. The selected sheet is independently verified when read.
+  const sheetIds = new Set(db.getSheets().map(sheet => Number(sheet.getSheetId())));
   const live = Object.keys(props).filter(key => key.indexOf(RITM_SYNC_PREFIX) === 0)
-    .map(key => parseSyncJson_(props[key], null)).filter(row => row && !row.archived && !row.mergedIntoRoll && db.getSheetById(Number(row.sheetId)))
+    .map(key => parseSyncJson_(props[key], null)).filter(row => row && !row.archived && !row.mergedIntoRoll && sheetIds.has(Number(row.sheetId)))
     .sort((a, b) => a.order - b.order)
     .map(row => ({ shipmentId: row.shipmentId, 'Название поставки': row.name, directionId: 'ROLL', 'Направление': row.name,
       sheetId: row.sheetId, environment: 'RITM', sourceAvailable: row.sourceAvailable, itemCount: Number.isSafeInteger(row.rows) ? row.rows : null,
       marker: row.marker || '',
       sourceUrl: 'https://docs.google.com/spreadsheets/d/' + (row.parts && row.parts[0] ? row.parts[0].documentId : RITM_PRINTING_ID) + '/edit#gid=' + row.sourceSheetId }));
   // Keep the old demo sheets/history intact, but never mix demo figures into this live selector.
-  return live;
+  return live.concat([assemblyStockShipment_()]);
 }
 
 function getAssemblyOnlyItemIds(shipmentId) {
+  if (isAssemblyStock_(shipmentId)) return [];
   const result = ritmControlApiRequest_('GET', '/api/assembly-only-items?shipmentId=' + encodeURIComponent(String(shipmentId || '')));
   if (!result || result.ok !== true || !Array.isArray(result.items)) throw new Error('Дополнительные товары временно недоступны.');
   return result.items.map(item => String(item.positionId || '')).sort();
@@ -3478,6 +4375,7 @@ function getAssemblyOnlyItemIds(shipmentId) {
 // Mutation preflights need one verified position, not the complete enriched list.
 // Manual additions still use the authoritative RITM registry and deletion guard.
 function readShipmentItem_(db, shipment, positionId) {
+  if (shipment.stockTask) return readAssemblyStockItems_().find(row => row.positionId === String(positionId)) || null;
   const id = String(positionId || '');
   if (shipment.environment !== 'RITM' || id.indexOf('|manual:') >= 0) {
     return readShipmentItems_(db, shipment).find(row => String(row.positionId) === id && String(row.shipmentId) === String(shipment.shipmentId) && String(row.directionId) === String(shipment.directionId)) || null;
@@ -3490,12 +4388,17 @@ function readShipmentItem_(db, shipment, positionId) {
   return matches[0] || null;
 }
 
-function readShipmentItems_(db, shipment) {
+function readShipmentItems_(db, shipment, previewOnly) {
+  if (shipment.stockTask) return readAssemblyStockItems_();
   if (shipment.environment !== 'RITM') return readTable_(db, TABLES.items);
   const sheet = db.getSheetById(Number(shipment.sheetId));
   const sourceSheetId = String(shipment.shipmentId).replace('RITM-ROLL-', '');
   if (!sheet || sheet.getRange(1, 1).getNote() !== (shipment.marker || RITM_SHEET_MARKER + sourceSheetId)) throw new Error('Не удалось подтвердить источник позиций поставки.');
   const base = readTable_(db, sheet.getName());
+  // A preview is explicitly incomplete and cannot be used to record work.
+  // Load additional Assembly-only items in the authoritative snapshot instead
+  // of blocking the first paint on an external request.
+  if (previewOnly === true) return base;
   const response = ritmControlApiRequest_('GET', '/api/assembly-only-items?shipmentId=' + encodeURIComponent(String(shipment.shipmentId)));
   if (!response || response.ok !== true || !Array.isArray(response.items) || response.items.length > 500)
     throw new Error('Не удалось проверить дополнительные товары для сборки. Обновите данные.');
@@ -3753,9 +4656,37 @@ function syncRitmTransferMirror_(source, keys, db, props, catalog, startedAt, fo
     props.setProperty(rollKey, JSON.stringify(Object.assign({}, rollRecord, { rows: values.length - 1 })));
     if (oldMirror && oldMirror.getSheetId() !== target.getSheetId()) archiveRitmTransferMirror_(oldMirror, prior.name, priorMarker);
   }
-  ensureShipmentBoxViewSheet_(db, { shipmentId: actualShipmentId, 'Название поставки': name });
+  ensureShipmentBoxViewBestEffort_(db, { shipmentId: actualShipmentId, 'Название поставки': name });
   return { name, added: rows.filter(row => !previousKeys.has(ritmTransferRowKey_(row))).length,
     existing: rows.filter(row => selectedKeys.has(ritmTransferRowKey_(row)) && previousKeys.has(ritmTransferRowKey_(row))).length };
+}
+// A formerly explicit box transfer can become part of the same committed
+// multi-department supply. Its old registry pointer then remains as an audit,
+// not as a second synchronizer competing with the canonical supply.
+function retireSupersededRitmBoxTransfer_(source, prior, key, db, props, startedAt) {
+  const manifest = source.manifest;
+  if (!manifest || manifest.ready !== true || !prior.mergedIntoRoll) return false;
+  const legacy = /^RITM-ROLL-(\d+)$/.exec(manifest.id);
+  const identity = legacy ? legacy[1] : 'linked-' + manifest.id;
+  const canonicalKey = RITM_SYNC_PREFIX + identity;
+  if (key === canonicalKey) return false;
+  const canonical = parseSyncJson_(props.getProperty(canonicalKey), null);
+  const roll = manifest.parts.find(part => part.department === 'roll');
+  const box = manifest.parts.find(part => part.department === 'box');
+  if (!canonical || !canonical.routed || canonical.archived || canonical.sourceAvailable !== true ||
+      canonical.shipmentId !== manifest.id || prior.shipmentId !== manifest.id ||
+      canonical.manifestRevision !== manifest.revision ||
+      JSON.stringify(canonical.parts) !== JSON.stringify(manifest.parts) ||
+      Number(canonical.sheetId) !== Number(prior.sheetId) ||
+      !roll || Number(prior.mergedRollSourceSheetId) !== Number(roll.sheetId) ||
+      !box || box.documentId !== source.documentId || Number(box.sheetId) !== Number(source.sheetId)) return false;
+  const target = db.getSheetById(Number(canonical.sheetId));
+  if (!target || !canonical.marker || target.getRange(1, 1).getNote() !== canonical.marker) return false;
+  props.setProperty(key, JSON.stringify(Object.assign({}, prior, {
+    archived: true, sourceAvailable: false, supersededBy: canonical.shipmentId,
+    supersededAt: new Date(startedAt).toISOString(),
+  })));
+  return true;
 }
 function syncRitmTransferredBoxSupplies_(db, props, report, catalog, startedAt, force) {
   const all = props.getProperties();
@@ -3764,7 +4695,10 @@ function syncRitmTransferredBoxSupplies_(db, props, report, catalog, startedAt, 
     if (!prior || !prior.transferred || prior.archived) return;
     try {
       const source = readRitmTransferSource_('box', Number(prior.sourceSheetId));
-      if (source.manifest) ritmTransferConflict_('Источник теперь связан с общей поставкой; требуется сверка.');
+      if (source.manifest) {
+        if (retireSupersededRitmBoxTransfer_(source, prior, key, db, props, startedAt)) return;
+        ritmTransferConflict_('Источник теперь связан с общей поставкой; требуется сверка.');
+      }
       let rollMirror = null;
       if (prior.mergedRollSourceSheetId) rollMirror = ritmResolveRollMirror_(source, db, props, Number(prior.mergedRollSourceSheetId));
       else rollMirror = ritmResolveRollMirror_(source, db, props);
@@ -3871,4 +4805,58 @@ function receiveRitmAssemblyTransfer_(event) {
     } finally { finishLock.releaseLock(); }
   }
   return result;
+}
+
+
+// Warehouse production jobs retain their source UID after production archival.
+// They use the existing WorkLog and carton journals, never copied work facts.
+function isAssemblyStock_(id) { return String(id || '') === 'RITM-STOCK-WAREHOUSE'; }
+function assemblyStockShipment_() {
+  return {shipmentId:'RITM-STOCK-WAREHOUSE','Название поставки':'OZON · Запасы склад',directionId:'ROLL',
+    'Направление':'OZON · Запасы склад',environment:'RITM',sourceAvailable:true,stockTask:true,marketplace:'OZON',sourceUrl:'',sheetId:null};
+}
+let assemblyStockRequest_ = null;
+function readAssemblyStockItems_() {
+  if (assemblyStockRequest_) return assemblyStockRequest_;
+  const result = ritmControlApiRequest_('GET','/api/assembly-stocks');
+  if (!result || result.ok !== true || !isAssemblyStock_(result.shipmentId) || result.destination !== 'warehouse' ||
+      result.marketplace !== 'OZON' || !Array.isArray(result.items) || result.items.length > 1500)
+    throw new Error('Задания запасов не подтверждены. Обновите данные перед записью работы.');
+  const seen = new Set();
+  result.items.forEach(item => {
+    const expected = 'RITM-STOCK-WAREHOUSE|uid:' + item.department + ':' + item.documentId + ':' + item.sheetId + ':' + item.uid + '|' + item.article;
+    if (!['box','roll'].includes(item.department) || !item.uid || !item.documentId || !Number.isSafeInteger(item.sheetId) ||
+        !/^[A-ZА-ЯЁ0-9][A-ZА-ЯЁ0-9._-]{0,119}$/i.test(String(item.article || '')) ||
+        !Number.isSafeInteger(item.quantity) || item.quantity < 1 || item.positionId !== expected || seen.has(expected))
+      throw new Error('Не подтверждена позиция запасов. Запись остановлена.');
+    seen.add(expected);
+  });
+  const cache = CacheService.getScriptCache(), products = new Map(), missing = [];
+  result.items.forEach(item => {
+    const key = 'OZON|' + item.article.toUpperCase();
+    const saved = parseSyncJson_(cache.get('ritm.assembly.manual.product.v2.' + key), null);
+    if (saved) products.set(key,saved); else missing.push(key);
+  });
+  if (missing.length) {
+    let catalog = new Map(), photos = new Map();
+    try { catalog=readRitmCatalog_(); } catch (_) { /* Optional product text never hides a job. */ }
+    try { photos=readRitmPhotoMap_(); } catch (_) {}
+    Array.from(new Set(missing)).forEach(key => {
+      const product=Object.assign({},catalog.get(key)||{});
+      if (!product.photoUrl) product.photoUrl=photos.get(key.slice(5))||'';
+      products.set(key,product);
+      if (product.name || product.type) cache.put('ritm.assembly.manual.product.v2.'+key,JSON.stringify(product),60);
+    });
+  }
+  assemblyStockRequest_ = result.items.map(item => {
+    const product=products.get('OZON|'+item.article.toUpperCase())||{};
+    return {shipmentId:result.shipmentId,directionId:'ROLL','Направление':'OZON · Запасы склад',positionId:item.positionId,
+      'Артикул':item.article,'Название товара':product.name||'','Вид товара':product.type||'',
+      'Норма упаковки, шт/чел':product.packNorm||'','Листов на штуку':product.sheetsPerUnit||'',
+      'Фото':safeRitmPhotoUrl_(product.photoUrl),'План порезки, шт':item.quantity,'План сборки, шт':item.quantity,
+      'План упаковки, шт':item.quantity,'Источник':'RITM_WAREHOUSE_STOCK',sourceUid:item.uid,
+      stockTask:true,productionDepartment:item.department,productionPrint:item.print,productionCut:item.cut,
+      productionArchivedAt:item.archivedAt||''};
+  });
+  return assemblyStockRequest_;
 }

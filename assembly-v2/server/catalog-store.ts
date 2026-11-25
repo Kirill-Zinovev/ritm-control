@@ -6,8 +6,13 @@ import type {
   CatalogDetail,
 } from "../shared/catalog";
 import { catalogKey } from "../shared/catalog";
-import type { SupplyImport } from "../shared/model";
+import type { Scope, SupplyImport } from "../shared/model";
 import type { SqlStore, Statement } from "./database";
+import { positionNeedsStoreReviewSql } from "./position-search";
+
+// Keep moved cards available to historical positions while excluding them from
+// catalog selection. Their managed row also masks the old key in later imports.
+export const selectableCatalog = "(select * from av2_resolved_catalog_entries where json_extract(data,'$.retiredIdentity') is null)";
 const q = (sql: string, ...args: (string | number | null)[]): Statement => ({
   sql,
   args,
@@ -116,29 +121,77 @@ export async function catalogActivationPlan(
 }
 // Scope aliases before joining entries. Joining both UNION views can materialize
 // the entire catalog repeatedly during each source shipment import in D1.
-export async function findCatalogAliases(
-  store: SqlStore, market: string, skus: string[], shop: string | null = null,
-): Promise<{ sku: string; alias: string; importId: string; data: string; isPrimary: number }[]> {
-  const params=[market,shop,shop,JSON.stringify(skus)];
-  return store.all(`
-    select a.alias sku,a.alias,a.import_id,e.data,a.is_primary
+function catalogAliasRows(
+  matches: (scope: string, alias: string) => string,
+  effective = false,
+): string {
+  const data = (entry: string) => effective ? effectiveCatalogData(entry) : `${entry}.data`;
+  return `
+    select a.alias sku,a.alias,a.import_id,e.entry_id,a.store,${data("e")} data,a.is_primary
     from av2_catalog_aliases a join av2_catalog_entries e on e.import_id=a.import_id and e.entry_id=a.entry_id
     where a.import_id=(select active_catalog_id from av2_meta where id=1)
-      and a.market=? and (? is null or a.store=?) and a.alias in(select value from json_each(?))
+      and ${matches("a", "a.alias")}
       and not exists(select 1 from av2_catalog_products p where p.entry_id=a.entry_id)
     union all
-    select j.value sku,j.value alias,r.import_id,r.data,(j.value=r.sku) is_primary
+    select j.value sku,j.value alias,r.import_id,r.entry_id,r.store,${data("r")} data,(j.value=r.sku) is_primary
     from av2_catalog_references r join json_each(r.data,'$.aliases') j
     where r.import_id=(select active_catalog_id from av2_meta where id=1)
-      and r.market=? and (? is null or r.store=?) and j.value in(select value from json_each(?))
+      and ${matches("r", "j.value")}
       and not exists(select 1 from av2_catalog_products p where p.entry_id=r.entry_id)
       and not exists(select 1 from av2_catalog_aliases a where a.import_id=r.import_id and a.market=r.market
         and a.alias in(select value from json_each(r.data,'$.aliases')))
     union all
-    select j.value sku,j.value alias,m.active_catalog_id import_id,p.data,(j.value=p.sku) is_primary
-    from av2_catalog_products p join av2_meta m on m.id=1 join json_each(p.data,'$.aliases') j
-    where p.market=? and (? is null or p.store=?) and j.value in(select value from json_each(?))
-  `,[...params,...params,...params]);
+    select j.value sku,j.value alias,m.active_catalog_id import_id,c.entry_id,c.store,${data("c")} data,(j.value=c.sku) is_primary
+    from av2_catalog_products c join av2_meta m on m.id=1 join json_each(c.data,'$.aliases') j
+    where ${matches("c", "j.value")}`;
+}
+
+export async function findCatalogAliases(
+  store: SqlStore, market: string, skus: string[], shop: string | null = null,
+): Promise<{ sku: string; alias: string; importId: string; data: string; isPrimary: number }[]> {
+  const params = [market, shop, shop, JSON.stringify(skus)];
+  return store.all(catalogAliasRows((scope, alias) =>
+    `${scope}.market=? and (? is null or ${scope}.store=?) and ${alias} in(select value from json_each(?))`,
+  ), [...params, ...params, ...params]);
+}
+
+// An unlinked position can use an unambiguous card for norms and display.
+// Keep its shop, barcode, carton capacity, and historical catalog binding intact.
+export function positionWorkCatalogSql(history = false, includeStoreReview = false): string {
+  const candidates = catalogAliasRows((scope, alias) => {
+    // Supply the store prefix of the imported-alias index even for unconfirmed shops.
+    // This uncorrelated list is built once per read, not once per missing position.
+    const indexedStores = scope === "a" ? `and a.store in (
+      select distinct store from av2_catalog_aliases
+      where import_id=(select active_catalog_id from av2_meta where id=1)
+    )` : "";
+    return `${scope}.market=s.market and (s.store='Не подтверждён' or ${scope}.store=s.store)
+      and ${alias}=upper(trim(p.sku)) ${indexedStores}`;
+  }, true);
+  const active = history ? "" : includeStoreReview
+    ? `s.source_active=1 and (p.source_active=1 or (${positionNeedsStoreReviewSql})) and `
+    : "p.source_active=1 and s.source_active=1 and ";
+  const card = includeStoreReview ? "json_set(min(data),'$.lookupImportId',min(import_id))" : "min(data)";
+  return `coalesce(pc.value,case when ${active}s.is_demo=0
+    and p.catalog_import_id is null and p.catalog_entry_id is null then
+    (select ${card} from (${candidates})
+     where import_id is not null and json_extract(data,'$.retiredIdentity') is null
+       and (p.barcode='' or json_extract(data,'$.barcode')=p.barcode)
+     having count(distinct entry_id)=1
+       and min(store) glob '[1-9]*' and min(store) not glob '*[^0-9]*')
+  end)`;
+}
+
+export function catalogForPositionScope<T extends CatalogEntry & { retiredIdentity?: true }>(
+  card: T | null, scope: Pick<Scope, "market" | "store">, positionBarcode: string,
+): T | null {
+  return card && !card.retiredIdentity && card.market === scope.market && card.store === scope.store &&
+    /^[1-9]\d*$/.test(card.store) && (!positionBarcode || card.barcode === positionBarcode) ? card : null;
+}
+
+export function catalogCartonCapacity(card: Pick<CatalogEntry, "unitsPerBox" | "boxType"> | null): number | null {
+  const units = card?.unitsPerBox;
+  return card?.boxType?.trim() && units && Number.isSafeInteger(units) && units > 0 ? units : null;
 }
 export async function resolveCatalogPositions(
   store: SqlStore,
@@ -173,16 +226,23 @@ export function effectiveCatalogData(alias="e"):string {
 }
 // A LEFT JOIN to the compound resolved view makes SQLite materialize the whole
 // imported catalog. Probe the exact position key instead, keeping a nullable row.
-export function positionCatalogJoin(position="p", result="pc"):string {
+export function positionCatalogJoin(position="p", result="pc", live=false):string {
   if(!/^[a-z]+$/.test(position)||!/^[a-z]+$/.test(result))throw new Error("Недопустимая таблица справочника.");
-  return `left join json_each((select json_array(json(${effectiveCatalogData()})) from (
-    select market,store,sku,data from av2_catalog_products where entry_id=${position}.catalog_entry_id
+  const savedImport = `${position}.catalog_import_id`;
+  const catalogImport = live ? `coalesce((select fresh.import_id
+    from av2_catalog_entries fresh
+    where fresh.import_id=(select active_catalog_id from av2_meta where id=1)
+      and fresh.entry_id=${position}.catalog_entry_id and fresh.market=s.market and fresh.store=s.store
+      and ${position}.source_active=1 and s.source_active=1),${savedImport})` : savedImport;
+  const data = live ? `json_set(${effectiveCatalogData()},'$.lookupImportId',e.import_id)` : effectiveCatalogData();
+  return `left join json_each((select json_array(json(${data})) from (
+    select market,store,sku,data,${savedImport} import_id from av2_catalog_products where entry_id=${position}.catalog_entry_id
       and exists(select 1 from av2_catalog_imports where id=${position}.catalog_import_id)
     union all
-    select market,store,sku,data from av2_catalog_entries where import_id=${position}.catalog_import_id and entry_id=${position}.catalog_entry_id
+    select market,store,sku,data,import_id from av2_catalog_entries where import_id=${catalogImport} and entry_id=${position}.catalog_entry_id
       and not exists(select 1 from av2_catalog_products where entry_id=${position}.catalog_entry_id)
     union all
-    select r.market,r.store,r.sku,r.data from av2_catalog_references r where r.import_id=${position}.catalog_import_id and r.entry_id=${position}.catalog_entry_id
+    select r.market,r.store,r.sku,r.data,r.import_id from av2_catalog_references r where r.import_id=${position}.catalog_import_id and r.entry_id=${position}.catalog_entry_id
       and not exists(select 1 from av2_catalog_products where entry_id=${position}.catalog_entry_id)
       and not exists(select 1 from av2_catalog_aliases a where a.import_id=r.import_id and a.market=r.market and a.alias in(select value from json_each(r.data,'$.aliases')))
   ) e limit 1)) ${result}`;
@@ -207,7 +267,7 @@ const managedLabelIndex = `with managed_label_keys as (
   group by market,store,article
 )`;
 const catalogLabelKey = labelArticleSql("json_extract(e.entry_id,'$[2]')", "e.market");
-const catalogWithLabels = `av2_resolved_catalog_entries e
+const catalogWithLabels = `${selectableCatalog} e
   left join managed_label_keys k on k.market=e.market and k.store=e.store and k.article=${catalogLabelKey}`;
 const missingLabel = `case
   when json_extract(e.data,'$.labelSha') is not null then not exists(
@@ -254,7 +314,7 @@ export async function catalogList(
   if (url.searchParams.get("review") === "1") where.push("e.review=1");
   const missingOnly = url.searchParams.get("missingLabel") === "1";
   const prefix = missingOnly ? managedLabelIndex : "";
-  const from = missingOnly ? catalogWithLabels : "av2_resolved_catalog_entries e";
+  const from = missingOnly ? catalogWithLabels : `${selectableCatalog} e`;
   if (missingOnly) where.push(missingLabel);
   const requested =
     Math.max(0, Math.min(10000, Number(url.searchParams.get("page")) || 0)) | 0;
@@ -274,7 +334,7 @@ export async function catalogList(
       ...args,
     ),
     q(
-      "select distinct machine from av2_resolved_catalog_entries where import_id=(select active_catalog_id from av2_meta where id=1) and machine<>'' order by machine",
+      `select distinct machine from ${selectableCatalog} where import_id=(select active_catalog_id from av2_meta where id=1) and machine<>'' order by machine`,
     ),
   ]);
   const total = Number(rows[1][0].total);
@@ -303,7 +363,7 @@ export async function catalogDetail(
 ): Promise<CatalogDetail | null> {
   const e = (
     await store.all<{ data: string }>(
-      `select ${effectiveCatalogData()} data from av2_resolved_catalog_entries e where import_id=? and entry_id=?`,
+      `select ${effectiveCatalogData()} data from ${selectableCatalog} e where import_id=? and entry_id=?`,
       [importId, id],
     )
   )[0];

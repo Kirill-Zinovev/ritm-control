@@ -12,16 +12,17 @@ const q = (sql: string, ...args: (string | number | null)[]): Statement => ({
 
 // The queue row commits in the same transaction as the work or cancellation.
 // Legacy restoration deliberately bypasses this producer: RITM already reads it.
-export function enqueueWork(workId: string, now: string): Statement {
+export function enqueueWork(workId: string, now: string, productType: string | null = null): Statement {
   return q(
     `insert into av2_ritm_work_outbox(id,payload,created_at)
     select 'av2:'||w.id,json_object('id','av2:'||w.id,'kind','work','eventId','av2:'||w.id,
-    'shipmentId',s.origin_shipment_id,'positionId',p.external_id,'sku',p.sku,'productType',json_extract(e.data,'$.kind'),
+    'shipmentId',s.origin_shipment_id,'positionId',p.external_id,'sku',p.sku,'productType',coalesce(?,json_extract(e.data,'$.kind')),
     'employeeId',case when w.employee_id like 'legacy:%' then substr(w.employee_id,8) else 'av2:'||w.employee_id end,
     'employee',w.employee_name,'operation',w.operation,'qty',w.qty,'norm',w.norm,'coefficient',w.coefficient,'createdAt',w.created_at),?
     from av2_work w join av2_positions p on p.id=w.position_id join av2_supplies s on s.id=w.supply_id
     left join av2_resolved_catalog_entries e on e.import_id=p.catalog_import_id and e.entry_id=p.catalog_entry_id
     where w.id=? and w.legacy_event_id is null and s.origin_shipment_id is not null and s.is_demo=0 on conflict(id) do nothing`,
+    productType,
     now,
     workId,
   );

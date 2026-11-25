@@ -1,5 +1,11 @@
 # RITM Assembly interaction contract
 
+## Manual finished-goods receipts (12.11.2026)
+
+The existing «Короба → На склад» view owns an explicit «Добавить готовый товар на склад» form. It accepts an article absent from all supplies. A debounced, one-in-flight lookup enriches the selected marketplace's card and confirms a catalog store; absent/unavailable reference data is labelled and the user can enter the store explicitly. Current direction context may prefill the visible, editable market/store. The existing active employee list, local name convenience and shared toast remain canonical.
+
+The native form validates positive whole pieces, marketplace, store, article and employee. An uncertain save freezes its payload, persists the same key in tab-scoped sessionStorage and offers continuation. A delayed status query is read-only. Old lookup responses cannot replace a newer article or a confirmed save. Confirmed receipts refresh the warehouse list, filter it to the saved article and preserve the operator's name. A missing catalog photo/name never hides a receipt. No supply, work event, production quantity or coefficient is synthesized. Existing CartonContents and StockPlacementOperations own the append-only audit; the existing «Короба · На склад» formula shows the same quantities, author and date. WarehouseManual.gs is synchronized between the configurable source and the live source; production is bound to the existing Assembly deployment.
+
 Locale ru-RU; dates Europe/Moscow. This existing Apps Script document is its own UI runtime; React/Radix primitives in the manager app cannot execute in its HTML service.
 
 ## Refresh and employee identity (19.10.2026)
