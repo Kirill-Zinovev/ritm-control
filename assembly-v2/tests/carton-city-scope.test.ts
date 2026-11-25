@@ -24,6 +24,60 @@ test('город короба: UI и SQLite одинаково распозна�
   assert(!sameCartonScope({...a,store:'Не подтверждён'},{...a,store:'Не подтверждён',destination:'OZON Екатеринбург'}));
 });
 
+test('ДАЧА и ДАЧА 2 используют один ключ только у WB', async t => {
+  const db = await openDatabase();
+  t.after(() => db.sqlite.close());
+  const key = db.sqlite.prepare(`select ${cityKeySql('destination','market')} city from(select ? destination, ? market)`);
+  for (const name of ['WB ДАЧА', 'wb  Дача 2🔥', 'ВБ ДАЧА 2 🔥', 'ДАЧА', 'wildberries Дача']) {
+    assert.equal(directionCity(name, 'WB')?.key, 'DACHA', name);
+    assert.equal(key.get(name, 'WB')?.city, 'DACHA', name);
+    assert.equal(key.get(name, 'OZON')?.city, null, name);
+  }
+  for (const name of ['WB ДАЧА 12', 'WB МОЯ ДАЧА', 'WB ДАЧА 2 27.11.2026']) {
+    assert.equal(directionCity(name, 'WB'), null, name);
+    assert.equal(key.get(name, 'WB')?.city, null, name);
+  }
+});
+
+test('готовые короба ДАЧА видны для обеих поставок WB, граница магазина соблюдается при укладке', async t => {
+  const db = await openDatabase();
+  t.after(() => db.sqlite.close());
+  const f = await bootstrap(db);
+  async function supply(externalId: string, title: string, store = '1') {
+    await f.cmd('supply.import', {
+      ...fixture, externalId, title, destination: title, market: 'WB', store,
+      positions: [{ ...fixture.positions[0], externalId: externalId + '|sku', sku: externalId, plan: 100, unitsPerBox: 100 }],
+    });
+    const roster = await db.snapshot(null) as Snapshot;
+    const owner = roster.supplies.find(entry => entry.externalId === externalId)!;
+    const state = await db.snapshot(owner.id) as Snapshot;
+    return { ...owner, position: state.positions[0] };
+  }
+  const regular = await supply('D-REGULAR', 'WB ДАЧА');
+  const urgent = await supply('D-URGENT', 'WB ДАЧА 2 🔥');
+  const otherShop = await supply('D-SHOP2', 'WB ДАЧА', '2');
+  const carton = async (supplyId: string) => String((await f.cmd('carton.create', { supplyId })).cartonId);
+  const closed = await carton(regular.id);
+  const open = await carton(regular.id);
+  const shopTwoCarton = await carton(otherShop.id);
+  db.sqlite.prepare("update av2_cartons set state='closed' where id=?").run(closed);
+  for (const grouped of [true, false]) {
+    const snapshot = await db.snapshot(urgent.id, true, grouped) as Snapshot;
+    assert.deepEqual(snapshot.cartons.map(box => box.id).sort(), [closed, open].sort());
+    assert.ok(snapshot.cartons.every(box => sameCartonScope(box, urgent)));
+  }
+  assert.ok(!sameCartonScope(urgent, otherShop));
+  assert.ok(!sameCartonScope(urgent, { ...regular, market: 'OZON' }));
+  const positionId = urgent.position.id;
+  await f.cmd('work.save', { positionId, employeeId: f.employee.id, operation: 'packing', qty: 12 });
+  await f.cmd('allocation.place', { positionId, qty: 5, cartonId: open });
+  const updated = await db.snapshot(urgent.id, true, true) as Snapshot;
+  assert.equal(updated.cartons.find(box => box.id === open)?.items[0]?.positionId, positionId);
+  await assert.rejects(f.cmd('allocation.place', { positionId, qty: 1, cartonId: shopTwoCarton }), /другой|отличается/);
+  db.sqlite.prepare('update av2_supplies set source_active=0 where id=?').run(regular.id);
+  assert.deepEqual((await db.snapshot(urgent.id, true, true) as Snapshot).cartons.map(box => box.id).sort(), [closed, open].sort());
+});
+
 test('общий короб доступен во всех поставках города: выбор и запись, изоляция магазина и города, SQL-защита и кэф',async t=>{
   const db=await openDatabase();t.after(()=>db.sqlite.close());const f=await bootstrap(db);
   async function supply(externalId:string,title:string,market:Market='OZON',store='1') {

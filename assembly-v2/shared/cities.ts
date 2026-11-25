@@ -1,3 +1,5 @@
+import type { Market } from "./model";
+
 // The old Assembly recognizes these aliases. Keep city matching shared by UI and DB guards.
 export const directionCities = [
   {key:'SPB',label:'СПБ',aliases:['СПБ','САНКТ ПЕТЕРБУРГ','САНКТ-ПЕТЕРБУРГ','САНКТПЕТЕРБУРГ','САНКТ ПЕТЕРБУРГА','САНКТ-ПЕТЕРБУРГА','САНКТПЕТЕРБУРГА','ПИТЕР']},
@@ -8,9 +10,15 @@ export const directionCities = [
   {key:'ROSTOV',label:'Ростов',aliases:['РОСТОВ','РОСТОВА']},
   {key:'KOSTROMA',label:'Кострома',aliases:['КОСТРОМА','КОСТРОМЫ']},
 ] as const;
+export const wbDachaAliases = [
+  'ДАЧА', 'ДАЧА 2', 'WB ДАЧА', 'WB ДАЧА 2',
+  'ВБ ДАЧА', 'ВБ ДАЧА 2', 'WILDBERRIES ДАЧА', 'WILDBERRIES ДАЧА 2',
+];
 const normalize=(name:string)=>name.toLocaleUpperCase('ru-RU').replace(/[^A-ZА-ЯЁ0-9]/g,' ');
-export function directionCity(name:string) {
+export function directionCity(name:string, market?:Market) {
   const normalized=' '+normalize(name)+' ';
+  if(market==='WB' && wbDachaAliases.includes(normalized.trim().replace(/ +/g,' ')))
+    return {key:'DACHA',label:'ДАЧА'};
   const matches=directionCities.filter(c=>c.aliases.some(alias=>normalized.includes(' '+normalize(alias)+' ')));
   return matches.length===1 ? {key:matches[0].key,label:matches[0].label} : null;
 }

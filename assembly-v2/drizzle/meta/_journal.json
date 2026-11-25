@@ -225,6 +225,13 @@
       "when": 1795588858440,
       "tag": "0031_allocation_fit_confirmation",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1795613855851,
+      "tag": "0032_wb_dacha_carton_scope",
+      "breakpoints": true
     }
   ]
 }

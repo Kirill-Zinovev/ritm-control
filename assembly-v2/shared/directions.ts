@@ -2,18 +2,10 @@ import type { Supply } from "./model";
 import { directionCity } from "./cities";
 export { directionCity } from "./cities";
 
-function assemblyDirection(supply: Supply) {
-  const dacha = /^(?:(?:WB|ВБ|WILDBERRIES)\s+)?ДАЧА(?:\s+2)?(?:\s*🔥\uFE0F?)?$/iu;
-  if (supply.market === "WB" && dacha.test(supply.title.trim())) {
-    return { key: "DACHA", label: "ДАЧА" };
-  }
-  return directionCity(supply.title);
-}
-
 export function groupDirections(supplies: Supply[], selectedId: string | null) {
   const groups = new Map<string, Supply[]>();
   for (const s of supplies) {
-    const direction = assemblyDirection(s),
+    const direction = directionCity(s.title, s.market),
       key =
         direction && /^[1-9]\d*$/.test(s.store)
           ? JSON.stringify([s.market, direction.key, s.store])
@@ -24,7 +16,7 @@ export function groupDirections(supplies: Supply[], selectedId: string | null) {
   }
   return [...groups.values()].map((sources) => {
     const selected = sources.find((s) => s.id === selectedId) || sources[0],
-      direction = assemblyDirection(selected);
+      direction = directionCity(selected.title, selected.market);
     return {
       ...selected,
       title:
