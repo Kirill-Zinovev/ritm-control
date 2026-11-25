@@ -115,6 +115,39 @@ test("unknown readiness is never a zero or complete; over-plan remains visible",
     -20,
   );
 });
+test("machine print remainder keeps outstanding orders even with overprinting and missing facts", () => {
+  const [supply] = buildMachineWorkload(snapshot([
+    row({ uid: "over", printProgress: 180 }),
+    row({ uid: "left", remainingPrint: 30, printProgress: 70 }),
+    row({ uid: "unknown", printProgress: null, remainingPrint: null }),
+  ]));
+  assert.deepEqual(supply.machines[0].printRemaining, {
+    value: 30,
+    known: 2,
+    expected: 3,
+    complete: false,
+  });
+});
+test("Xerox remaining pieces include partial print recorded in physical sheets", () => {
+  const [supply] = buildMachineWorkload(snapshot([
+    row({
+      sourceId: "box-printing",
+      machine: "XEROX",
+      quantity: 80,
+      printProgress: 0,
+      planningPrinted: 100,
+      planningPhysicalUnits: true,
+      sheetsInProduct: 20,
+      multiplicity: 8,
+    }),
+  ]));
+  assert.deepEqual(supply.machines[0].printRemaining, {
+    value: 40,
+    known: 1,
+    expected: 1,
+    complete: true,
+  });
+});
 test("create and confirmed deletion follow each new snapshot without a shadow task registry", () => {
   const first = row(),
     second = row({

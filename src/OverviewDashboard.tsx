@@ -4,7 +4,8 @@ import type { LivePrinting } from "./livePrinting";
 import type { LiveAssembly } from "./liveAssembly";
 import { inPeriod, num, type Page, type Period } from "./model";
 import { buildProductionGroups, productionFact, type Fact } from "./productionData";
-import { buildMachineWorkload, countWord, summarizeMachines, workloadState, type WorkloadMachine } from "./machineWorkloadData";
+import { buildMachineWorkload, countWord, summarizeMachines, type WorkloadMachine } from "./machineWorkloadData";
+import { formatPrintQuantity } from "./liveSupplyProgress";
 import "./overviewDashboard.css";
 
 type Props = {
@@ -23,12 +24,12 @@ function Metric({ label, value, note, icon, tone = "blue" }: { label: string; va
   return <div className="ov-metric"><span className={`ov-icon is-${tone}`}>{icon}</span><div><span>{label}</span><strong>{value}</strong><small>{note}</small></div></div>;
 }
 
-function Progress({ fact, plan, label }: { fact: Fact; plan: number; label: string }) {
+function Progress({ fact, plan, label, unit = "" }: { fact: Fact; plan: number; label: string; unit?: string }) {
   if (fact.value === null) return <div className="ov-progress"><span className="ov-progress-name">{label}</span><strong>—</strong><small>Нет подтверждённых данных</small></div>;
   const percentage = plan > 0 ? fact.value / plan * 100 : null;
   return <div className="ov-progress">
     <span className="ov-progress-name">{label}</span>
-    <div className="ov-progress-values"><strong>{num(fact.value)} / {num(plan)}</strong><b>{fact.complete && percentage !== null ? percentText(percentage) : "Частично"}</b></div>
+    <div className="ov-progress-values"><strong>{unit ? formatPrintQuantity(fact.value) : num(fact.value)} / {num(plan)}{unit}</strong><b>{fact.complete && percentage !== null ? percentText(percentage) : "Частично"}</b></div>
     <div className="ov-track" aria-hidden="true"><i style={{ width: `${Math.min(100, Math.max(0, percentage ?? 0))}%` }} /></div>
     {!fact.complete && <small>Подтверждено {fact.known} из {fact.expected}</small>}
     {fact.complete && fact.value > plan && <small className="ov-over">+{num(fact.value - plan)} сверх плана</small>}
@@ -62,8 +63,9 @@ export function OverviewDashboard({ live, liveError, assembly, assemblyError, da
   const packed = productionFact(orders.map((order) => order.packed));
   const periodEvents = live?.events.filter((event) => inPeriod(event.date, date, period)) || [];
   const printedArea = live && (!printingPartial || periodEvents.length) ? periodEvents.reduce((sum, event) => sum + event.area, 0) : null;
-  const machineWithRemaining = machines.filter((machine) => machine.id !== "unknown" && ["pending", "remaining"].includes(workloadState(machine)));
-  const uncertainMachines = machines.filter((machine) => machine.id !== "unknown" && workloadState(machine) === "unknown").length;
+  const assignedMachines = machines.filter((machine) => machine.id !== "unknown");
+  const machineWithRemaining = assignedMachines.filter((machine) => (machine.printRemaining.value ?? 0) > 0);
+  const uncertainMachines = assignedMachines.filter((machine) => !machine.printRemaining.complete && (machine.printRemaining.value ?? 0) === 0).length;
   const missingMachine = machines.filter((machine) => machine.id === "unknown").reduce((sum, machine) => sum + machine.rows.length, 0);
   const work = (assembly?.history || []).filter((row) => inPeriod(row.date, date, period) && (row.machineCut > 0 || row.manualCut > 0 || row.packed > 0 || (row.coefficient ?? 0) > 0));
   const people = new Set(work.map((row) => row.identityKey || (row.employeeId ? `assembly:${row.employeeId}` : `fbo:${row.employee}`))).size;
@@ -103,9 +105,8 @@ export function OverviewDashboard({ live, liveError, assembly, assemblyError, da
     </section>
     {!!seasonal.length && <section className="ov-panel ov-seasonal"><div className="ov-heading"><div><h2>Сезонная печать</h2><p>Листы печати · отдельно от объединённых поставок</p></div><button type="button" className="ov-link" onClick={() => go("printing")}>Все листы <ArrowRight size={17} /></button></div><div className="ov-seasonal-list">{seasonal.slice(0, 3).map((sheet) => <button type="button" className="ov-seasonal-item" key={`${sheet.sourceId}:${sheet.sheetId}`} onClick={() => go("printing")}><strong>{sheet.name}</strong><span>{sheet.plan === null ? "План не подтверждён" : `${num(sheet.plan)} шт. по плану`}</span><small>{sheet.area === null ? "Печать не подтверждена" : `${num(sheet.area, 1)} м² ${periodName}${printingPartial ? " · частично" : ""}`}</small></button>)}</div>{seasonal.length > 3 && <p className="ov-panel-note">Показано 3 из {num(seasonal.length)} листов.</p>}</section>}
     <div className="ov-bottom">
-      <section className="ov-panel"><div className="ov-heading"><div><h2>Загрузка станков</h2><p>Остаток печати по заданиям</p></div><button type="button" className="ov-link" onClick={() => go("machines")}>Все станки <ArrowRight size={17} /></button></div>
-        {!live ? <p className="ov-empty">Данные станков пока недоступны.</p> : !machines.filter((m) => m.id !== "unknown").length ? <p className="ov-empty">Подтверждённых назначений станков пока нет.</p> : <div className="ov-machines">{machines.filter((m) => m.id !== "unknown").slice(0, 4).map((machine) => <button type="button" className="ov-machine" key={machine.key} onClick={() => go("machines")}><span className="ov-machine-icon"><Printer size={21} /></span><span><strong>{machine.label}</strong><small>{machine.department === "box" ? "Бокс" : "Рулонная печать"} · {positions(machine.rows.length)}</small></span><span className="ov-machine-progress"><Progress label="Напечатано" fact={machine.printed} plan={machine.plan} /></span></button>)}</div>}
-        <p className="ov-panel-note">Задания не означают, что станок сейчас работает.</p>
+      <section className="ov-panel"><div className="ov-heading"><div><h2>Остаток по станкам</h2><p>Осталось напечатать по заданиям поставок</p></div><button type="button" className="ov-link" onClick={() => go("machines")}>Все станки <ArrowRight size={17} /></button></div>
+        {!live ? <p className="ov-empty">Данные станков пока недоступны.</p> : !assignedMachines.length ? <p className="ov-empty">Подтверждённых назначений станков пока нет.</p> : <div className="ov-machines">{assignedMachines.map((machine) => <button type="button" className="ov-machine" key={machine.key} onClick={() => go("machines")}><span className="ov-machine-icon"><Printer size={21} /></span><span><strong>{machine.label}</strong><small>{machine.department === "box" ? "Бокс" : "Рулонная печать"} · {positions(machine.rows.length)}</small></span><span className="ov-machine-progress"><Progress label="Осталось" fact={machine.printRemaining} plan={machine.plan} unit=" шт." /></span></button>)}</div>}
       </section>
       <section className="ov-panel"><div className="ov-heading"><div><h2>Сборщики</h2><p>Результаты {periodName}</p></div><button type="button" className="ov-link" onClick={() => go("assembly")}>Все сборщики <ArrowRight size={17} /></button></div>
         <div className="ov-team-stats"><Metric label="Сотрудники с записями" value={assembly && (work.length > 0 || assemblyComplete) ? num(people) : "—"} note={assemblyComplete ? "За выбранный период" : "По доступным данным"} icon={<Users size={22} />} /><Metric label="Упаковано" value={employeePacked === null ? "—" : `${num(employeePacked)} шт.`} note={assemblyOnly ? "RITM Сборка" : "FBO + RITM Сборка"} icon={<Package size={22} />} tone="teal" /><Metric label="Сумма коэффициентов" value={employeeCoefficient === null ? "—" : num(employeeCoefficient, 3)} note={assemblyOnly ? "RITM Сборка" : "FBO + RITM Сборка"} icon={<ChartBar size={22} />} /></div>

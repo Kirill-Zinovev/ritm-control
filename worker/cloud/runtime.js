@@ -88,6 +88,7 @@ function managerRouteAllowed(method, path) {
   ].includes(path);
   return method === "POST" && [
     "/api/production-moves", "/api/production-moves/batch", "/api/production-planning", "/api/box-position-removal",
+    "/api/stocks/history",
     "/api/roll-supplies", "/api/roll-supplies/preview",
     "/api/production-tabs",
     "/api/assembly-transfers", "/api/assembly-transfers/preview",
@@ -756,8 +757,18 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
       return json({ok:true,operations:url.searchParams.get('inspect')==='1'?await inspectStockReceipts(operations,bindings,{fetcher}):operations});
     }
     if (path === '/api/stocks/history') {
-      methods(request,['GET']);
+      methods(request,['GET','POST']);
       if(assemblyControlApp||bridgeId)throw new CloudError('stock_manager_scope_required','Раздел доступен только из RITM.',403);
+      if (request.method === 'POST' || url.searchParams.get('checkCatalog') === '1') {
+        const dryRun = request.method === 'GET';
+        if (!dryRun) {
+          const input = await readJson(request, 1024);
+          if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length)
+            throw new CloudError('stock_catalog_invalid','Проверка справочника не принимает данные для записи.',400);
+        }
+        const result = await syncProductionSheetCatalog(bindings, store, { fetcher, dryRun, stockOnly: true, initializeStock: true });
+        return json(result, result.ok ? 200 : 503);
+      }
       const scopes=await Promise.all(['stock','stock-close'].map(kind=>store.operationReadScope(kind)));
       const workspace=await loadStockWorkspace({
         operations:scopes.flatMap(scope=>[...scope.operations.values()]),

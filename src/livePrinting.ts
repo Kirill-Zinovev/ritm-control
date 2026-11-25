@@ -302,7 +302,7 @@ export function printingDataset(
     rolls,
   };
 }
-export function useLivePrinting(enabled = true) {
+export function useLivePrinting(enabled = true, { refreshOnOpen = false } = {}) {
   const [value, setValue] = useState<LivePrinting | null>(null),
     [loading, setLoading] = useState(false),
     [error, setError] = useState("");
@@ -474,16 +474,19 @@ export function useLivePrinting(enabled = true) {
     const updateIfVisible = () => {
       if (document.visibilityState === "visible") void reload(false);
     };
-    void reload(false);
+    const refreshOnReturn = () => {
+      if (document.visibilityState === "visible") void reload(refreshOnOpen);
+    };
+    void reload(refreshOnOpen);
     const timer = window.setInterval(updateIfVisible, 300000);
-    document.addEventListener("visibilitychange", updateIfVisible);
+    document.addEventListener("visibilitychange", refreshOnReturn);
     return () => {
       window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", updateIfVisible);
+      document.removeEventListener("visibilitychange", refreshOnReturn);
       if (retryTimer.current !== null) window.clearTimeout(retryTimer.current);
       retryTimer.current = null;
     };
-  }, [reload, enabled]);
+  }, [reload, enabled, refreshOnOpen]);
   useEffect(() => () => active.current?.abort(), []);
   useEffect(() => {
     if (!enabled) return;
@@ -500,7 +503,7 @@ export function useLivePrinting(enabled = true) {
         const data = await response.json();
         if (typeof data.revision !== "string") return;
         const changed = observed !== null && observed !== data.revision;
-        delay = changed || data.refreshNeeded || observed === null ? 5000 : Math.min(delay + 5000, 20000);
+        delay = refreshOnOpen || changed || data.refreshNeeded || observed === null ? 5000 : Math.min(delay + 5000, 20000);
         if (changed || data.refreshNeeded === true) {
           if (!active.current) { observed = data.revision; void reload(false); }
         } else observed = data.revision;
@@ -515,6 +518,6 @@ export function useLivePrinting(enabled = true) {
     document.addEventListener("visibilitychange",visible);
     window.addEventListener("online",visible);
     return () => {abort.abort();window.clearTimeout(timer);document.removeEventListener("visibilitychange",visible);window.removeEventListener("online",visible);};
-  },[enabled,reload]);
+  },[enabled,reload,refreshOnOpen]);
   return { value, loading, error, reload };
 }

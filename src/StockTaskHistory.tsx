@@ -71,10 +71,21 @@ export default function StockTaskHistory({ blocked, setBusy, revision }: { block
   const reloadRef = useRef(0);
   const [running,setRunning] = useState(false);
 
-  async function reload() {
+  async function reload(refreshCatalog = false) {
     const requestNumber=++reloadRef.current;
     setLoading(true);
     setLoadError('');
+    if (refreshCatalog) void fetch('/api/stocks/history', { method:'POST', credentials:'same-origin',
+      headers:{'content-type':'application/json'}, body:'{}', signal:AbortSignal.timeout(45_000) })
+      .then(async response => {
+        if (!response.ok) {
+          const result = await response.json() as { message?:string };
+          throw new Error(result.message || 'Не удалось обновить справочник запасов.');
+        }
+      }).catch(error => {
+        if (requestNumber === reloadRef.current)
+          setLoadError(error instanceof Error ? error.message : 'Не удалось обновить справочник запасов.');
+      });
     try {
       const response=await fetch('/api/stocks/history',{credentials:'same-origin',signal:AbortSignal.timeout(35_000)});
       const data=await response.json() as StockTasks & {ok:boolean;message?:string};
@@ -155,7 +166,7 @@ export default function StockTaskHistory({ blocked, setBusy, revision }: { block
           <p>Печать и порезка подтверждены по всему плану позиции.</p>
         </div>
         <div className="stock-history-actions">
-          <Button disabled={loading || running} onClick={()=>void reload()}><RefreshCw size={15}/> {loading?'Обновляем…':'Обновить'}</Button>
+          <Button disabled={loading || running} onClick={()=>void reload(true)}><RefreshCw size={15}/> {loading?'Обновляем…':'Обновить'}</Button>
           <Button kind="primary" disabled={disabled || !!batch || !tasks.ready.length} onClick={()=>setConfirmation({tasks:tasks.ready,all:true})}>
             <ClipboardCheck size={16}/> Завершить всё{tasks.ready.length>0 ? ` · ${tasks.ready.length}` : ''}
           </Button>

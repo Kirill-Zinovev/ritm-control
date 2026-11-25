@@ -5,7 +5,7 @@ import {
   productionStoreName,
   type Fact,
 } from "./productionData";
-import { rollPrinted, rollCut } from "./liveSupplyProgress";
+import { rollPrinted, rollCut, supplyPrintRemaining } from "./liveSupplyProgress";
 
 export type Department = "roll" | "box";
 export function countWord(
@@ -67,6 +67,7 @@ export type WorkloadMachine = {
   rows: WorkloadArticle[];
   plan: number;
   printed: Fact;
+  printRemaining: Fact;
   cut: Fact;
 };
 export type WorkloadSupply = {
@@ -124,6 +125,10 @@ export function summarizeMachines(
     rows,
     plan: orders.reduce((sum, order) => sum + order.quantity, 0),
     printed: productionFact(orders.map(rollPrinted)),
+    printRemaining: productionFact(orders.map((order) => {
+      const value = supplyPrintRemaining(order);
+      return value === null ? null : Math.max(0, value);
+    })),
     cut: productionFact(orders.map(rollCut)),
   };
 }

@@ -197,7 +197,9 @@ function AppShell() {
   const [real, setReal] = useState<Dataset>(() =>
     readStorage("ritm-real-v1", emptyDataset()),
   );
-  const live = useLivePrinting(page !== "intelligence" && page !== "help");
+  const live = useLivePrinting(page !== "intelligence" && page !== "help", {
+    refreshOnOpen: page === "overview" && mode === "imported",
+  });
   const d1PrintingWork = useD1PrintingWork(page === "printing" && mode === "imported", date, period);
   const printingReport = useMemo(() => printingWorkView(live.value, d1PrintingWork), [live.value, d1PrintingWork]);
   const refreshLivePrinting = useCallback(() => live.reload(true), [live.reload]);
