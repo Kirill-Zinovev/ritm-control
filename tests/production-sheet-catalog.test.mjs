@@ -69,15 +69,17 @@ function stockBook(rows, effective, entries = []) {
 test("empty stock rows suppress stale assignment and lookup errors and retain reusable formulas", () => {
   const empty = [photo, "", "2-GO", "", "", legacy, "100x40", "", legacy, "=G5*I5*J5*P5", "=G5*I5*J5*R5", legacy, legacy];
   const reserved = [...empty];
+  reserved[1] = "Служебная отметка";
+  reserved[4] = "CBI";
   reserved[28] = "archived-uid";
   const plan = planCatalogBook(stockBook([empty, reserved], [[], []]), catalogs());
-  assert.equal(plan.blankRows, 1);
-  assert.ok(plan.patches.every(patch => patch.row === 5));
+  assert.equal(plan.blankRows, 2);
   for (const column of [1, 3, 6, 7, 9, 10, 11, 12, 13]) {
     const patch = plan.patches.find(patch => patch.column === column);
     assert.match(patch.formula, /^=IF\(TRIM\(TO_TEXT\(\$E5\)\)="";"";/);
   }
   assert.ok(!plan.patches.some(patch => [2, 4, 5, 8, 15, 29].includes(patch.column)));
+  assert.match(plan.patches.find(patch => patch.row === 6 && patch.column === 3).formula, /^=IF\(TRIM\(TO_TEXT\(\$E6\)\)="";"";/);
 });
 
 test("missing stock details are linked for later catalog updates while known print parameters stay usable", () => {

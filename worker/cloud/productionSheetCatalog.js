@@ -85,7 +85,7 @@ async function readBook(reader, id, department, supplyName, stock, initializeSto
   if (stock) {
     if (candidates.length !== stockTabs.size)
       throw new CloudError("stock_catalog_book_mismatch", "Не удалось подтвердить оба рабочих листа запасов.", 409);
-    return readBookValues(reader, { id, department, cache, tabs, sheets: candidates, stock });
+    return readBookValues(reader, { id, department, cache, tabs, sheets: candidates, stock, initializeStock });
   }
   const columns = await sheetValues(reader, id, candidates.map(tab => `${quote(tab.title)}!E4:E${tab.rows}`));
   const sheets = candidates.flatMap((tab, index) => {
@@ -120,7 +120,7 @@ const cellValue = cell => cell?.formulaValue ?? cell?.stringValue ?? cell?.numbe
 async function readStockBookValues(reader, book) {
   // The first sync repairs the prepared rows. Later runs only need the current
   // stock records and the gaps between them.
-  const articleColumns = book.cache ? await sheetValues(reader, book.id,
+  const articleColumns = book.cache && !book.initializeStock ? await sheetValues(reader, book.id,
     book.sheets.map(tab => `${quote(tab.title)}!E4:E${tab.rows}`)) : null;
   const stockRanges = book.sheets.map((tab, index) => {
     const lastRow = articleColumns ? Math.max(5, 3 + articleColumns[index].length) : tab.rows;
@@ -165,7 +165,8 @@ function planStockCatalogSheet(sheet, catalog, next, patches, matched) {
     if (!index) continue;
     const row = index + 4, article = planned.get(row);
     const current = sheet.effective[index] || [];
-    const blank = !String(values[3] ?? "").trim() && (values[14] ?? "") === "" && (values[28] ?? "") === "";
+    const blank = !String(values[3] ?? "").trim();
+    const reusable = blank && (values[14] ?? "") === "" && (values[28] ?? "") === "";
     if (!blank && (!article || !catalog)) continue;
     const firstPatch = patches.length;
     const entry = article ? sheetCatalogRow(sheet, article, catalog.get(article) || []) : [];
@@ -173,22 +174,22 @@ function planStockCatalogSheet(sheet, catalog, next, patches, matched) {
       if (entry.slice(1).some(Boolean) || next.has(entry[0])) next.set(entry[0], entry);
       if (entry.slice(1).some(Boolean)) matched.add(entry[0]);
     }
-    const put = (column, value, formula = false, repeat = false) => {
+    const put = (column, value, formula = false) => {
       if (value !== (values[column] ?? ""))
-        patches.push({ sheetId: sheet.id, row, column: column + 1, ...(formula ? { formula: value, repeat } : { value }) });
+        patches.push({ sheetId: sheet.id, row, column: column + 1, ...(formula ? { formula: value } : { value }) });
     };
     for (const [i, column] of fields.entries()) {
       const field = i + 1, before = values[column] ?? "";
       if (field === 7) {
         // The extension is an input cleared by the existing stock-close gateway.
         // It must remain an input so the same worksheet row can be used again.
-        if (blank) put(column, "");
+        if (reusable) put(column, "");
         else if (entry[field] && (!textValue(current[column]) || legacyLookup(before))) put(column, entry[field]);
         continue;
       }
       const formula = sheetCatalogFormula(sheet, row, field);
       if (blank) {
-        if (before !== "") put(column, formula, true, true);
+        if (before !== "") put(column, formula, true);
         continue;
       }
       if (before === formula) continue;
@@ -201,13 +202,13 @@ function planStockCatalogSheet(sheet, catalog, next, patches, matched) {
       const keep = [2, 5, 6, 8].includes(field) || ([3, 4].includes(field) && !entry[field]);
       put(column, known && keep ? stockCatalogValueFormula(sheet, row, article, field, known) : formula, true);
     }
-    if (blank) put(columns.indexOf("наличие макета"), "");
+    if (reusable) put(columns.indexOf("наличие макета"), "");
     for (const column of [7, 8, 9, 10]) { // I:L, calculated dimensions and area
       const before = values[column];
       if (typeof before === "string" && before.startsWith("=")) {
         const guard = `=IF(TRIM(TO_TEXT($E${row}))="";"";`;
         if (!before.startsWith(guard)) put(column, guard + before.slice(1) + ")", true);
-      } else if (blank && before !== undefined) put(column, "");
+      } else if (reusable && before !== undefined) put(column, "");
     }
     if (blank && patches.length !== firstPatch) blankRows++;
   }
@@ -296,26 +297,32 @@ function batchRequests(book, plan) {
   }
   for (const patches of columns.values()) {
     let block;
-    let lastRow = 0;
     for (const patch of patches) {
       const value = patch.formula ? { formulaValue: patch.formula } : entered(patch.value);
-      if (!block || patch.row !== lastRow + 1 || Boolean(block.repeatCell) !== Boolean(patch.repeat)) {
-        if (patch.repeat) {
-          block = { repeatCell: { range: { sheetId: patch.sheetId, startRowIndex: patch.row - 1,
-            endRowIndex: patch.row, startColumnIndex: patch.column, endColumnIndex: patch.column + 1 },
-          cell: { userEnteredValue: value }, fields: "userEnteredValue" } };
-        } else {
-          block = { updateCells: { start: { sheetId: patch.sheetId, rowIndex: patch.row - 1, columnIndex: patch.column },
-            rows: [], fields: "userEnteredValue" } };
-        }
-        requests.push(block);
+      if (!block || patch.row - 1 !== block.start.rowIndex + block.rows.length || (book.stock && block.rows.length === 350)) {
+        block = { start: { sheetId: patch.sheetId, rowIndex: patch.row - 1, columnIndex: patch.column }, rows: [], fields: "userEnteredValue" };
+        requests.push({ updateCells: block });
       }
-      if (block.repeatCell) block.repeatCell.range.endRowIndex = patch.row;
-      else block.updateCells.rows.push({ values: [{ userEnteredValue: value }] });
-      lastRow = patch.row;
+      block.rows.push({ values: [{ userEnteredValue: value }] });
     }
   }
   return requests;
+}
+
+function stockWriteBatches(requests) {
+  const encoder = new TextEncoder();
+  const batches = [[]];
+  let size = 0;
+  for (const request of requests) {
+    const bytes = encoder.encode(JSON.stringify(request)).length + 1;
+    if (size && size + bytes > 1_400_000) {
+      batches.push([]);
+      size = 0;
+    }
+    batches.at(-1).push(request);
+    size += bytes;
+  }
+  return batches;
 }
 
 async function readCatalogs(bindings, books, fetcher) {
@@ -380,12 +387,14 @@ async function syncBooks(bindings, store, { fetcher, dryRun, supplyName, stockOn
       const requests = batchRequests(currentBook, currentPlan);
       if (!requests.length) continue;
       const writer = new CloudSheetsReader(bindings, { writer: true, fetcher, beforeWrite: () => store.renew(lease) });
-      const response = await writer.request(`https://sheets.googleapis.com/v4/spreadsheets/${book.id}:batchUpdate`, {
-        method: "POST", body: { requests }, write: true,
-      });
-      const receipt = await response.json();
-      if (receipt.spreadsheetId !== book.id || !Array.isArray(receipt.replies))
-        throw new CloudError("print_catalog_unverified", "Google Sheets пока не подтвердил обновление справочника.", 503);
+      for (const batch of book.stock ? stockWriteBatches(requests) : [requests]) {
+        const response = await writer.request(`https://sheets.googleapis.com/v4/spreadsheets/${book.id}:batchUpdate`, {
+          method: "POST", body: { requests: batch }, write: true,
+        });
+        const receipt = await response.json();
+        if (receipt.spreadsheetId !== book.id || !Array.isArray(receipt.replies) || (book.stock && receipt.replies.length !== batch.length))
+          throw new CloudError("print_catalog_unverified", "Google Sheets пока не подтвердил обновление справочника.", 503);
+      }
       Object.assign(stats, { formulas: currentPlan.patches.length, updatedRows: currentPlan.changedRows.length, written: true,
         ...(book.stock ? { blankRows: currentPlan.blankRows } : {}) });
     } finally { await store.release(lease); }
