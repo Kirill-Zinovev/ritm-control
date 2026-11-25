@@ -1089,7 +1089,7 @@ function AppShell() {
                           ? "Обновление не удалось · показаны последние полученные данные"
                           : "Таблица недоступна"
                         : live.value
-                          ? `Печать подключена · ${live.value.sheets.length} листов · обновлено ${new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" }).format(new Date(live.value.snapshotAt || live.value.updatedAt))} · автообновление 5 мин при открытой вкладке`
+                          ? `Печать подключена · ${live.value.sheets.length} листов · обновлено ${new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" }).format(new Date(live.value.snapshotAt || live.value.updatedAt))} · ${page === "overview" ? "автообновление включено" : "автообновление 5 мин при открытой вкладке"}`
                           : "Подключаю печать…"}
                   </>
                 )}

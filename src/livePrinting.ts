@@ -474,10 +474,16 @@ export function useLivePrinting(enabled = true, { refreshOnOpen = false } = {}) 
     const updateIfVisible = () => {
       if (document.visibilityState === "visible") void reload(false);
     };
-    const refreshOnReturn = () => {
-      if (document.visibilityState === "visible") void reload(refreshOnOpen);
+    const revalidate = () => {
+      // Show the saved snapshot during the first source read. The same reload
+      // queue starts the fresh request as soon as that snapshot is displayed.
+      if (refreshOnOpen && !displayed.current && !active.current) void reload(false);
+      void reload(refreshOnOpen);
     };
-    void reload(refreshOnOpen);
+    const refreshOnReturn = () => {
+      if (document.visibilityState === "visible") revalidate();
+    };
+    revalidate();
     const timer = window.setInterval(updateIfVisible, 300000);
     document.addEventListener("visibilitychange", refreshOnReturn);
     return () => {

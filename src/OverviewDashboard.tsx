@@ -78,6 +78,9 @@ export function OverviewDashboard({ live, liveError, assembly, assemblyError, da
   const bothSources = contributions.some((source) => source.sourceKind === "fbo") && contributions.some((source) => source.sourceKind === "assembly");
   const periodName = period === "day" ? "за день" : period === "week" ? "за неделю" : "за месяц";
   const stale = !!live && (live.stale || live.refreshFailed || !!liveError);
+  const printingWarning = live?.refreshInProgress
+    ? "Обновляем данные печати. "
+    : "Источник печати не подтвердил обновление. ";
   const assemblyStale = !!assembly && (assembly.stale || assembly.staleSnapshot || !!assemblyError);
   const issues = [
     ...(missingMachine ? [{ key: "machine", text: `Станок не определён: ${positions(missingMachine)}`, page: "machines" as Page }] : []),
@@ -87,7 +90,7 @@ export function OverviewDashboard({ live, liveError, assembly, assemblyError, da
     ...(assemblyError || assemblyStale || (assembly && !assemblyComplete) ? [{ key: "assembly", text: "Данные сборщиков неполные или устарели", page: "assembly" as Page }] : []),
   ];
   return <div className="ov-dashboard">
-    {(stale || assemblyStale) && <div className="ov-warning"><Warning size={19} /><span>Показаны последние доступные данные. {stale ? "Источник печати не подтвердил обновление. " : ""}{assemblyStale ? "Источник сборщиков не подтвердил обновление." : ""}</span></div>}
+    {(stale || assemblyStale) && <div className="ov-warning"><Warning size={19} /><span>Показаны последние доступные данные. {stale ? printingWarning : ""}{assemblyStale ? "Источник сборщиков не подтвердил обновление." : ""}</span></div>}
     <section className="ov-metrics" aria-label="Общие показатели">
       <Metric label="Поставки рулона и бокса" value={live ? num(groups.length) : "—"} note="Объединены по общему ID" icon={<Truck size={24} />} />
       <Metric label="Упаковано по поставкам" value={packed.value === null ? "—" : `${num(packed.value)} шт.`} note={packed.value === null ? "Нет подтверждённых данных" : packed.complete ? `${num(plan)} шт. по плану · ${plan ? percentText(packed.value / plan * 100) : "план не указан"}` : `Частично: ${num(packed.known)} из ${num(packed.expected)} позиций`} icon={<Package size={24} />} tone="teal" />
