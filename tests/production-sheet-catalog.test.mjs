@@ -55,3 +55,48 @@ test("previously connected cells and machine assignments lose their old lookup",
   source.sheets[0].machines[0][1] = "OTHER";
   assert.ok(!planCatalogBook(source, catalogs(correct)).patches.some(patch => patch.column === 3));
 });
+
+function stockBook(rows, effective, entries = []) {
+  const header = [...headers];
+  header[5] = "Кол-во листов";
+  header[25] = "Магазин";
+  return { stock: true, stored: [[...cacheHeaders, "Станок", "расширения", "Магазин"]], sheets: [{
+    stock: true, market: "OZON", shop: "", department: "roll", id: 25,
+    values: [header, ...rows], effective: [header, ...effective], entries,
+  }] };
+}
+
+test("empty stock rows suppress stale assignment and lookup errors and retain reusable formulas", () => {
+  const empty = [photo, "", "2-GO", "", "", legacy, "100x40", "", legacy, "=G5*I5*J5*P5", "=G5*I5*J5*R5", legacy, legacy];
+  const reserved = [...empty];
+  reserved[28] = "archived-uid";
+  const plan = planCatalogBook(stockBook([empty, reserved], [[], []]), catalogs());
+  assert.equal(plan.blankRows, 1);
+  assert.ok(plan.patches.every(patch => patch.row === 5));
+  for (const column of [1, 3, 6, 7, 9, 10, 11, 12, 13]) {
+    const patch = plan.patches.find(patch => patch.column === column);
+    assert.match(patch.formula, /^=IF\(TRIM\(TO_TEXT\(\$E5\)\)="";"";/);
+  }
+  assert.ok(!plan.patches.some(patch => [2, 4, 5, 8, 15, 29].includes(patch.column)));
+});
+
+test("missing stock details are linked for later catalog updates while known print parameters stay usable", () => {
+  const original = [...data];
+  original[11] = legacy;
+  original[12] = legacy;
+  const values = [...original];
+  values[2] = "2-GO";
+  values[5] = 2;
+  values[12] = "";
+  const active = [{ row: 5, article }];
+  const source = stockBook([original], [values], active);
+  const first = planCatalogBook(source, catalogs());
+  assert.match(first.patches.find(p => p.column === 6).formula, /="WI0009\.A0143";2;/);
+  assert.match(first.patches.find(p => p.column === 13).formula, /'_RITM_СПРАВОЧНИК'!\$A\$2:\$I;6;FALSE/);
+  const linked = original.slice();
+  for (const patch of first.patches) linked[patch.column - 1] = patch.formula ?? patch.value;
+  const card = { ...correct, printExtension: "CBI" };
+  const second = planCatalogBook(stockBook([linked], [values], active), catalogs(card));
+  assert.deepEqual(second.changedRows[0].data, ["OZON||WI0009.A0143", card.photoUrl, 3, "22х16", "Порезка", 10, "2-GO", "CBI", "2"]);
+  assert.equal(second.patches.length, 0);
+});

@@ -1,6 +1,6 @@
 import {readPlanning, savePlanning} from './productionPlanning.js';
 import { assemblyV2Feed } from './assemblyV2Feed.js';
-import { refreshAssemblyV2Source } from './assemblyV2Refresh.js';
+import { refreshAssemblyV2Source, verifyAssemblyV2EmptyCommand } from './assemblyV2Refresh.js';
 import {receiveAssemblyV2Events,readAssemblyV2Events,overlayPrintingV2} from './assemblyV2Events.js';
 import {readAssemblyV2Report} from './assemblyV2Report.js';
 import {drainAssemblyV2,queueSnapshotDelivery,supplyDeliveryStatus} from './assemblyV2Delivery.js';
@@ -214,6 +214,8 @@ export async function maintenance(bindings, store, { fetcher = fetch, refresh = 
       result.refreshed.push({ kind: "printing", ok: value.refreshFailed !== true, snapshotAt: value.snapshotAt, failure: value.refreshFailure });
       if (!result.deliverySkipped && value.refreshFailed !== true) {
         result.productionTabs = await reconcileProductionTabs(bindings, store, value, fetcher).catch(() => ({ pending: true }));
+        result.stockCatalog = await syncProductionSheetCatalog(bindings, store, { fetcher, dryRun: false, stockOnly: true })
+          .catch(error => ({ ok: false, error: error.code || 'stock_catalog_sync_failed' }));
         try { result.arkadyWatch = await runArkadyWatch(bindings, store, value, {fetcher}); if (result.arkadyWatch.queued) await drainBitrixNotifications(bindings,store,fetcher); }
         catch (error) { result.arkadyWatch={ok:false,reason:error?.code || 'watch_failed',queued:0}; }
       }
@@ -508,6 +510,12 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
       });
     }
     if (path === '/api/assembly-v2/events') return await receiveAssemblyV2Events(request,bindings,new CloudStore(bindings.DB));
+    if (path === '/api/assembly-v2/stock-catalog-sync') {
+      const store = new CloudStore(bindings.DB);
+      await verifyAssemblyV2EmptyCommand(request, bindings, store, 'stock-catalog-sync');
+      const result = await syncProductionSheetCatalog(bindings, store, { fetcher, dryRun: false, stockOnly: true });
+      return json({ ok: result.ok }, result.ok ? 200 : 503);
+    }
     if (path === "/api/auth/login") {
       methods(request, ["POST"]);
       return await loginWithPin(request, bindings);
@@ -1012,6 +1020,8 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
             await reconcileProductionTabs(bindings, store, report, fetcher).catch(() => {});
             if (url.searchParams.get("refresh") === "1" && !report.stale)
               await syncProductionSheetCatalog(bindings, store, { fetcher, dryRun: false }).catch(() => {});
+            if (!report.stale)
+              await syncProductionSheetCatalog(bindings, store, { fetcher, dryRun: false, stockOnly: true }).catch(() => {});
           })()) : null,
       }));
     }

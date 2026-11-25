@@ -2,19 +2,12 @@ import { CloudError, json, readBytes } from "./access.js";
 import { cloudConfig } from "./config.js";
 import { eventSignature } from "./assemblyV2Events.js";
 
-const path = "/api/assembly-v2/refresh";
 const fail = (code, message, status = 409) => {
   throw new CloudError(code, message, status);
 };
 
-// Separate from the read-only feed. This request refreshes its source cache;
-// it cannot create supplies/work, run maintenance, or deliver the old outbox.
-export async function refreshAssemblyV2Source(
-  request,
-  bindings,
-  store,
-  refresh,
-) {
+export async function verifyAssemblyV2EmptyCommand(request, bindings, store, command) {
+  const path = `/api/assembly-v2/${command}`;
   const url = new URL(request.url),
     secret = bindings.RITM_ASSEMBLY_V2_FEED_SECRET;
   if (request.method !== "POST" || url.pathname !== path || url.search)
@@ -64,10 +57,15 @@ export async function refreshAssemblyV2Source(
     .prepare(
       "INSERT INTO cloud_bridge_nonces(id,bridge_id,seen_at) VALUES(?,?,?) ON CONFLICT(id) DO NOTHING",
     )
-    .bind("av2-refresh:" + nonce, "assembly-v2-refresh", store.now())
+    .bind(`av2-${command}:${nonce}`, `assembly-v2-${command}`, store.now())
     .run();
   if (seen.meta?.changes !== 1)
     fail("assembly_v2_replay", "Этот запрос уже обработан.", 409);
+}
+
+// Separate from the read-only feed. The existing command only refreshes the source cache.
+export async function refreshAssemblyV2Source(request, bindings, store, refresh) {
+  await verifyAssemblyV2EmptyCommand(request, bindings, store, "refresh");
   const sourceReadAllowed = typeof store.productionSnapshotReadAllowed === "function"
     ? await store.productionSnapshotReadAllowed()
     : !await store.leaseIsActive("production");

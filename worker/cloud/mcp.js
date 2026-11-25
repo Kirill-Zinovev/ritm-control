@@ -14,14 +14,14 @@ export async function mcp(request, env) {
     if(input.method==='initialize')return result({protocolVersion:'2025-03-26',capabilities:{tools:{}},serverInfo:{name:'ritm-maintenance',version:'1.0.0'}});
     if(input.method==='notifications/initialized')return new Response(null,{status:202});
     if(input.method==='tools/list')return result({tools:[{name:'ritm_refresh',description:'Обновить сводки RITM из настроенных источников и проверить доставку подтверждённых поставок в существующий Assembly. Не создаёт поставки и не меняет нормы.',inputSchema:{type:'object',properties:{},additionalProperties:false}},{name:'ritm_stock_watch',description:'Проверить завершение печати и порезки запасов и отправить только подтверждённые уведомления Аркадия. Не изменяет таблицы.',inputSchema:{type:'object',properties:{},additionalProperties:false}},{name:'ritm_stock_pending_status',description:'Только чтение: показать сохранённый состав и этапы незавершённого запроса запасов по артикулу. Данные, таблицы и сообщения не изменяются.',inputSchema:{type:'object',properties:{article:{type:'string',description:'Артикул из незавершённого запроса.'}},required:['article'],additionalProperties:false},annotations:{readOnlyHint:true,destructiveHint:false}},
-      {name:'ritm_sync_print_catalog',description:'Сверить справочник RITM Сборка с формулами карточек в рабочих книгах Бокса и рулонной печати. dryRun=false применяет обновление справочника и формул.',inputSchema:{type:'object',properties:{dryRun:{type:'boolean',default:true}},additionalProperties:false},annotations:{destructiveHint:false,idempotentHint:true}}]});
+      {name:'ritm_sync_print_catalog',description:'Сверить справочник RITM СБОРКА с рабочими книгами. stockOnly=true выбирает книги запасов. dryRun=false применяет обновление справочника и формул.',inputSchema:{type:'object',properties:{dryRun:{type:'boolean',default:true},stockOnly:{type:'boolean',default:false}},additionalProperties:false},annotations:{destructiveHint:false,idempotentHint:true}}]});
     requireOwner(request,env);
     if(input.method!=='tools/call'||!['ritm_refresh','ritm_stock_watch','ritm_stock_pending_status','ritm_sync_print_catalog'].includes(input.params?.name))throw new CloudError('unknown_tool','Неизвестная служебная операция.',400);
     const args=input.params?.arguments||{};
     if(input.params.name==='ritm_sync_print_catalog') {
-      if(Object.keys(args).some(key=>key!=='dryRun') || ('dryRun' in args && typeof args.dryRun!=='boolean'))
+      if(Object.entries(args).some(([key,value])=>!['dryRun','stockOnly'].includes(key)||typeof value!=='boolean'))
         throw new CloudError('print_catalog_arguments','Неверные параметры сверки справочника.',400);
-      const value=await syncProductionSheetCatalog(env,new CloudStore(env.DB),{dryRun:args.dryRun!==false});
+      const value=await syncProductionSheetCatalog(env,new CloudStore(env.DB),{dryRun:args.dryRun!==false,stockOnly:args.stockOnly===true,initializeStock:args.stockOnly===true});
       return result({content:[{type:'text',text:JSON.stringify(value)}],isError:!value.ok});
     }
     if(input.params.name==='ritm_stock_pending_status'){
