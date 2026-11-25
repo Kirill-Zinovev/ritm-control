@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
+import {stockCellRequests} from '../agent/stockCells.js';
 
 function fixture(department){
  const cells=Array(30).fill('');cells[3]='XEROX';cells[4]='A123';cells[6]=2;cells[13]=1;cells[15]=20;cells[21]='date';cells[22]='date';cells[27]=30;cells[28]=20;cells[29]='uid-1';
@@ -35,6 +36,30 @@ for(const department of ['box','roll'])test(`${department} gateway pins the conf
  ctx.stockCatalogInsert_(sheet,5,item,true);
  assert.deepEqual([...formulas],[[4,`=IF(E5="";"";"${machine}")`],[7,'=IF(E5="";"";2)'],[14,'=IF(E5="";"";4)'],[27,'=IF(E5="";"";"1")']]);
  assert.throws(()=>ctx.stockCatalogInsert_(sheet,5,{...item,machine:'=HYPERLINK(...)'},false),/справочника Assembly/);
+});
+
+for(const department of ['box','roll'])test(department+' writes the catalog photo, size and printing folder with matching readback',()=>{
+ const {ctx}=fixture(department), formulas=new Map(),machine=department==='box'?'XEROX':'2-GO';
+ const headers={2:'Фото',4:'Станок',7:'Кол-во листов',8:'Размер',13:'Папка печати',14:'Кратность',27:'Магазин'};
+ const sheet={getRange:(row,column)=>({getFormula:()=>'',getValue:()=>row===4?headers[column]:'',
+  setFormula:formula=>formulas.set(column,formula)})};
+ const item={assemblyCatalog:true,machine,store:'1',sheetsPerUnit:2,stockMultiplicity:4,newQuantity:8,
+  stockDetails:{size:'22x16',printFolder:'Отдел "А"'},photoUrl:'https://example.test/photo.webp',
+  department,layoutPresent:true,action:'insert',row:5,article:'A123',uid:'ritm-11111111-1111-4111-8111-111111111111-1'};
+ ctx.stockCatalogInsert_(sheet,5,item,false);
+ ctx.stockCatalogInsert_(sheet,5,item,true);
+ const readback=new Map(stockCellRequests(7,[item]).map(({updateCells})=>
+   [updateCells.start.columnIndex+1,updateCells.rows[0].values[0].userEnteredValue.formulaValue]));
+ for(const column of [2,4,7,8,13,14,27])assert.equal(formulas.get(column),readback.get(column));
+ assert.match(formulas.get(13),/Отдел ""А""/);
+ assert.match(formulas.get(2),/IMAGE/);
+});
+
+test('the roll gateway rejects a new invalid total even when the existing quantity is unchanged',()=>{
+ const f=fixture('roll');
+ const item={action:'increase',row:5,article:'A123',previousQuantity:20,newQuantity:31,stockMultiplicity:5,stockDetails:{}};
+ assert.throws(()=>f.ctx.stockGatewayApply_({operationId:'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',sheetId:7,entries:[item]},f.props),/не соответствует кратности/);
+ assert.equal(f.cells[15],20);
 });
 
 test('empty roll stock template locates its explicitly labelled UID column',()=>{

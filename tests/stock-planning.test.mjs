@@ -16,12 +16,39 @@ test('new Xerox stock is rounded from the Assembly catalog and images do not inv
  assert.equal(p.changes[0].photoUrl,'photo');
  assert.equal(p.fingerprint,preview([{...entries[0],photoUrl:'other'},entries[1]]).fingerprint);
  assert.deepEqual(p.changes[0].rounding.choices.map(x=>x.newQuantity),[4,8]);
- assert.equal(applyStockRounding(p.changes,[{article:'A',direction:'up'}])[0].newQuantity,8);
+ const applied=applyStockRounding(p.changes,[{article:'A',direction:'up'},{article:'B',direction:'up'}]);
+ assert.equal(applied[0].newQuantity,8);
+ assert.equal(applied[1].newQuantity,5);
+ assert.equal(applied[1].xeroxRoundingProof,undefined);
+ assert.deepEqual(p.changes[1].rounding.choices.map(choice=>choice.newQuantity),[0,5]);
  assert.equal(p.changes[1].stockMultiplicity,5);
  const conflict=planStockAddition({destination:'urgent',lines:[lines[0]],catalog:entries,
    existing:{roll:[],box:[{row:5,article:'A',quantity:8,xerox:{factor:1,multiplicity:2}}]}});
  assert.equal(conflict.changes[0].action,'skip');
  assert.match(conflict.changes[0].issue,/отличаются/);
+});
+
+test('roll rounding respects the prior plan and non-Xerox box machines accept the requested quantity',()=>{
+ const catalog=[
+   {article:'ROLL',machine:'2-GO',printExtension:'CBI',rollMultiplicity:'5',name:'Наклейки',size:'22x16',printFolder:'Порезка'},
+   {article:'DTF',machine:'DTF',printExtension:'DTF',xeroxMultiplicity:'8'},
+   {article:'FLAT',machine:'УФ планшет',printExtension:'UF',xeroxMultiplicity:'8'},
+   {article:'MISSING',machine:'2-GO',printExtension:'CBI'},
+ ];
+ const existing={roll:[{row:5,article:'ROLL',quantity:17}],box:[]};
+ const lines=catalog.map(({article})=>({article,quantity:4}));
+ const {changes}=planStockAddition({destination:'warehouse',lines,catalog,existing});
+ assert.deepEqual(changes[0].rounding.choices.map(choice=>[choice.quantity,choice.newQuantity]),[[3,20],[8,25]]);
+ assert.equal(changes[0].stockDetails.printFolder,'Порезка');
+ assert.equal(changes[0].stockDetails.name,'Наклейки');
+ for(const item of changes.slice(1,3)) {
+   assert.equal(item.action,'insert');
+   assert.equal(item.newQuantity,4);
+   assert.equal(item.rounding,undefined);
+ }
+ assert.equal(changes[3].action,'skip');
+ assert.match(changes[3].issue,/Укажите кратность/);
+ assert.equal(applyStockRounding(changes,[{article:'ROLL',direction:'down'}])[0].newQuantity,20);
 });
 test('existing stock increments; duplicates in input are combined and new work is routed',()=>{
  const p=plan([{article:'A',quantity:5},{article:'a(OZ)',quantity:3},{article:'B',quantity:7}]);

@@ -28,18 +28,30 @@ function stockCatalogInsert_(sh,row,item,write){
      (/^XEROX$/i.test(machine)&&(!item.sheetsPerUnit||!item.stockMultiplicity||
        !Number.isSafeInteger(item.newQuantity*item.sheetsPerUnit/item.stockMultiplicity))))
     throw new Error('Не подтверждены параметры новой строки из справочника Assembly.');
+  var details=item.stockDetails,photo=String(item.photoUrl||'');
+  if(details && (![details.size,details.printFolder].every(function(value){return typeof value==='string'&&value.length<=500;}) ||
+    (photo && (photo.length>2000 || !/^https:\/\//.test(photo)))))
+    throw new Error('Не подтверждены фото или данные печати из справочника Assembly.');
   if(!write){
-    [[4,'станок'],[7,'кол-во листов'],[14,'кратность'],[27,'магазин']].forEach(function(pair){
+    var headers=[[4,'станок'],[7,'кол-во листов'],[14,'кратность'],[27,'магазин']];
+    if(details)headers.push([2,'фото'],[8,'размер'],[13,'папка печати']);
+    headers.forEach(function(pair){
       if(String(sh.getRange(4,pair[0]).getValue()).trim().toLowerCase()!==pair[1])throw new Error('Изменились заголовки печати.');
     });
     if(sh.getRange(row,27).getValue()!==''&&!sh.getRange(row,27).getFormula())throw new Error('Магазин новой строки уже заполнен.');
     return;
   }
-  var assigned=function(value){return '=IF(E'+row+'="";"";'+JSON.stringify(value==null?'':value)+')';};
+  var quoted=function(value){return '"'+String(value==null?'':value).replace(/"/g,'""')+'"';};
+  var assigned=function(value){return '=IF(E'+row+'="";"";'+(typeof value==='number'?value:quoted(value))+')';};
   sh.getRange(row,4).setFormula(assigned(machine));
   sh.getRange(row,7).setFormula(assigned(item.sheetsPerUnit));
   sh.getRange(row,14).setFormula(assigned(item.stockMultiplicity));
   sh.getRange(row,27).setFormula(assigned(store));
+  if(details){
+    sh.getRange(row,2).setFormula(photo?'=IF(E'+row+'="";"";IFERROR(IMAGE('+quoted(photo)+');""))':assigned(''));
+    sh.getRange(row,8).setFormula(assigned(details.size));
+    sh.getRange(row,13).setFormula(assigned(details.printFolder));
+  }
 }
 
 function stockGatewayApply_(input,props) {
@@ -59,6 +71,9 @@ function stockGatewayApply_(input,props) {
       if(item.action==='increase'){
         if(sku!==item.article||values[15]!==before||after<=before)throw new Error('План изменился; повторите проверку.');
         var machine=String(values[3]||'').trim().toLowerCase(),xerox=/^(xerox|ксерокс|x|х)$/.test(machine),plan=xerox?after/Number(values[13])*Number(values[6]):after;
+        if(item.stockDetails && (xerox!==/^xerox$/i.test(item.machine) ||
+          (xerox && (values[6]!==item.sheetsPerUnit || values[13]!==item.stockMultiplicity))))
+          throw new Error('Станок или кратность Xerox изменились. Проверьте список заново.');
         if(!machine||!Number.isSafeInteger(plan)||plan<=0||!Number.isFinite(values[27])||!Number.isFinite(values[28])||values[28]>values[27]||values[27]>plan)throw new Error('Не подтверждена готовность позиции.');
       }else if(item.action==='insert'){
         stockCatalogInsert_(sh,row,item,false);

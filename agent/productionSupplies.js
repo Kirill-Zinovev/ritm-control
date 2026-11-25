@@ -122,9 +122,20 @@ export function routeAssemblyCatalogLines(lines, entries, name, {stock = false} 
     };
     if (stock) {
       const photos = new Set(matches.map(entry=>entry.photoUrl).filter(Boolean));
+      const text = key => {
+        const values = unique(matches,key);
+        const value = values.size === 1 ? [...values][0] : "";
+        return value.length <= 500 ? value : "";
+      };
+      const size = text("size");
       return {...result, photoUrl:photos.size===1 ? [...photos][0] : "",
         sheetsPerUnit:singleNumber("sheetsPerUnit"),
-        stockMultiplicity:singleNumber(department==="roll"?"rollMultiplicity":"xeroxMultiplicity")};
+        stockMultiplicity:department==="roll"?singleNumber("rollMultiplicity"):
+          machine.toUpperCase()==="XEROX"?singleNumber("xeroxMultiplicity"):null,
+        stockDetails:{
+          name:text("name"),kind:text("kind"),printFolder:text("printFolder"),
+          size:/^\d+(?:[,.]\d+)?\s*[xх×]\s*\d+(?:[,.]\d+)?$/iu.test(size)?size:"",
+        }};
     }
     if (issue) return result;
     if (department === "roll") {

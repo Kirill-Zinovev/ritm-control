@@ -50,6 +50,8 @@
 .stock-preview-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 18px 20px; border-top: 1px solid var(--border); }
 .stock-rounding-select { display: block; max-width: 100%; min-width: 195px; padding: 8px; border: 1px solid #d8b36f; border-radius: 8px; background: #fff9ed; color: var(--text, #142338); font: inherit; }
 .stock-rounding-summary { color: var(--muted); }
+.stock-catalog-detail { display: block; margin-top: 4px; color: var(--muted); }
+.stock-catalog-detail + .stock-rounding-select { margin-top: 5px; }
 .stock-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 @media (max-width: 1050px) { .stock-layout { grid-template-columns: 1fr; } .stock-guide-top { padding-bottom: 18px; } .stock-route { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 @media (max-width: 600px) { .stock-workspace { padding: 18px; } .stock-form { padding: 18px; } .stock-header-icon { display: none; } .stock-route { grid-template-columns: 1fr; } .stock-form-actions { align-items: stretch; flex-direction: column; } }

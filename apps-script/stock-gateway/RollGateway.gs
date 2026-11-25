@@ -23,18 +23,30 @@ function stockCatalogInsert_(sh,row,item,write){
   if(!/^(?:2-GO|УФ|УФ\s+БЕЛ\.|УФ\.\s+БЕЛ|УФ\s+БЕЛЫЙ|УФ\s+ДВУСТОРОННИЙ)$/i.test(machine)||!/^(?:[0-9]{1,3})?$/.test(store)||
      !validNumber(item.sheetsPerUnit)||!validNumber(item.stockMultiplicity))
     throw new Error('Не подтверждены параметры новой строки из справочника Assembly.');
+  var details=item.stockDetails,photo=String(item.photoUrl||'');
+  if(details && (![details.size,details.printFolder].every(function(value){return typeof value==='string'&&value.length<=500;}) ||
+    (photo && (photo.length>2000 || !/^https:\/\//.test(photo)))))
+    throw new Error('Не подтверждены фото или данные печати из справочника Assembly.');
   if(!write){
-    [[4,'станок'],[7,'кол-во листов'],[14,'кратность'],[27,'магазин']].forEach(function(pair){
+    var headers=[[4,'станок'],[7,'кол-во листов'],[14,'кратность'],[27,'магазин']];
+    if(details)headers.push([2,'фото'],[8,'размер'],[13,'папка печати']);
+    headers.forEach(function(pair){
       if(String(sh.getRange(4,pair[0]).getValue()).trim().toLowerCase()!==pair[1])throw new Error('Изменились заголовки печати.');
     });
     if(sh.getRange(row,27).getValue()!==''&&!sh.getRange(row,27).getFormula())throw new Error('Магазин новой строки уже заполнен.');
     return;
   }
-  var assigned=function(value){return '=IF(E'+row+'="";"";'+JSON.stringify(value==null?'':value)+')';};
+  var quoted=function(value){return '"'+String(value==null?'':value).replace(/"/g,'""')+'"';};
+  var assigned=function(value){return '=IF(E'+row+'="";"";'+(typeof value==='number'?value:quoted(value))+')';};
   sh.getRange(row,4).setFormula(assigned(machine));
   sh.getRange(row,7).setFormula(assigned(item.sheetsPerUnit));
   sh.getRange(row,14).setFormula(assigned(item.stockMultiplicity));
   sh.getRange(row,27).setFormula(assigned(store));
+  if(details){
+    sh.getRange(row,2).setFormula(photo?'=IF(E'+row+'="";"";IFERROR(IMAGE('+quoted(photo)+');""))':assigned(''));
+    sh.getRange(row,8).setFormula(assigned(details.size));
+    sh.getRange(row,13).setFormula(assigned(details.printFolder));
+  }
 }
 function stockGatewayApply_(input,props){
   if(!/^[-a-f0-9]{36}$/i.test(String(input.operationId||''))||!Array.isArray(input.entries)||!input.entries.length||input.entries.length>500)throw new Error('Неверные параметры операции.');
@@ -46,6 +58,8 @@ function stockGatewayApply_(input,props){
     SpreadsheetApp.setActiveSpreadsheet(book);var used={};
     input.entries.forEach(function(item){var row=Number(item.row),before=Number(item.previousQuantity),after=Number(item.newQuantity);
       if(!Number.isSafeInteger(row)||row<5||row>sh.getMaxRows()||used[row]||!Number.isSafeInteger(after)||after<=0)throw new Error('Не подтверждена строка запасов.');used[row]=true;
+      if(item.stockDetails && (!Number.isSafeInteger(item.stockMultiplicity) || item.stockMultiplicity<=0 || after%item.stockMultiplicity))
+        throw new Error('Итоговый план не соответствует кратности рулонной печати из справочника Assembly.');
       if(!/^[A-Za-z0-9][A-Za-z0-9._() -]{0,119}$/.test(String(item.article||''))||/^[=+@-]/.test(String(item.extension||'')))throw new Error('Не подтверждены данные артикула.');
       var values=sh.getRange(row,1,1,30).getValues()[0],sku=String(values[4]||'').trim();
       if(item.action==='increase'){

@@ -8,8 +8,18 @@ import './stockWorkspace.css';
 
 type Destination = 'warehouse' | 'urgent';
 type RoundingDirection = 'down' | 'up';
-type RoundingChoice = { direction: RoundingDirection; quantity: number; newQuantity: number; sheets: number };
-type Change = SupplyImportLine & { department: 'roll' | 'box' | null; action: 'insert' | 'increase' | 'skip'; previousQuantity?: number; newQuantity?: number; issue?: string | null; photoUrl?: string; rounding?: {choices: RoundingChoice[]} };
+type RoundingChoice = { direction: RoundingDirection; quantity: number; newQuantity: number; sheets?: number };
+type Change = SupplyImportLine & {
+  department: 'roll' | 'box' | null;
+  action: 'insert' | 'increase' | 'skip';
+  previousQuantity?: number;
+  newQuantity?: number;
+  issue?: string | null;
+  photoUrl?: string;
+  machine?: string;
+  stockDetails?: { name: string; kind: string; size: string; printFolder: string };
+  rounding?: {kind:'roll'|'xerox';multiplicity:number;choices:RoundingChoice[]};
+};
 type Preview = { fingerprint: string; changes: Change[] };
 type Pending = { operationId:string; input:{destination:Destination;lines:SupplyImportLine[]; rounding?:{article:string;direction:RoundingDirection}[]}; expectedFingerprint:string };
 type RecoveryStep = {department:'roll'|'box';status:string;plan?:{entries?:SupplyImportLine[]}};
@@ -90,7 +100,7 @@ export default function StockWorkspace(){
       <div className="stock-preview-heading">
         <div><h3>Проверка перед добавлением</h3>
           <p>{needsRounding.length
-            ? 'Выберите количество, при котором план Xerox получится в целых листах.'
+            ? 'Выберите, как округлить итоговый план по кратности из справочника Assembly.'
             : 'Проверьте товары и участки. Удалить из этого списка можно до сохранения.'}</p>
         </div><span>{preview.changes.length} поз.</span>
       </div>
@@ -100,13 +110,18 @@ export default function StockWorkspace(){
           const chosen = choiceFor(row);
           const planned = row.rounding ? chosen?.newQuantity : row.newQuantity;
           return <tr key={`${row.article}-${index}`}>
-            <td><div className="stock-product"><div className="stock-photo">{row.photoUrl?<img src={row.photoUrl} alt="" referrerPolicy="no-referrer"/>:<ImageOff size={18} aria-label="Нет фото"/>}</div><strong>{row.article}</strong></div></td>
-            <td><span className={`stock-department stock-department--${row.department||'unknown'}`}>{row.department==='box'?'Бокс':row.department==='roll'?'Рулонная печать':'Не определён'}</span></td>
+            <td><div className="stock-product"><div className="stock-photo">{row.photoUrl?<img src={row.photoUrl} alt="" referrerPolicy="no-referrer"/>:<ImageOff size={18} aria-label="Нет фото"/>}</div>
+              <div><strong>{row.article}</strong>{row.stockDetails?.name&&<small className="stock-catalog-detail">{row.stockDetails.name}</small>}</div>
+            </div></td>
+            <td><span className={`stock-department stock-department--${row.department||'unknown'}`}>{row.department==='box'?'Бокс':row.department==='roll'?'Рулонная печать':'Не определён'}</span>
+              {row.machine&&<small className="stock-catalog-detail">{row.machine}</small>}
+            </td>
             <td>
               {chosen ? <><s>{row.quantity}</s> <strong>{chosen.quantity} шт.</strong></> : `${row.quantity} шт.`}
             </td>
             <td>{planned==null?'—':`${planned} шт.`}</td>
-            <td>{row.rounding ? <select className="stock-rounding-select"
+            <td>{row.rounding ? <><small className="stock-catalog-detail">Кратность {row.rounding.kind==='xerox'?'Xerox ':''}{row.rounding.multiplicity} шт.</small>
+            <select className="stock-rounding-select"
               aria-label={`Округление ${row.article}`}
               value={chosen?.direction || ''} disabled={busy||!!pending}
               onChange={event => {
@@ -120,9 +135,9 @@ export default function StockWorkspace(){
               }}>
               <option value="">{row.rounding.choices.length?'Выбрать округление':'Укажите другое количество'}</option>
               {row.rounding.choices.map(choice => <option key={choice.direction} value={choice.direction}>
-                {choice.direction==='down'?'Вниз':'Вверх'} · {choice.quantity===0?'оставить план':`добавить ${choice.quantity} шт.`} · план {choice.sheets.toLocaleString('ru-RU')} лист.
+                {choice.direction==='down'?'Вниз':'Вверх'} · {choice.quantity===0?'не добавлять':`добавить ${choice.quantity} шт.`}{choice.sheets!==undefined&&` · ${choice.sheets.toLocaleString('ru-RU')} лист.`}
               </option>)}
-            </select> : row.issue || (row.action==='increase'?'Прибавить к плану':'Новый артикул')}</td>
+            </select></> : row.issue || (row.action==='increase'?'Прибавить к плану':'Новый артикул')}</td>
             <td><button type="button" className="stock-remove" disabled={busy||!!pending} aria-label={`Убрать ${row.article} из списка`} title="Убрать из списка" onClick={()=>removeDraft(row.article)}><Trash2 size={17}/></button></td>
           </tr>;
         })}</tbody>

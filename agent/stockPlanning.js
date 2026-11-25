@@ -1,16 +1,14 @@
 import { createHash } from 'node:crypto';
 import { routeAssemblyCatalogLines, routeSupplyLines } from './productionSupplies.js';
+import { quantityRounding } from './quantityRounding.js';
 import { xeroxPlanRounding, xeroxSheetCount } from './xeroxQuantity.js';
 
 const keyOf = value => String(value || '').trim().toUpperCase().replace(/\(OZ\)$/u, '').trim();
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
-function xeroxRounding(current, requestedTotal) {
-  const { factor, multiplicity } = current.xerox || {};
-  const rounding = xeroxPlanRounding(requestedTotal, factor, multiplicity, {minimum:Math.max(1, current.quantity)});
-  if (!rounding) return null;
-  return {...rounding, choices:rounding.choices.map(({direction, quantity, sheets}) => ({
-    direction, quantity:quantity - current.quantity, newQuantity:quantity, sheets,
+function stockRounding(rounding, previousQuantity) {
+  return rounding && {...rounding,choices:rounding.choices.map(({quantity,...option})=>({
+    ...option,quantity:quantity-previousQuantity,newQuantity:quantity,
   }))};
 }
 
@@ -31,13 +29,13 @@ export function applyStockRounding(changes, decisions = []) {
     const {rounding, ...item} = change;
     const key = keyOf(item.article);
     const chosen = rounding.choices.find(option => option.direction === byArticle.get(key));
-    if (!chosen) throw roundingError(`Выберите округление плана Xerox для «${item.article}».`);
+    if (!chosen) throw roundingError(`Выберите округление для «${item.article}».`);
     byArticle.delete(key);
     if (chosen.quantity === 0)
-      return {...item, quantity:0, newQuantity:chosen.newQuantity, action:'skip', issue:'По выбранному округлению план остаётся прежним.'};
-    return {...item, quantity:chosen.quantity, newQuantity:chosen.newQuantity, xeroxRoundingProof:{
+      return {...item, quantity:0, newQuantity:chosen.newQuantity, action:'skip', issue:'По выбранному округлению добавление равно нулю.'};
+    return {...item, quantity:chosen.quantity, newQuantity:chosen.newQuantity, ...(rounding.kind!=='roll' && {xeroxRoundingProof:{
       factor:rounding.factor, multiplicity:rounding.multiplicity, sheets:chosen.sheets,
-    }};
+    }})};
   });
   if (byArticle.size) throw roundingError('Состав округления изменился. Проверьте список заново.');
   return result;
@@ -103,20 +101,30 @@ export function planStockAddition({ destination, lines, catalog, existing }) {
     const previousQuantity = current?.quantity ?? 0;
     const newQuantity = previousQuantity + line.quantity;
     if (!Number.isSafeInteger(newQuantity)) throw new Error(`Сумма количества «${line.article}» слишком велика.`);
-    let format = current?.xerox;
-    if (line.assemblyCatalog && /^XEROX$/i.test(line.machine)) {
-      const fromCatalog = line.sheetsPerUnit && line.stockMultiplicity
-        ? {factor:line.sheetsPerUnit,multiplicity:line.stockMultiplicity}
-        : null;
-      if (!current && !fromCatalog)
-        return {...line,action:'skip',issue:'В справочнике Assembly не подтверждены листы на изделие и кратность Xerox.'};
-      if (current && (!format || (fromCatalog && (format.factor!==fromCatalog.factor || format.multiplicity!==fromCatalog.multiplicity))))
+    const bounds={minimum:previousQuantity,maximum:Number.MAX_SAFE_INTEGER};
+    let format=current?.xerox, rounding;
+    if(line.assemblyCatalog && line.department==='roll') {
+      const multiplicity=line.stockMultiplicity;
+      if(!multiplicity)
+        return {...line,action:'skip',issue:'Укажите кратность рулонной печати в справочнике Assembly и проверьте список заново.'};
+      const choices=quantityRounding(newQuantity,multiplicity,bounds);
+      if(choices)rounding={kind:'roll',multiplicity,choices};
+    } else if(line.assemblyCatalog && /^XEROX$/i.test(line.machine)) {
+      const factor=line.sheetsPerUnit,multiplicity=line.stockMultiplicity;
+      if(!factor || !multiplicity)
+        return {...line,action:'skip',issue:'Укажите листы на изделие и кратность Xerox в справочнике Assembly.'};
+      if(current && (!format || format.factor!==factor || format.multiplicity!==multiplicity))
         return {...line,action:'skip',issue:'Параметры Xerox в рабочей строке отличаются от справочника Assembly. Нужна сверка.'};
-      format = format || fromCatalog;
+      format={factor,multiplicity};
+    } else if(line.assemblyCatalog && format) {
+      return {...line,action:'skip',issue:'Станок в рабочей строке отличается от справочника Assembly. Нужна сверка.'};
     }
-    const rounding = format && xeroxRounding({quantity:previousQuantity,xerox:format}, newQuantity);
+    if(format) {
+      const xerox=xeroxPlanRounding(newQuantity,format.factor,format.multiplicity,bounds);
+      if(xerox)rounding={...xerox,kind:'xerox'};
+    }
     return {...line, action:current?'increase':'insert', ...(current && {row:current.row}), previousQuantity, newQuantity,
-      ...(rounding && {rounding})};
+      ...(rounding && {rounding:stockRounding(rounding,previousQuantity)})};
   });
   // Worksheet norms enter the fingerprint through the shown choices. Keep
   // signatures for unaffected lists compatible with the existing form.

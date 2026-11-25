@@ -19,11 +19,18 @@ export function stockCellRequests(sheetId, changes) {
       const sku=String(article).trim().toUpperCase().replaceAll('"','""');
       set(row,5,article);set(row,6,change.extension||'');set(row,30,change.uid);
       if(change.assemblyCatalog){
-        const assigned = value => `=IF(E${row}="";"";${typeof value==='number'?value:JSON.stringify(value??'')})`;
+        const quoted = value => '"' + String(value??'').replaceAll('"','""') + '"';
+        const assigned = value => `=IF(E${row}="";"";${typeof value==='number'?value:quoted(value)})`;
         formula(row,4,assigned(change.machine));
         formula(row,7,assigned(change.sheetsPerUnit));
         formula(row,14,assigned(change.stockMultiplicity));
         formula(row,27,assigned(change.store));
+        if(change.stockDetails){
+          const url=change.photoUrl;
+          formula(row,2,/^https:\/\//.test(url||'') ? `=IF(E${row}="";"";IFERROR(IMAGE(${quoted(url)});""))` : assigned(''));
+          formula(row,8,assigned(change.stockDetails.size));
+          formula(row,13,assigned(change.stockDetails.printFolder));
+        }
       }
       formula(row,3,`=IF(E${row}="";"";IF(UPPER(TRIM(E${row}))="${sku}";"${change.layoutPresent?'Есть':'Не в таблице макетов'}";"Проверить макет"))`);
       if(change.department==='box'){

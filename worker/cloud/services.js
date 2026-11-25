@@ -127,7 +127,7 @@ export async function createServices(bindings, scope, { fetcher = fetch, refresh
     return new StockOperations({store:operations,adapters,catalog:lines=>{
       if(!Array.isArray(lines)||!lines.length||lines.length>500||lines.some(line=>typeof line?.article!=="string"||!line.article.trim()||line.article.trim().length>120))
         throw new CloudError("stock_preview_invalid","Добавьте от 1 до 500 корректных артикулов.",400);
-      return readAssemblyProductionCatalog(bindings,"OZON",lines.map(line=>line.article),fetcher,{includePhotos:true});
+      return readAssemblyProductionCatalog(bindings,"OZON",lines.map(line=>line.article),fetcher,{includePhotos:true,includeProductDetails:true});
     },checkpoint:()=>guard(),manager});
   };
   return { reader, writers, legacy, production, transfer, queue, guard, stock,
