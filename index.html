@@ -6,10 +6,20 @@
     <meta name="theme-color" content="#f4f7fb" />
     <link rel="icon" type="image/svg+xml" href="/favicon-ritm.svg?v=1" />
     <title>RITM · Управление производством</title>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script defer src="https://telegram.org/js/telegram-web-app.js"></script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="ritm-auth-screen">
+        <div class="ritm-auth-frame">
+          <div class="ritm-auth-card">
+            <span class="ritm-auth-mark">RITM<span>/</span></span>
+            <p role="status">Открываем RITM…</p>
+            <a class="button" href="">Повторить загрузку</a>
+          </div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

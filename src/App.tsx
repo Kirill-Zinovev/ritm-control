@@ -66,6 +66,7 @@ import { DesignPreview } from "./DesignPreview";
 import { ProductionDashboard } from "./ProductionDashboard";
 import { OverviewDashboard } from "./OverviewDashboard";
 import { MachineWorkload } from "./MachineWorkload";
+import { PageErrorBoundary } from "./PageErrorBoundary";
 import { WarehouseDashboard, type WarehouseView } from "./WarehouseDashboard";
 import { useLiveWarehouse } from "./liveWarehouse";
 import { printingSnapshotTime } from "./printingSnapshotRefresh";
@@ -177,6 +178,7 @@ function download(name: string, text: string, type = "text/csv;charset=utf-8") {
 function AppShell() {
   const cloudAuth = useCloudAuth();
   const learningIdentity = [cloudAuth.role || "local", cloudAuth.username || cloudAuth.displayName || ""].join(":");
+  const firstVisitIdentity = `${cloudAuth.role}:${cloudAuth.username || cloudAuth.displayName || "owner"}`;
   const [page, setPage] = useState<Page>(() => pageForRole(initialPage(), cloudAuth.role));
   const [date, setDate] = useState(() =>
     new Intl.DateTimeFormat("en-CA", {
@@ -1103,6 +1105,14 @@ function AppShell() {
             </div>
           </div>
         )}
+        {(cloudAuth.role === "owner" || cloudAuth.role === "manager") && (
+          <PageErrorBoundary quiet>
+            <Suspense fallback={null}>
+              <FirstVisitWelcome key={firstVisitIdentity} identity={firstVisitIdentity} onOpen={() => go("help")} />
+            </Suspense>
+          </PageErrorBoundary>
+        )}
+        <PageErrorBoundary key={page} autoRecover={!dirty && !busy}>
         {page === "intelligence" && <Suspense fallback={<section className="panel"><Empty title="Открываю AI Center">Загружаю раздел.</Empty></section>}><AICenter /></Suspense>}
         {page === "help" && <Suspense fallback={<section className="panel"><Busy label="Открываю обучение…" /></section>}>
           <HelpWorkspace
@@ -1112,7 +1122,6 @@ function AppShell() {
             go={go}
           />
         </Suspense>}
-        {(cloudAuth.role === "owner" || cloudAuth.role === "manager") && <Suspense fallback={null}><FirstVisitWelcome key={`${cloudAuth.role}:${cloudAuth.username || cloudAuth.displayName || 'owner'}`} identity={`${cloudAuth.role}:${cloudAuth.username || cloudAuth.displayName || 'owner'}`} onOpen={()=>go('help')} /></Suspense>}
         {page === "arkady" && <Suspense fallback={<section className="panel"><Busy label="Открываю настройки…" /></section>}><ArkadySettings /></Suspense>}
         {page === "reserves" && <Suspense fallback={<section className="panel"><Busy label="Загружаю запасы…" /></section>}><StockWorkspace /></Suspense>}
         {page === "overview" && mode === "imported" && (
@@ -1615,7 +1624,7 @@ function AppShell() {
             )}
           </>
         ) : null}
-        {page === "machines" && <MachineWorkload live={live.value} loading={live.loading} error={live.error} onRefresh={() => void live.reload(true)} />}
+        {page === "machines" && <MachineWorkload live={live.value} loading={live.loading} error={live.error} onRefresh={() => void live.reload(true)} autoRecover={!dirty && !busy} />}
         {page === "production" && (
           <ProductionDashboard
             live={live.value}
@@ -2347,6 +2356,7 @@ function AppShell() {
             </Notice>}
           </>
         )}
+        </PageErrorBoundary>
       </main>
       <div className="toast-region" role="status" aria-live="polite">
         {toast && (

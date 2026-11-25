@@ -82,6 +82,33 @@ export type WorkloadSupply = {
   articleCount: number;
   stock?: boolean;
 };
+
+export function workloadCutWaitsForPrint(order: LiveOrder) {
+  return (
+    rollPrinted(order) === 0 &&
+    (order.planningPrinted ?? 0) <= 0 &&
+    (order.planningCut ?? 0) <= 0 &&
+    (rollCut(order) ?? 0) === 0
+  );
+}
+
+export function workloadMissingCut(order: LiveOrder) {
+  return rollCut(order) === null && !workloadCutWaitsForPrint(order);
+}
+
+export function workloadNeedsReview(row: WorkloadArticle) {
+  return !row.printed.complete || row.orders.some(workloadMissingCut);
+}
+
+export function workloadCutCoverage(orders: LiveOrder[]) {
+  return productionFact(
+    orders.flatMap((order) => {
+      const cut = rollCut(order);
+      return cut === null && workloadCutWaitsForPrint(order) ? [] : [cut];
+    }),
+  );
+}
+
 export function remaining(machine: { plan: number; printed: Fact }) {
   return machine.printed.complete && machine.printed.value !== null
     ? machine.plan - machine.printed.value

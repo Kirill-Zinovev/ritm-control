@@ -18,12 +18,17 @@ import type { ForecastRow } from "./productionForecastModel";
 import { num } from "./model";
 import { productionFact, type Fact } from "./productionData";
 import { rollCut, rollPrinted } from "./liveSupplyProgress";
+import { PageErrorBoundary } from "./PageErrorBoundary";
 import {
   MACHINES,
   buildMachineWorkload,
   countWord,
   remaining,
   summarizeMachines,
+  workloadCutCoverage,
+  workloadCutWaitsForPrint,
+  workloadMissingCut,
+  workloadNeedsReview,
   workloadState,
   workloadStateLabel,
   type Department,
@@ -130,6 +135,22 @@ function Photo({ src }: { src: string }) {
     </span>
   );
 }
+function CutCell({ row }: { row: WorkloadArticle }) {
+  const cut = workloadCutCoverage(row.orders);
+  const waitingForPrint = row.orders.every(workloadCutWaitsForPrint);
+  return (
+    <td>
+      {cut.value === null ? "—" : num(cut.value)}
+      {waitingForPrint && <small className="mw-cell-note">Ждёт печати</small>}
+      {!cut.complete && (
+        <small className="mw-cell-note">
+          {cut.known ? `Данные ${cut.known}/${cut.expected}` : "Нет отметки порезки"}
+        </small>
+      )}
+    </td>
+  );
+}
+
 function ArticleTable({
   rows,
   showSupply,
@@ -142,9 +163,7 @@ function ArticleTable({
   const [page, setPage] = useState(0),
     [size, setSize] = useState(10),
     [missingOnly, setMissingOnly] = useState(false);
-  const missing = rows.filter(
-      (row) => !row.printed.complete || !row.cut.complete,
-    ),
+  const missing = rows.filter(workloadNeedsReview),
     visible = missingOnly ? missing : rows;
   const current = Math.min(
     page,
@@ -209,12 +228,12 @@ function ArticleTable({
                         .filter(
                           (order) =>
                             rollPrinted(order) === null ||
-                            rollCut(order) === null,
+                            workloadMissingCut(order),
                         )
                         .map((order) => {
                           const phases = [
                             rollPrinted(order) === null ? "печать" : "",
-                            rollCut(order) === null ? "порезка" : "",
+                            workloadMissingCut(order) ? "порезка" : "",
                           ].filter(Boolean);
                           return (
                             <small
@@ -251,16 +270,7 @@ function ArticleTable({
                   </strong>
                   <Meter metric={row.printed} plan={row.plan} />
                 </td>
-                <td>
-                  {row.cut.value === null ? "—" : num(row.cut.value)}
-                  {!row.cut.complete && (
-                    <small className="mw-cell-note">
-                      {row.cut.known
-                        ? `Данные ${row.cut.known}/${row.cut.expected}`
-                        : "Нет отметки порезки"}
-                    </small>
-                  )}
-                </td>
+                <CutCell row={row} />
                 <td>
                   {remaining(row) === null ? (
                     "—"
@@ -429,6 +439,7 @@ type MachineWorkloadProps = {
   error: string;
   onRefresh: () => void;
   demo?: boolean;
+  autoRecover?: boolean;
 };
 
 export function MachineWorkload(props: MachineWorkloadProps) {
@@ -476,16 +487,18 @@ export function MachineWorkload(props: MachineWorkloadProps) {
             forecastBySupply={forecastBySupply}
           />
         </div>
-        <Suspense fallback={<Notice>Открываем календарь…</Notice>}>
-          <ProductionForecast
-            live={props.live}
-            loading={props.loading}
-            onRefresh={props.onRefresh}
-            compact={!calendar}
-            onForecastChange={setForecasts}
-            onOpenCalendar={() => setTab("forecast")}
-          />
-        </Suspense>
+        <PageErrorBoundary title="Не удалось открыть календарь" autoRecover={props.autoRecover}>
+          <Suspense fallback={<Notice>Открываем календарь…</Notice>}>
+            <ProductionForecast
+              live={props.live}
+              loading={props.loading}
+              onRefresh={props.onRefresh}
+              compact={!calendar}
+              onForecastChange={setForecasts}
+              onOpenCalendar={() => setTab("forecast")}
+            />
+          </Suspense>
+        </PageErrorBoundary>
       </div>
     </>
   );
@@ -564,9 +577,7 @@ function StationOverview({
     );
     return machine ? [{ supply, machine }] : [];
   });
-  const unconfirmed = selected.rows.filter(
-    (row) => !row.printed.complete || !row.cut.complete,
-  );
+  const unconfirmed = selected.rows.filter(workloadNeedsReview);
   return (
     <>
       <section className="card mw-station-overview">
@@ -627,7 +638,7 @@ function StationOverview({
                   </td>
                   <td>
                     <StationFact
-                      metric={machine.cut}
+                      metric={workloadCutCoverage(machine.rows.flatMap((row) => row.orders))}
                       plan={machine.plan}
                       label={`Порезано · ${machine.label}`}
                     />
@@ -834,7 +845,7 @@ function CurrentMachineWorkload({
                 (state === "active"
                   ? !workloadFinished(m)
                   : state === "unknown"
-                    ? !m.printed.complete || !m.cut.complete
+                    ? m.rows.some(workloadNeedsReview)
                     : workloadState(m) === state)),
           );
         const rows = machines.flatMap((m) => m.rows),

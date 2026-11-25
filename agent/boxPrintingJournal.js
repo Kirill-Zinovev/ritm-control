@@ -1,4 +1,38 @@
 // Read-only interpretation of the box work journal; original records remain immutable.
+const areaCorrectionsTitle = "Уточнения площади";
+const areaCorrectionsHeader = ["ID записи", "ID листа", "Артикул", "Ширина, м", "Высота, м", "Источник размера"];
+
+async function readBoxAreaCorrections(reader, journalId, metadata, values, signal) {
+  const tab = metadata.sheets.find(sheet => sheet.properties?.title === areaCorrectionsTitle)?.properties;
+  const rowCount = tab?.gridProperties?.rowCount;
+  const corrections = new Map();
+  if (!tab || !Number.isSafeInteger(rowCount) || rowCount < 1 || rowCount > 50000) return corrections;
+  try {
+    const grid = await reader.grid(journalId, [`'${areaCorrectionsTitle}'!A1:F${rowCount}`], signal, 5);
+    const block = grid.sheets?.find(sheet => sheet.properties?.sheetId === tab.sheetId)?.data?.[0];
+    if (grid.spreadsheetId !== journalId || block?.startRow || block?.startColumn || !Array.isArray(block?.rowData)) return corrections;
+    const [header, ...rows] = block.rowData.map(values);
+    if (!areaCorrectionsHeader.every((name, index) => header?.[index] === name)) return corrections;
+    const seen = new Set();
+    for (const [id, sheetId, article, width, height, source] of rows) {
+      if (typeof id !== "string" || !id.trim()) continue;
+      // Keep ambiguous IDs unconfirmed, even if one row has valid dimensions.
+      if (seen.has(id)) {
+        corrections.delete(id);
+        continue;
+      }
+      seen.add(id);
+      if (!Number.isSafeInteger(sheetId) || sheetId < 0 || typeof article !== "string" || !article.trim() ||
+          !Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0 ||
+          typeof source !== "string" || !source.trim()) continue;
+      corrections.set(id, { sheetId, article, width, height });
+    }
+  } catch (error) {
+    if (signal?.aborted) throw error;
+  }
+  return corrections;
+}
+
 function activeBoxJournalRows(rows) {
   const expected=['ID записи','Контроль запроса','Время','ID позиции','ID таблицы','ID листа','Поставка','Артикул','ID сотрудника','Сотрудник','Действие','Единица','Введено','Физических листов','Комплектов','Площадь, м²','План, комплектов','Листов в комплекте','План, листов','Ширина, м','Высота, м','Этап','Комментарий / причина','Отменяет ID'];
   if (!Array.isArray(rows) || expected.some((v,i)=>String(rows[0]?.[i]??'').trim()!==v)) throw new Error('Структура журнала бокса не подтверждена');
@@ -18,15 +52,15 @@ function activeBoxJournalRows(rows) {
 }
 
 function parseBoxActionJournal(rows, action) {
-  return activeBoxJournalRows(rows).filter(row=>String(row[10]).trim()===action).map(row=>({id:String(row[0]).trim(),positionId:String(row[3]),spreadsheetId:String(row[4]??''),sheetId:Number(row[5]),shipment:String(row[6]),article:String(row[7]),employee:String(row[9]),date:String(row[2]),comment:String(row[22]??''),sheets:row[13]===''||row[13]==null?null:Number(row[13]),quantity:row[14]===''||row[14]==null?null:Number(row[14]),area:row[15]===''||row[15]==null?null:Number(row[15]),width:row[19]===''||row[19]==null?null:Number(row[19]),height:row[20]===''||row[20]==null?null:Number(row[20])}));
+  return activeBoxJournalRows(rows).filter(row=>String(row[10]).trim()===action).map(row=>({id:String(row[0]).trim(),positionId:String(row[3]),spreadsheetId:String(row[4]??''),sheetId:Number(row[5]),shipment:String(row[6]),article:String(row[7]),employee:String(row[9]),date:String(row[2]),comment:String(row[22]??''),sheets:row[13]===''||row[13]==null?null:Number(row[13]),quantity:row[14]===''||row[14]==null?null:Number(row[14]),area:row[15]===''||row[15]==null?null:Number(row[15]),sheetsPerKit:Number(row[17]),width:row[19]===''||row[19]==null?null:Number(row[19]),height:row[20]===''||row[20]==null?null:Number(row[20])}));
 }
 
 export function parseBoxJournal(rows) { return parseBoxActionJournal(rows, 'Печать'); }
 export function parseBoxCutJournal(rows) { return parseBoxActionJournal(rows, 'Порезка'); }
 
-function boxOperationEvents(rows, orders, action, history = null) {
+function boxOperationEvents(rows, orders, action, history = null, corrections = null) {
   const operationName=action==='Порезка'?'порезки':'печати';
-  return parseBoxActionJournal(rows, action).map(e=>{
+  return parseBoxActionJournal(rows, action).map(({ sheetsPerKit, ...e })=>{
     if(!e.employee.trim()||!Number.isFinite(Date.parse(e.date))||!Number.isFinite(e.quantity)||e.quantity<=0||e.sheets!==null&&(!Number.isFinite(e.sheets)||e.sheets<=0)) throw new Error('Некорректная запись '+operationName+' бокса');
     const candidates=orders.filter(o=>o.sourceId==='box-printing'&&Number(o.sheetId)===e.sheetId&&o.article===e.article&&(!o.spreadsheetId||!e.spreadsheetId||o.spreadsheetId===e.spreadsheetId));
     const archived=candidates.filter(o=>o.archived&&o.boxPositionId===e.positionId);
@@ -37,13 +71,26 @@ function boxOperationEvents(rows, orders, action, history = null) {
     const physicalSheets=xerox?e.sheets:null;
     // Older records used a different area formula. Their separately preserved
     // snapshot takes precedence; later records use the area saved at creation.
-    const area=history?.areas.has(e.id)?history.areas.get(e.id)
+    let area=history?.areas.has(e.id)?history.areas.get(e.id)
       : history && Date.parse(e.date)<=history.cutoff ? null : e.area;
+    let { width, height } = e;
+    const correction = corrections?.get(e.id);
+    // Physical sheets are recorded only for Xerox. The journal's saved kit
+    // count and sheets per kit are the original inputs to the area formula.
+    if (correction && area === null && e.area === null && width === null && height === null &&
+        e.sheets !== null && Number.isSafeInteger(sheetsPerKit) && sheetsPerKit > 0 &&
+        correction.sheetId === e.sheetId && correction.article === e.article) {
+      const correctedArea = e.quantity * sheetsPerKit * correction.width * correction.height;
+      if (Number.isFinite(correctedArea) && correctedArea > 0) {
+        ({ width, height } = correction);
+        area = correctedArea;
+      }
+    }
     if(area!==null&&(!Number.isFinite(area)||area<0))throw new Error('Некорректная площадь бокса');
-    return {...e,area,machine,sheets:physicalSheets,operation:action==='Порезка'?'cut':'print',sourceId:'box-printing',date:new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(e.date))};
+    return {...e,area,width,height,machine,sheets:physicalSheets,operation:action==='Порезка'?'cut':'print',sourceId:'box-printing',date:new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(e.date))};
   });
 }
-export function boxPrintingEvents(rows, orders = [], history = null) { return boxOperationEvents(rows, orders, 'Печать', history); }
+export function boxPrintingEvents(rows, orders = [], history = null, corrections = null) { return boxOperationEvents(rows, orders, 'Печать', history, corrections); }
 export function boxCuttingEvents(rows, orders = [], history = null) { return boxOperationEvents(rows, orders, 'Порезка', history); }
 export function boxJournalExceptions(rows) {
   return activeBoxJournalRows(rows).filter(row=>['Брак','Излишек'].includes(String(row[10]).trim())).map(row=>{
@@ -85,7 +132,8 @@ export async function loadBoxPrinting(reader, printing, {journalId,signal}={}) {
     const dated=rows.slice(1).filter(r=>areas.has(String(r[0]??'').trim())).map(r=>Date.parse(String(r[2])));
     if(dated.length!==areas.size||dated.some(t=>!Number.isFinite(t)))throw new Error('Исторические записи не подтверждены');
     const history={areas,cutoff:Math.max(...dated)};
-    return {...printing,boxPrinting:{status:'available',events:boxPrintingEvents(rows,printing.supplies||[],history),cutEvents:boxCuttingEvents(rows,printing.supplies||[],history),exceptions:boxJournalExceptions(rows),reason:null}};
+    const corrections = await readBoxAreaCorrections(reader, journalId, metadata, values, signal);
+    return {...printing,boxPrinting:{status:'available',events:boxPrintingEvents(rows,printing.supplies||[],history,corrections),cutEvents:boxCuttingEvents(rows,printing.supplies||[],history),exceptions:boxJournalExceptions(rows),reason:null}};
   } catch(error) {if(signal?.aborted)throw error;return unavailable('Журнал бокса недоступен или содержит неподтверждённые записи.');}
 }
 

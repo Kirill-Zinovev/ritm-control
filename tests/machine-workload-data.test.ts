@@ -5,6 +5,9 @@ import {
   buildMachineWorkload,
   resolveMachine,
   remaining,
+  workloadCutCoverage,
+  workloadCutWaitsForPrint,
+  workloadNeedsReview,
   workloadState,
 } from "../src/machineWorkloadData";
 const row = (overrides: Partial<LiveOrder> = {}): LiveOrder => ({
@@ -51,6 +54,40 @@ test("all seven machines resolve by explicit alias; unknown names stay unknown",
   assert.equal(resolveMachine("УФ-планшет")?.department, "box");
   assert.equal(resolveMachine(" 2–GO ")?.id, "2-go");
   assert.equal(resolveMachine("Лазер"), null);
+});
+
+test("unprinted rows wait for printing without inventing a cutting fact", () => {
+  const waiting = row({ printProgress: null, remainingPrint: 100, cutProgress: null });
+  const [supply] = buildMachineWorkload(snapshot([waiting]));
+  const article = supply.machines[0].rows[0];
+  assert.equal(workloadCutWaitsForPrint(waiting), true);
+  assert.equal(workloadNeedsReview(article), false);
+  assert.equal(article.cut.value, null);
+  assert.deepEqual(workloadCutCoverage([waiting]), {
+    value: null, known: 0, expected: 0, complete: true,
+  });
+});
+
+test("cutting review keeps genuine missing marks and confirmed quantities in a mixed article", () => {
+  const waiting = row({ printProgress: 0, cutProgress: null });
+  const unknown = row({ uid: "unknown", printProgress: null, cutProgress: null });
+  const printed = row({ uid: "printed", printProgress: 20, cutProgress: null });
+  const boxJournalPrint = row({
+    uid: "journal-print", printProgress: 0, cutProgress: null, planningPrinted: 5,
+  });
+  const boxJournalCut = row({
+    uid: "journal-cut", printProgress: 0, cutProgress: null, planningCut: 5,
+  });
+  const cut = row({ uid: "cut", printProgress: 0, cutProgress: 10 });
+  const orders = [waiting, unknown, printed, boxJournalPrint, boxJournalCut, cut];
+  const [supply] = buildMachineWorkload(snapshot(orders));
+  assert.equal(workloadCutWaitsForPrint(cut), false);
+  for (const uncertain of [unknown, printed, boxJournalPrint, boxJournalCut])
+    assert.equal(workloadCutWaitsForPrint(uncertain), false);
+  assert.equal(workloadNeedsReview(supply.machines[0].rows[0]), true);
+  assert.deepEqual(workloadCutCoverage(orders), {
+    value: 10, known: 1, expected: 5, complete: false,
+  });
 });
 test("one canonical supply contains both departments; progress counts printing only", () => {
   const input = snapshot([

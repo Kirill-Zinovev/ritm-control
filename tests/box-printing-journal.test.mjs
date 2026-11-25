@@ -37,6 +37,58 @@ test('missing old snapshot stays unknown and new missing area stays unknown',()=
 test('legacy sheet entries are never labelled Xerox without confirmed equipment',()=>{const a=row('a','Печать');a[15]='';const events=boxPrintingEvents([header,a]);assert.equal(events[0].sheets,null);assert.equal(events[0].area,null);});
 test('invalid active quantities and wrong-position cancellations rejected',()=>{const a=row('a','Печать');a[14]='bad';assert.throws(()=>boxPrintingEvents([header,a]),/Некорректная/);const b=row('b','Отмена','a');b[3]='other';assert.throws(()=>parseBoxJournal([header,row('a','Печать'),b]),/Отмена/);});
 test('loader reads history and journal without writes',async()=>{const rows=[header,row('a','Печать'),row('b','Порезка')];const gridRows=rs=>rs.map(r=>({values:r.map(value=>({effectiveValue:typeof value==='number'?{numberValue:value}:{stringValue:value}}))}));const reader={metadata:async()=>({spreadsheetId:'TEST',sheets:[{properties:{title:'Журнал',sheetId:8,gridProperties:{rowCount:3}}},{properties:{title:'По дням',sheetId:9,gridProperties:{rowCount:3,columnCount:22}}}]}),grid:async(id,ranges)=>ranges[0].includes('По дням')?({spreadsheetId:id,sheets:[{properties:{sheetId:9},data:[{startRow:1,startColumn:20,rowData:gridRows([['a',4.2],['b',5.2]])}]}]}):({spreadsheetId:id,sheets:[{properties:{sheetId:8},data:[{rowData:gridRows(rows)}]}]})};const result=await loadBoxPrinting(reader,{supplies:[]},{journalId:'TEST'});assert.equal(result.boxPrinting.status,'available');assert.equal(result.boxPrinting.events[0].area,4.2);assert.equal(result.boxPrinting.cutEvents[0].area,5.2);assert.equal((await loadBoxPrinting(reader,{},{})).boxPrinting.status,'unavailable');});
+test('verified Xerox dimensions fill only their original print records', async () => {
+  const missing = (id, action = 'Печать') => {
+    const event = row(id, action);
+    event[15] = event[19] = event[20] = '';
+    return event;
+  };
+  const rows = [header, missing('fixed'), missing('different-sheet'), missing('duplicate'),
+    missing('cut', 'Порезка'), missing('cancelled'), row('cancel', 'Отмена', 'cancelled'),
+    row('known', 'Печать')];
+  const corrections = [
+    ['ID записи', 'ID листа', 'Артикул', 'Ширина, м', 'Высота, м', 'Источник размера'],
+    ['fixed', 7, 'A1', .15, .11, 'Подтверждённый макет'],
+    ['different-sheet', 700, 'A1', .15, .11, 'Подтверждённый макет'],
+    ['duplicate', 7, 'A1', .15, .11, 'Подтверждённый макет'],
+    ['duplicate', 7, 'A1', .21, .30, 'Другой макет'],
+    ['cut', 7, 'A1', .15, .11, 'Подтверждённый макет'],
+    ['cancelled', 7, 'A1', .15, .11, 'Подтверждённый макет'],
+    ['known', 7, 'A1', .15, .11, 'Подтверждённый макет'],
+  ];
+  const tabs = [
+    {title:'Журнал', sheetId:8, rows},
+    {title:'По дням', sheetId:9, rows:[['known', 4.2]], startRow:1, startColumn:20},
+    {title:'Уточнения площади', sheetId:10, rows:corrections},
+  ];
+  const reader = {
+    metadata: async () => ({spreadsheetId:'TEST', sheets:tabs.map(tab => ({
+      properties:{title:tab.title, sheetId:tab.sheetId, gridProperties:{rowCount:20,columnCount:22}},
+    }))}),
+    grid: async (id, ranges) => {
+      const tab = tabs.find(t => ranges[0].includes(t.title));
+      return {spreadsheetId:id, sheets:[{properties:{sheetId:tab.sheetId}, data:[{
+        startRow:tab.startRow, startColumn:tab.startColumn,
+        rowData:tab.rows.map(r => ({values:r.map(value => ({effectiveValue:typeof value==='number'
+          ? {numberValue:value} : {stringValue:value}}))})),
+      }]}]};
+    },
+  };
+  const supplies = [{sourceId:'box-printing', spreadsheetId:'s', sheetId:7, article:'A1', machine:'XEROX'}];
+  const report = (await loadBoxPrinting(reader, {supplies}, {journalId:'TEST'})).boxPrinting;
+  assert.equal(report.status, 'available');
+  const events = new Map(report.events.map(event => [event.id, event]));
+  assert.ok(Math.abs(events.get('fixed').area - .66) < 1e-9);
+  assert.equal(events.get('fixed').quantity, 20);
+  assert.equal(events.get('fixed').sheets, 10);
+  assert.equal(events.get('fixed').width, .15);
+  assert.equal(events.get('different-sheet').area, null);
+  assert.equal(events.get('duplicate').area, null);
+  assert.equal(events.get('known').area, 4.2);
+  assert.equal(events.has('cancelled'), false);
+  assert.equal(report.cutEvents[0].area, null);
+  assert.equal(rows[1][15], '');
+});
 import {boxJournalExceptions} from '../agent/boxPrintingJournal.js';
 test('defects and surplus retain original units and comments; cancelled entries excluded',()=>{const a=row('d','Брак'), b=row('s','Излишек'), c=row('c','Отмена','d'); b[11]='Шт. товара';b[12]=5;b[22]='Осталось после печати';const result=boxJournalExceptions([header,a,b,c]);assert.equal(result.length,1);assert.equal(result[0].id,'s');assert.equal(result[0].unit,'pieces');assert.equal(result[0].comment,'Осталось после печати');assert.equal(result[0].quantity,5);});
 test('defect sheets are kept separate from printed totals',()=>{const defect=row('d','Брак');defect[22]='Полоса';const result=boxJournalExceptions([header,defect]);assert.equal(result[0].unit,'sheets');assert.equal(result[0].kind,'defect');assert.equal(boxPrintingEvents([header,defect]).length,0);});
