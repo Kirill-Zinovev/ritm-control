@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import {stockHistoryEntries, loadStockHistory, loadStockWorkspace} from '../worker/cloud/stockHistory.js';
 import {parseReadyStockId, resolveReadyStockEntry} from '../worker/cloud/stockCompletion.js';
 import {readStockSnapshot} from '../agent/stockSheets.js';
+import {readRollStockHistory} from '../agent/stockReadiness.js';
+import {closeStockBatch,stockCloseBatchInput} from '../worker/cloud/stockCloseBatch.js';
+import {randomUUID} from 'node:crypto';
 const now=Date.parse('2026-11-06T12:00:00Z');
 const op=(date,status='verified')=>({kind:'stock',createdAt:date,value:{id:'op',status,manager:'Кирилл',destination:'urgent',steps:[{department:'box',status:'verified',plan:{sheetId:1,entries:[{article:'A1',quantity:20,row:5,uid:'u1'}]}}]}});
 test('history retains seven days, only confirmed work and manager',()=>{const entries=stockHistoryEntries([op('2026-11-05T10:00:00Z'),op('2026-10-25T10:00:00Z'),op('2026-11-05T10:00:00Z','uncertain')],now);assert.equal(entries.length,1);assert.equal(entries[0].manager,'Кирилл');assert.equal(entries[0].quantity,20);});
@@ -69,4 +72,72 @@ test('pending closure is shown for verification, then retained in history withou
   assert.deepEqual(closed.checking,[]);
   assert.deepEqual(closed.entries.map(item=>[item.article,item.quantity,item.print,item.cut,item.status,item.event]),
     [['ROLL-READY',300,'done','done','closed','close']]);
+});
+
+test('a dozen closures share a source read and one write per workbook',async()=>{
+  const f=stockBooks(), source=f.book.box.find(sheet=>sheet.properties.sheetId===1);
+  const original=source.data[0].rowData[4];
+  for(let i=1;i<=10;i++){
+    const row=structuredClone(original);
+    row.values[4]=sourceRow({4:`BOX-${i}`}).values[4];
+    row.values[29]=sourceRow({29:`box-uid-${i}`}).values[29];
+    source.data[0].rowData.push(row);
+  }
+  source.properties.gridProperties.rowCount=source.data[0].rowData.length;
+  const {ready}=await loadStockWorkspace({...f,operations:[]});
+  const items=stockCloseBatchInput({items:ready.map(item=>({entryId:item.id,operationId:randomUUID()}))});
+  assert.equal(items.length,12);
+  const records=new Map(), reads=[], archives=[];
+  let historyReads=0, checkpoints=0;
+  const args={
+    items,
+    records:{get:id=>records.get(id),put:record=>records.set(record.id,record),findPending:()=>false},
+    readSnapshot:async source=>{reads.push(source.department);return readStockSnapshot(f.reader,source.department,source.destination);},
+    readRollHistory:async()=>{historyReads++;return readRollStockHistory(f.reader,'roll');},
+    checkpoint:async()=>{checkpoints++;},
+    archive:async(department,plans)=>{
+      assert.equal(records.size,12);
+      assert.equal(checkpoints,1);
+      assert.ok(plans.every(plan=>records.get(plan.operationId).status==='writing'));
+      archives.push([department,plans.length]);
+      return {results:plans.map(plan=>({...plan,status:'verified',closedAt:'2026-11-06T11:00:00Z'}))};
+    },
+    verifyArchives:()=>assert.fail('must not reread a confirmed archive'),
+  };
+  const receipts=await closeStockBatch(args);
+  assert.equal(receipts.length,12);
+  assert.ok(receipts.every(receipt=>receipt.status==='verified'));
+  assert.deepEqual(reads.sort(),['box','roll']);
+  assert.equal(historyReads,1);
+  assert.deepEqual(archives,[['roll',1],['box',11]]);
+  assert.equal(checkpoints,2);
+  await closeStockBatch(args);
+  assert.equal(archives.length,2);
+  assert.equal(checkpoints,2);
+});
+
+test('a lost batch reply is reconciled by receipt without sending the same item twice',async()=>{
+  const f=stockBooks(), {ready}=await loadStockWorkspace({...f,operations:[]});
+  const items=stockCloseBatchInput({items:ready.map(item=>({entryId:item.id,operationId:randomUUID()}))});
+  const records=new Map(), deliveries=[];
+  let archiveAvailable=false;
+  const args={
+    items,records:{get:id=>records.get(id),put:record=>records.set(record.id,record),findPending:()=>false},
+    readSnapshot:source=>readStockSnapshot(f.reader,source.department,source.destination),
+    readRollHistory:()=>readRollStockHistory(f.reader,'roll'),
+    checkpoint:async()=>{},
+    archive:async(department,[plan])=>{
+      deliveries.push(department);
+      if(department==='roll')throw new Error('lost reply');
+      return {results:[{...plan,status:'not_saved',message:'Количество изменилось'}]};
+    },
+    verifyArchives:async(department,group)=>{
+      assert.equal(department,'roll');
+      return new Map(archiveAvailable?group.map(item=>[item.id,{closedAt:'2026-11-06T11:00:00Z'}]):[]);
+    },
+  };
+  assert.deepEqual((await closeStockBatch(args)).map(item=>item.status),['uncertain','not_saved']);
+  archiveAvailable=true;
+  assert.deepEqual((await closeStockBatch(args)).map(item=>item.status),['verified','not_saved']);
+  assert.deepEqual(deliveries,['roll','box']);
 });

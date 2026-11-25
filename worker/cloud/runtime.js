@@ -40,11 +40,11 @@ import { evaluateArkadyWatch } from './arkadyWatch.js';
 import { evaluateStockWatch, formatStockCompletion } from './arkadyStockWatch.js';
 import { assignmentPresentation, stockCompletionPresentation, supplyWatchPresentation } from './arkadyCards.js';
 import { loadStockHistory, loadStockWorkspace, stockHistoryEntries, stockNotificationBatches } from './stockHistory.js';
-import { parseReadyStockId, resolveReadyStockEntry, stockCloseIsPending, stockTaskKey, stockTaskReadiness } from './stockCompletion.js';
+import { parseReadyStockId, resolveReadyStockEntry, stockTaskReadiness } from './stockCompletion.js';
+import { runStockCloseBatch, stockCloseBatchInput, stockCloseRecords } from './stockCloseBatch.js';
 import { pendingStockDetails,inspectStockReceipts } from './stockDiagnostics.js';
 import { readStockSnapshot } from "../../agent/stockSheets.js";
 import { readRollStockHistory } from '../../agent/stockReadiness.js';
-import { stockArticleKey } from '../../agent/stockClosePlan.js';
 import { closeStockTask } from '../../agent/stockCloseOperations.js';
 import { verifyArchivedStockClose } from './stockCloseRecovery.js';
 import { productionTabVisibility, reconcileProductionTabs } from "./productionTabs.js";
@@ -100,6 +100,7 @@ function managerRouteAllowed(method, path) {
     "/api/arkady-reminder",
     "/api/stocks/preview",
     "/api/stocks/close",
+    "/api/stocks/close/batch",
     "/api/stocks",
   ].includes(path);
 }
@@ -775,16 +776,7 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
         const services=await createServices(bindings,scope,{fetcher,manager});
         await services.guard();
         const id=sourceId(bindings,source.department==='box'?'stockBoxPrintingId':'stockRollPrintingId');
-        const records={
-          get:operationId=>scope.operations.get('stock-close:'+operationId)?.value||null,
-          put:op=>scope.putOperation('stock-close',op),
-          findPending:item=>[...scope.operations.values()].some(({kind,value})=>{
-            if(kind==='stock-close') return stockCloseIsPending(value) && stockTaskKey(value)===stockTaskKey(item);
-            return kind==='stock' && !['verified','not_saved'].includes(value?.status) && value?.destination===item.destination &&
-              value.steps?.some(step=>step.department===item.department && step.plan?.sheetId===item.sheetId &&
-                step.plan.entries?.some(row=>row.row===item.row || stockArticleKey(row.article)===stockArticleKey(item.article)));
-          }),
-        };
+        const records=stockCloseRecords(scope);
         const readSnapshot=()=>readStockSnapshot(services.reader,id,source.destination);
         try {
           const snapshot=prior ? null : await readSnapshot();
@@ -811,6 +803,21 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
         }
       },{waitMs:3000});
       return json({ok:true,operation});
+    }
+    if(path==='/api/stocks/close/batch') {
+      methods(request,['POST']);
+      if(assemblyControlApp||bridgeId)throw new CloudError('stock_manager_scope_required','Действие доступно только из RITM.',403);
+      const items=stockCloseBatchInput(await readJson(request,8192));
+      const manager=principal?.displayName||principal?.username||'RITM';
+      const results=await store.withScope(async scope=>{
+        const services=await createServices(bindings,scope,{fetcher,manager});
+        await services.guard();
+        const alreadyClosed=new Set(items.filter(item=>scope.operations.get('stock-close:'+item.operationId)?.value?.status==='verified').map(item=>item.operationId));
+        const receipts=await runStockCloseBatch(items,{scope,services,bindings,manager});
+        for(const receipt of receipts)if(receipt.status==='verified'&&!alreadyClosed.has(receipt.id))appendAudit(scope,principal,path,receipt);
+        return receipts.map(({id,status,message})=>({id,status,message}));
+      },{waitMs:3000});
+      return json({ok:true,results});
     }
     if (path === '/api/stocks/preview') {
       methods(request,['POST']);

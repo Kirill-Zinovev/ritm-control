@@ -38,6 +38,7 @@ export function createStockGateway({url,token,fetcher=fetch,beforeWrite,dryRunSu
       return send({operationId,sheetId,entries,dryRun:true},['verified','validated'],true);
     },
     closeStockTask:plan=>send({...plan,action:'close'}),
+    closeStockBatch:tasks=>send({tasks,action:'closeBatch'},'close_batch'),
     health:()=>send({action:'health'},'ready'),
   };
 }

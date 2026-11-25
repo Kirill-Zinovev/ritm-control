@@ -9,7 +9,8 @@ function doPost(e) {
   try {
     var input=JSON.parse(e.postData.contents),props=PropertiesService.getScriptProperties(),token=props.getProperty('STOCK_GATEWAY_TOKEN');
     if(!token||input.token!==token)throw new Error('Доступ не подтверждён.');
-    var result=input.action==='health'?stockGatewayHealth_():input.action==='close'?stockCloseGateway_(input,props,'roll'):stockGatewayApply_(input,props);
+    var result=input.action==='health'?stockGatewayHealth_():input.action==='close'?stockCloseGateway_(input,props,'roll'):
+      input.action==='closeBatch'?stockCloseBatchGateway_(input,props,'roll'):stockGatewayApply_(input,props);
     return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
   } catch(error) {return ContentService.createTextOutput(JSON.stringify({ok:false,message:String(error.message||error)})).setMimeType(ContentService.MimeType.JSON);}
 }

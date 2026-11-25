@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ClipboardCheck, RefreshCw } from 'lucide-react';
 import { Button, Modal, Notice } from './ui';
 import { runStockRequest } from './stockRecovery';
+import { stockCloseBatchSize } from '../shared/stockCloseBatch.js';
 
 type Source = { department: 'roll' | 'box'; destination: 'warehouse' | 'urgent' };
 type Task = Source & { id: string; article: string; quantity: number };
@@ -39,6 +40,24 @@ async function closeTask({ id, operationId }: CloseTask) {
   return {operation:data.operation};
 }
 
+async function closeTasks(tasks: CloseTask[]) {
+  if(tasks.length===1) {
+    const result=await closeTask(tasks[0]);
+    return {...result,results:[result.operation]};
+  }
+  const response=await fetch('/api/stocks/close/batch',{
+    method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},
+    body:JSON.stringify({items:tasks.map(task=>({entryId:task.id,operationId:task.operationId}))}),
+    signal:AbortSignal.timeout(125_000),
+  });
+  const data=await response.json() as {ok:boolean;results?:CloseReceipt[];message?:string};
+  if(!response.ok || !data.ok || !Array.isArray(data.results) || data.results.length!==tasks.length ||
+     data.results.some((receipt,index)=>receipt?.id!==tasks[index].operationId))
+    throw new Error(data.message||'Сервер не подтвердил завершение пакета.');
+  const pending=data.results.find(item=>item.status!=='verified' && item.status!=='not_saved');
+  return {operation:pending||{status:'verified'},results:data.results};
+}
+
 export default function StockTaskHistory({ blocked, setBusy, revision }: { blocked:boolean; setBusy:(busy:boolean)=>void; revision:number }) {
   const [tasks,setTasks] = useState<StockTasks>({entries:[],ready:[],checking:[],unavailable:[]});
   const [loading,setLoading] = useState(true);
@@ -47,6 +66,7 @@ export default function StockTaskHistory({ blocked, setBusy, revision }: { block
   const [confirmation,setConfirmation] = useState<{ tasks:Task[]; all:boolean } | null>(null);
   const [batch,setBatch] = useState(readCloseBatch);
   const [result,setResult] = useState<CloseBatch | null>(null);
+  const [confirmedInBatch,setConfirmedInBatch] = useState(0);
   const runningRef = useRef(false);
   const reloadRef = useRef(0);
   const [running,setRunning] = useState(false);
@@ -74,17 +94,25 @@ export default function StockTaskHistory({ blocked, setBusy, revision }: { block
     setConfirmation(null);
     setCloseError('');
     setResult(null);
+    setConfirmedInBatch(0);
     let current=start;
     try {
       while(current.next<current.tasks.length) {
         sessionStorage.setItem(pendingKey,JSON.stringify(current));
         setBatch(current);
-        const task=current.tasks[current.next];
-        const receipt=await runStockRequest(closeTask,task,{attempts:2});
-        const issues=receipt.operation.status==='not_saved'
-          ? [...current.issues,{id:task.id,article:task.article,message:receipt.operation.message || 'Готовность больше не подтверждается.'}]
-          : current.issues;
-        current={...current,next:current.next+1,issues};
+        const group=current.tasks.slice(current.next,current.next+stockCloseBatchSize);
+        const receipts=await runStockRequest(closeTasks,group,{
+          attempts:2,
+          onResult:(response:Awaited<ReturnType<typeof closeTasks>>)=>setConfirmedInBatch(
+            response.results.filter(item=>item.status==='verified'||item.status==='not_saved').length),
+        });
+        const issues=receipts.results.flatMap((receipt:CloseReceipt,index:number)=>{
+          const {id,article}=group[index];
+          return receipt.status==='not_saved'?[{id,article,message:receipt.message||'Готовность больше не подтверждается.'}]:[];
+        });
+        current={...current,next:current.next+group.length,issues:[...current.issues,...issues]};
+        setBatch(current);
+        setConfirmedInBatch(0);
       }
       sessionStorage.removeItem(pendingKey);
       setBatch(null);
@@ -92,10 +120,10 @@ export default function StockTaskHistory({ blocked, setBusy, revision }: { block
     } catch(error) {
       setCloseError(error instanceof Error ? error.message : 'Не удалось подтвердить завершение.');
     } finally {
-      await reload();
       runningRef.current=false;
       setRunning(false);
       setBusy(false);
+      void reload();
     }
   }
 
@@ -110,6 +138,7 @@ export default function StockTaskHistory({ blocked, setBusy, revision }: { block
       sessionStorage.removeItem(pendingKey);
       setBatch(null);
       setCloseError('');
+      setConfirmedInBatch(0);
       void reload();
     } catch {
       setCloseError('Браузер не подтвердил остановку списка.');
@@ -118,7 +147,6 @@ export default function StockTaskHistory({ blocked, setBusy, revision }: { block
 
   const disabled=blocked || loading || !!loadError;
   const readyById=new Map(tasks.ready.map(task=>[task.id,task]));
-  const active=batch?.tasks[batch.next];
   return <>
     <section className="stock-history" aria-labelledby="stock-ready-title">
       <div className="stock-history-heading">
@@ -137,7 +165,7 @@ export default function StockTaskHistory({ blocked, setBusy, revision }: { block
       {!!tasks.unavailable.length && !loadError && <Notice tone="warning">Не удалось проверить {tasks.unavailable.map(sourceLabel).join(', ')}. Здесь показаны позиции из проверенных листов.</Notice>}
       {batch && <div className="stock-completion-feedback" aria-live="polite">
         <div><strong>{running?'Завершаем позиции':'Завершение приостановлено'}</strong>
-          <p>Проверено {batch.next} из {batch.tasks.length}{active ? ` · ${active.article}` : ''}</p></div>
+          <p>Проверено {batch.next+confirmedInBatch} из {batch.tasks.length}</p></div>
         {!running && <div className="stock-history-actions">
           <Button disabled={blocked} onClick={stopBatch}>Остановить оставшиеся</Button>
           <Button disabled={blocked} onClick={()=>void finish(batch)}>Сверить и продолжить</Button>
