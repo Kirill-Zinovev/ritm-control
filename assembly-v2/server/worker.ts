@@ -1,7 +1,7 @@
 import { api, json } from "./api";
 import { createDatabase, camelRows } from "./database";
 import { catalogApi, type FileStore } from "./catalog-api";
-import { ritmApi, ritmConfigured, type RitmEnv } from "./ritm-api";
+import { ritmApi, ritmConfigured, syncRitmStockCatalog, type RitmEnv } from "./ritm-api";
 import { drainWorkOutbox } from "./ritm-outbox";
 import { accessApi, assemblyOwnerAccount, authenticate, sameOrigin, type AccessEnv } from "./access";
 import { readRitmWarehousePage } from "./ritm-warehouse";
@@ -96,7 +96,9 @@ export default {
           503,
         );
       const actor = principal.actor;
-      const db = createDatabase(store);
+      const db = createDatabase(store, ctx?.waitUntil ? () => {
+        ctx.waitUntil(syncRitmStockCatalog(env).catch(() => false));
+      } : undefined);
       if (principal.role==="service") {
         try {
           await store.batch([{sql:"delete from av2_service_nonces where seen_at<?",args:[Date.now()-300000]},{sql:"insert into av2_service_nonces(id,seen_at) values(?,?)",args:[principal.nonce!,Date.now()]}]);

@@ -94,7 +94,7 @@ function stable(value: unknown): string {
   return JSON.stringify(value);
 }
 
-export function createDatabase(store: SqlStore): Database {
+export function createDatabase(store: SqlStore, onCatalogCommit?: () => void): Database {
   const all = <T>(sql: string, args: (string | number | null)[] = []) =>
     store.all<T>(sql, args);
   async function one<T>(
@@ -1218,6 +1218,8 @@ export function createDatabase(store: SqlStore): Database {
               "insert into av2_meta(id,revision) values(1,1) on conflict(id) do update set revision=revision+1",
             ),
           ]);
+          if (action === "catalog.save" || action === "catalog.activate" || action === "photo.assign")
+            onCatalogCommit?.();
           return prepared.result;
         } catch (error) {
           if (

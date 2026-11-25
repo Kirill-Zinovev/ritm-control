@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { openDatabase } from "../server/local-db";
-import { syncRitm, ritmApi } from "../server/ritm-api";
+import { syncRitm, ritmApi, syncRitmStockCatalog } from "../server/ritm-api";
 import { readWorkHistory } from "../server/work-history";
 import type { RitmFeed, RitmSupply, RitmPosition } from "../shared/ritm";
 import type { CatalogEntry } from "../shared/catalog";
@@ -14,6 +14,23 @@ const env = {
     "https://ritm-erp.zinovevkirill234.chatgpt.site/api/assembly-v2/feed",
   RITM_ASSEMBLY_V2_FEED_SECRET: "ab".repeat(32),
 };
+
+test("catalog saves can signal only the signed stock catalog refresh", async () => {
+  const refresh = await syncRitmStockCatalog(env, async (input, init) => {
+    const request = new Request(input, init);
+    const path = "/api/assembly-v2/stock-catalog-sync";
+    assert.equal(request.url, `https://ritm-erp.zinovevkirill234.chatgpt.site${path}`);
+    assert.equal(request.redirect, "manual");
+    const body = await request.text();
+    assert.equal(body, "{}");
+    const signed = JSON.stringify([1, "POST", path, request.headers.get("x-assembly-v2-at"),
+      request.headers.get("x-assembly-v2-nonce"), createHash("sha256").update(body).digest("hex")]);
+    assert.equal(request.headers.get("x-assembly-v2-signature"), createHmac("sha256", env.RITM_ASSEMBLY_V2_FEED_SECRET).update(signed).digest("hex"));
+    return Response.json({ ok: true });
+  });
+  assert.equal(refresh, true);
+});
+
 const position = (
   sku: string,
   sourceId: RitmPosition["sourceId"] = "roll-printing",

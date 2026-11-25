@@ -40,6 +40,32 @@ interface SyncRow {
 export const ritmConfigured = (env: RitmEnv): boolean =>
   env.RITM_ASSEMBLY_V2_FEED_URL === endpoint &&
   /^[a-f0-9]{64}$/.test(env.RITM_ASSEMBLY_V2_FEED_SECRET || "");
+
+export async function syncRitmStockCatalog(env: RitmEnv, fetcher: typeof fetch = fetch) {
+  if (!ritmConfigured(env)) return false;
+  const path = "/api/assembly-v2/stock-catalog-sync";
+  const body = "{}", bodyHash = await digest(body);
+  for (const delay of [0, 1500]) {
+    if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+    const at = String(Date.now()), nonce = crypto.randomUUID();
+    const signature = await hmac(env.RITM_ASSEMBLY_V2_FEED_SECRET!,
+      JSON.stringify([1, "POST", path, at, nonce, bodyHash]));
+    try {
+      const response = await fetcher(new URL(path, endpoint), {
+        method: "POST", body, redirect: "manual", signal: AbortSignal.timeout(12000),
+        headers: { "content-type": "application/json", "x-assembly-v2-at": at,
+          "x-assembly-v2-nonce": nonce, "x-assembly-v2-signature": signature },
+      });
+      if (response.ok && (await response.json() as { ok?: boolean })?.ok === true) return true;
+      if (![409, 429, 500, 502, 503, 504].includes(response.status)) return false;
+      await response.body?.cancel();
+    } catch {
+      // A later normal RITM refresh also reconciles these catalog fields.
+    }
+  }
+  return false;
+}
+
 async function syncRow(store: SqlStore) {
   return (
     await store.all<SyncRow>("select * from av2_ritm_sync where id=1")
