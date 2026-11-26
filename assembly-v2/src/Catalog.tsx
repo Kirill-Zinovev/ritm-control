@@ -1,4 +1,6 @@
 import { CatalogEditor } from "./CatalogEditor";
+import { CatalogWbPhotos } from "./CatalogWbPhotos";
+import { useAccess } from "./Access";
 import { catalogKey } from "../shared/catalog";
 import {
   catalogHandoffBarcode, catalogHandoffStore, emptyCatalogProduct,
@@ -54,6 +56,7 @@ const labels: Record<string, string> = {
   store: "Магазин",
 };
 export function Catalog({ workspace: w }: { workspace: Workspace }) {
+  const owner = useAccess() === "owner";
   const [initial] = useState(() => new URLSearchParams(location.search));
   const handoffBarcode = initial.get("catalog_barcode");
   const handoffMarket = initial.get("catalog_market");
@@ -88,6 +91,7 @@ export function Catalog({ workspace: w }: { workspace: Workspace }) {
   const draftEditor = editor && editor !== "new" && "draft" in editor ? editor : null;
   const initialDraft = draftEditor?.draft;
   const [importing, setImporting] = useState(false);
+  const [importingPhotos, setImportingPhotos] = useState(false);
   const [version, setVersion] = useState(0);
   const [notice, setNotice] = useState("");
   const [opening,setOpening]=useState(false);
@@ -226,7 +230,11 @@ export function Catalog({ workspace: w }: { workspace: Workspace }) {
           <h1>Справочник</h1>
           <p className="muted">Артикулы, упаковка, станки и фотографии</p>
         </div>
-        <div className="catalog-heading-actions"><Button onClick={() => safely(()=>setImporting(true))}>Загрузить Excel</Button><Button primary disabled={!data?.active || !canOpenEditor} onClick={()=>safely(()=>{editorRequest.current?.abort();setOpening(false);setEditor("new")})}>+ Добавить товар</Button></div>
+        <div className="catalog-heading-actions">
+          {owner && <Button disabled={!data?.active} onClick={() => safely(() => setImportingPhotos(true))}>Загрузить фото WB</Button>}
+          <Button onClick={() => safely(() => setImporting(true))}>Загрузить Excel</Button>
+          <Button primary disabled={!data?.active || !canOpenEditor} onClick={() => safely(() => {editorRequest.current?.abort();setOpening(false);setEditor("new");})}>+ Добавить товар</Button>
+        </div>
       </div>
       {notice ? (
         <p className="status-success" role="status">
@@ -503,6 +511,15 @@ export function Catalog({ workspace: w }: { workspace: Workspace }) {
           }}
         />
       ) : null}
+      {owner && importingPhotos && data?.active && (
+        <CatalogWbPhotos importId={data.active.id} onClose={() => setImportingPhotos(false)} onSaved={(rows) => {
+          setImportingPhotos(false);
+          setVersion(v => v + 1);
+          const count = (status: string) => rows.filter(row => row.status === status).length;
+          setNotice("Новых карточек " + count("created") + " · фото добавлено в карточки " + count("updated") +
+            " · уже с фото " + count("already") + " · требуют проверки " + count("review") + ".");
+        }} />
+      )}
     </main>
   );
 }

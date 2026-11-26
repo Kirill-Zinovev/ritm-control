@@ -8,11 +8,12 @@ import type { SqlStore } from "./database";
 const archiveStates = "d.state in ('sent','canceled')";
 const cartonIds = "coalesce(d.carton_ids,(select json_group_array(c.id) from av2_cartons c where c.dispatch_id=d.id))";
 const dispatchColumns = "d.id,d.label,d.market,d.store,d.destination,d.state,d.created_at,d.sent_at,coalesce(d.qty,0) qty";
-const cartonWasReturned = `exists(
+export const returnedCarton = (cartonId: string) => `exists(
   select 1 from av2_commands cmd
-  where cmd.action in ('dispatch.returnCarton','ritm.carton.dispatch') and cmd.carton_id=ids.value
+  where cmd.action in ('dispatch.returnCarton','ritm.carton.dispatch') and cmd.carton_id=${cartonId}
     and json_extract(cmd.result,'$.dispatchId')=d.id and json_extract(cmd.result,'$.status')='pending'
 )`;
+const cartonWasReturned = returnedCarton("ids.value");
 const returnedCartonCount = `case when d.state='sent' then (
   select count(*) from json_each(${cartonIds}) ids where ${cartonWasReturned}
 ) else 0 end returned_carton_count`;
@@ -54,7 +55,7 @@ export async function readDispatchHistoryPage(store: SqlStore, page: number, que
   };
 }
 
-function literalSearchPattern(query: string) {
+export function literalSearchPattern(query: string) {
   // SQLite's built-in case-insensitive comparison covers ASCII only.
   return Array.from(query, (char) => {
     if ("[*?".includes(char)) return `[${char}]`;

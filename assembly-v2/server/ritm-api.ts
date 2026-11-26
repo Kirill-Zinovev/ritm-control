@@ -555,7 +555,8 @@ export async function ritmApi(
     const photoById = new Map(photos.map(photo => [photo.photoId,photo.url]));
     const entries = catalogRows.map(({row, entry}) => {
       const matches = new Set(entry.aliases.map(alias => bySku.get(alias)).filter(Boolean));
-      const photo = entry.photoUrl || (entry.photoId ? photoById.get(entry.photoId) : "");
+      const primaryPhoto = entry.photoUrl || (entry.photoId ? photoById.get(entry.photoId) : "");
+      const photo = primaryPhoto && photoAllowed(primaryPhoto) ? primaryPhoto : entry.layoutPhotoUrl;
       return {
         article: row.alias, primary: !!row.isPrimary, store: entry.store,
         machine: entry.machine, sheetsPerUnit: entry.sheetsPerUnit, xeroxMultiplicity: entry.xeroxMultiplicity,

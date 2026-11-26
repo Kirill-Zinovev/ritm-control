@@ -4,6 +4,7 @@ import { sameCartonScope } from "../shared/carton-scope";
 import { cartonMergeFingerprint, checkCartonMerge, type CartonMergeReceipt } from "../shared/carton-merge";
 import { planCartonTransfers, type MergeAllocation } from "./carton-merge";
 import { catalogAttachLabelsPlan, catalogSavePlan } from "./catalog-editor";
+import { catalogImportWbPhotosPlan } from "./catalog-wb-photo";
 import { arkadyCatalogAction, arkadyCatalogPlan } from "./arkady-catalog";
 import { arkadyWbIntakeAction, arkadyWbIntakePlan } from "./arkady-wb-intake";
 import { searchPositions } from "./position-search";
@@ -274,6 +275,7 @@ export function createDatabase(store: SqlStore, onCatalogCommit?: () => void): D
     if (action === arkadyCatalogAction) return arkadyCatalogPlan(store,payload,actor,now);
     if (action === arkadyWbIntakeAction) return arkadyWbIntakePlan(store,payload,actor,now);
     if (action === "catalog.attachLabels") return catalogAttachLabelsPlan(store,payload,actor,now);
+    if (action === "catalog.importWbPhotos") return catalogImportWbPhotosPlan(store, payload, actor, now);
     if (action.startsWith("quality.") || action === "catalog.applyWorkNorms")
       return qualityPlan(store, action, payload, actor, now);
     if (action === "legacy.restore")

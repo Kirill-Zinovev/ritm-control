@@ -58,6 +58,8 @@ export interface CatalogPhoto {
 export interface CatalogEntry {
   printExtension?: string;
   photoUrl?: string | null;
+  /** Public photo for Sheets when the main catalog image cannot leave RITM. */
+  layoutPhotoUrl?: string;
   kindCorrection?: string;
   id: string;
   market: Market;

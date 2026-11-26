@@ -10,6 +10,7 @@ import { databaseBackup, databaseBackupPath } from "./database-backup.mjs";
 import { r2Backup, r2BackupPath, type R2BackupBucket } from "./r2-backup";
 import { arkadyWbIntakePath } from "../shared/catalog-editor";
 import { arkadyWbIntakeApi } from "./arkady-wb-intake";
+import { shipmentTrackingApi, shipmentTrackingPath } from "./shipment-tracking";
 interface Prepared {
   bind(...values: (string | number | null)[]): Prepared;
   all(): Promise<{ results: Record<string, unknown>[] }>;
@@ -22,6 +23,7 @@ interface D1 {
   withSession?(constraint: string): D1;
 }
 export interface Env extends RitmEnv, AccessEnv {
+  OZON_SHIPMENT_TRACKING_TOKEN_SHA256?: string;
   ASSETS?: { fetch(request: Request): Promise<Response> };
   DB?: D1;
   BUCKET?: R2BackupBucket & {
@@ -90,6 +92,8 @@ export default {
       return r2Backup(request, env.BUCKET, Boolean(assemblyOwnerAccount(request, env)));
     }
     const store=env.DB ? accessStore(env.DB) : undefined;
+    if (url.pathname === shipmentTrackingPath)
+      return shipmentTrackingApi(request, env.OZON_SHIPMENT_TRACKING_TOKEN_SHA256, store);
     if (url.pathname.startsWith("/api/access")) return accessApi(request,env,store);
     if (url.pathname === "/api/config")
       return json({

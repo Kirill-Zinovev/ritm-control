@@ -182,7 +182,7 @@ export async function api(
         command.key,
         actor,
       );
-      if (["legacy.restore", "legacy.adoptCarton", "catalog.attachLabels"].includes(command.action))
+      if (["legacy.restore", "legacy.adoptCarton", "catalog.attachLabels", "catalog.importWbPhotos"].includes(command.action))
         return json({ result, state: null, refreshRequired: true });
       const selected =
         typeof result.supplyId === "string"
