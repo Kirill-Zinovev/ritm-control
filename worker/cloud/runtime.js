@@ -52,8 +52,9 @@ import { syncProductionSheetCatalog } from "./productionSheetCatalog.js";
 import { importAssemblyProductionExtensions, readAssemblyItemCatalog, readWorkloadCatalog } from "./assemblyProductionCatalog.js";
 import { arkadyCatalog } from "./arkadyCatalog.js";
 import { arkadyWbIntake, arkadyWbIntakeMaxBytes } from "./arkadyWbIntake.js";
-import { ARKADY_COMPLETION_RECIPIENTS, bitrixConfigured, decryptBitrixConfig, drainBitrixNotifications, encryptBitrixConfig, sendBitrixNotification, sendBitrixTaskReminder, completionPraise, retireObsoleteBitrixNotifications } from './bitrixNotifications.js';
-import { saveBitrixPreference, saveBitrixConfiguration } from './bitrixSettings.js';
+import { ARKADY_COMPLETION_RECIPIENTS, bitrixConfigured, decryptBitrixConfig, drainBitrixNotifications, encryptBitrixConfig, sendBitrixNotification, sendBitrixTaskReminder, sendBitrixCutReminder, completionPraise, retireObsoleteBitrixNotifications } from './bitrixNotifications.js';
+import { cutReminderRecipients, cutReminderRecipientsKey, saveBitrixPreference, saveBitrixConfiguration, validateCutReminderRecipients } from './bitrixSettings.js';
+import { runArkadyCutReminders } from './arkadyCutReminders.js';
 import { listBitrixRecipients, readBitrixRecipient } from './bitrixRecipients.js';
 import { drainProductionTaskReminders, normalizeProductionTaskReminder, TASK_REMINDER_KIND } from './productionTaskReminders.js';
 import { productionTaskReminderVerifier } from './productionTaskReminderChecks.js';
@@ -245,15 +246,21 @@ export async function maintenance(bindings, store, { fetcher = fetch, refresh = 
     result.ok = result.ok && result.refreshed.every(row => row.ok);
   }
   if (!result.deliverySkipped) {
+    let taskBindings;
+    const bitrix = () => taskBindings ||= taskBitrixConfig(bindings, store);
     try {
-      let taskBindings;
-      const bitrix = () => taskBindings ||= taskBitrixConfig(bindings, store);
       result.taskReminders = await drainProductionTaskReminders(store, {
         verify: productionTaskReminderVerifier(bindings, store, fetcher, taskPrinting),
         readRecipient: async id => readBitrixRecipient(await bitrix(), id, fetcher),
         send: async (schedule, controls) => sendBitrixTaskReminder(await bitrix(), schedule, controls, fetcher),
       });
     } catch (error) { result.taskReminders = { error: error.code || 'task_reminders_failed' }; }
+    if (taskPrinting && !taskPrinting.stale) try {
+      result.cutReminders = await runArkadyCutReminders(store, taskPrinting, {
+        readRecipient: async id => readBitrixRecipient(await bitrix(), id, fetcher),
+        send: async (id, issue) => sendBitrixCutReminder(await bitrix(), id, issue, fetcher),
+      });
+    } catch (error) { result.cutReminders = { error: error.code || 'cut_reminders_failed' }; }
   }
   // A delivery may refresh the same large printing report. Never overlap it
   // with the ordinary refresh or retain another full history scope meanwhile.
@@ -688,6 +695,16 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
           await saveBitrixPreference(store, 'humorLevel', input.humorLevel);
         } else if (Object.keys(input).join() === 'reminderHumorLevel' && ['off', 'sometimes', 'always'].includes(input.reminderHumorLevel)) {
           await saveBitrixPreference(store, 'reminderHumorLevel', input.reminderHumorLevel);
+        } else if (Object.keys(input).join() === 'cutReminderRecipients') {
+          const recipients = validateCutReminderRecipients(input.cutReminderRecipients);
+          const ids = [...new Set(Object.values(recipients).filter(Boolean))];
+          if (ids.length) {
+            const config = await taskBitrixConfig(bindings, store);
+            const employees = await Promise.all(ids.map(id => readBitrixRecipient(config, id, fetcher)));
+            if (employees.some((employee, index) => employee?.id !== ids[index]))
+              throw new CloudError('bitrix_recipient_unavailable', 'Выбранный сотрудник недоступен в Битрикс24. Проверьте получателей.', 409);
+          }
+          await saveBitrixPreference(store, 'cutReminderRecipients', recipients);
         } else if (Object.keys(input).join() === 'chatId' && /^chat\d+$/.test(input.chatId)) {
           const saved = await store.readMeta('bitrixNotificationConfig');
           if (!saved) throw new CloudError('bitrix_not_configured','Сначала настройте подключение бота.',409);
@@ -713,7 +730,7 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
       if (saved) try { const cfg = await decryptBitrixConfig(bindings,saved); configured = bitrixConfigured(cfg); chatId = cfg.RITM_BITRIX_ROLL_CHAT; } catch { /* invalid saved configuration */ }
       const events = [...scope.operations.values()].filter(row => row.kind === 'bitrix-notification').map(row => row.value);
       const last = events.filter(event => event.status === 'sent').sort((a,b)=>String(b.updatedAt||'').localeCompare(String(a.updatedAt||'')))[0];
-      return json({ok:true,configured,enabled:scope.meta('bitrixNotificationsEnabled') !== false,humorLevel:scope.meta('bitrixHumorLevel') || 'always',reminderHumorLevel:scope.meta('bitrixReminderHumorLevel') || 'off',chatId,pending:events.filter(event=>event.status==='pending').length,uncertain:events.filter(event=>['uncertain','sending'].includes(event.status)).length,lastSentAt:last?.updatedAt||null});
+      return json({ok:true,configured,enabled:scope.meta('bitrixNotificationsEnabled') !== false,humorLevel:scope.meta('bitrixHumorLevel') || 'always',reminderHumorLevel:scope.meta('bitrixReminderHumorLevel') || 'off',cutReminderRecipients:cutReminderRecipients(scope.meta(cutReminderRecipientsKey)),chatId,pending:events.filter(event=>event.status==='pending').length,uncertain:events.filter(event=>['uncertain','sending'].includes(event.status)).length,lastSentAt:last?.updatedAt||null});
     }
     if (path === '/api/bitrix-setup') {
       methods(request, ['POST']);

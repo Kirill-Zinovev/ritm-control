@@ -8,8 +8,10 @@ import {
   assignmentPresentation,
   stockCompletionPresentation,
   supplyWatchPresentation,
+  cutMarkReminderPresentation,
   arkadyCardContent,
   arkadyCardCaption,
+  arkadyMessageFields,
 } from "../worker/cloud/arkadyCards.js";
 import {
   renderArkadyCard,
@@ -129,6 +131,43 @@ function decodePng(png) {
       Array.from(pixels.subarray((y * width + x) * 3, (y * width + x) * 3 + 3)),
   };
 }
+
+test("cut mark reminder sends a navy Arkady card with evidence, exact count and one source link", async () => {
+  const event = {presentation: cutMarkReminderPresentation({
+    name: "OZON Ярославль · Магазин 1",
+    department: "roll",
+    articleCount: 12,
+    articles: ["QA0003.A0788", "QA0003.A0788", "QA0001.A0053", "QA0012.A0458", "QA0007.A0010"],
+    url: book("roll"),
+  })};
+  const result = await renderArkadyCard(event, assetBinding);
+  const png = decodePng(result.png);
+  assert.equal(png.width, 1000);
+  assert.ok(png.height < 650);
+  assert.deepEqual(png.pixel(0, 0), [17, 31, 56]);
+  assert.deepEqual(png.pixel(0, png.height - 1), [246, 248, 252]);
+  assert.notDeepEqual(png.pixel(75, 62), png.pixel(74, 30));
+  assert.equal(result.model.heading, "Проверить отметки порезки");
+  assert.equal(result.model.status, "Не хватает отметок · 12 артикулов");
+  assert.equal(result.model.selection, "QA0003.A0788 · QA0001.A0053 · QA0012.A0458 · ещё 9");
+  const words = result.layout.lines.join(" ");
+  assert.match(words, /По этим артикулам печать готова и упаковка уже началась/);
+  assert.match(words, /OZON Ярославль · Магазин 1/);
+  assert.match(words, /Рулонная печать/);
+  assert.equal(result.caption, `[URL=${book("roll")}]Открыть лист печати ↗[/URL]`);
+  const fallback = arkadyMessageFields(event);
+  assert.equal(fallback.ATTACH.BLOCKS.at(-1).GRID[0].LINK, book("roll"));
+  assert.equal(fallback.ATTACH.BLOCKS[2].GRID[0].VALUE, result.model.selection);
+
+  const unknownUrl = {presentation: cutMarkReminderPresentation({
+    name: "OZON",
+    department: "box",
+    articleCount: 1,
+    articles: ["QA0003.A0788"],
+    url: "https://example.invalid/",
+  })};
+  assert.match(arkadyCardCaption(arkadyCardContent(unknownUrl)), /chatgpt\.site\/\?page=supplies\]Открыть поставки в RITM/);
+});
 
 test("every automatic scenario renders the real complete PNG with larger type and prominent subject", async () => {
   const scenarios = [

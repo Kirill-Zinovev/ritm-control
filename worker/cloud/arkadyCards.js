@@ -67,11 +67,33 @@ export function taskReminderPresentation(schedule, controls) {
   };
 }
 
+const cutMarkTask = 'Проверить отметки порезки';
+const cutMarkReason = 'По этим артикулам печать готова и упаковка уже началась.';
+
+export function cutMarkReminderPresentation({name, department, articleCount, articles: skus, url}) {
+  const selected = [...new Set((Array.isArray(skus) ? skus : []).map(sku => text(sku, 80)).filter(Boolean))];
+  const count = validQuantity(articleCount) ? Math.max(articleCount, selected.length) : selected.length;
+  return {
+    version: 1, type: 'cut-mark-reminder', title: text(name, 180), department,
+    articleCount: count, articles: selected.slice(0, 3), url: sheetUrl(url),
+  };
+}
+
 // Shared readable content for the PNG and its clickable source links.
 // The durable event owns readiness and membership; rendering never re-queries
 // production data or consumes another joke/praise sequence.
 export function arkadyCardContent(event) {
   const card=event.presentation;
+  if (card?.version === 1 && card.type === 'cut-mark-reminder' && labels[card.department] &&
+      validQuantity(card.articleCount) && Array.isArray(card.articles)) {
+    const remaining = card.articleCount - card.articles.length;
+    return {
+      type: card.type, heading: cutMarkTask, subtitle: cutMarkReason, subject: card.title,
+      department: labels[card.department], status: `Не хватает отметок · ${articles(card.articleCount)}`,
+      selection: [...card.articles, ...(remaining > 0 ? [`ещё ${number(remaining)}`] : [])].join(' · '),
+      url: sheetUrl(card.url),
+    };
+  }
   if (card?.version === 1 && card.type === 'task-reminder') return {
     type: card.type, urgent: card.urgent, heading: 'Напоминание о задаче',
     subject: card.title, task: card.task, note: card.note, selection: card.selection,
@@ -100,7 +122,9 @@ export function arkadyCardContent(event) {
 }
 
 export function arkadyCardCaption(model) {
-  if (model.type === 'task-reminder') return '[URL=' + suppliesUrl + ']Открыть поставки в RITM ↗[/URL]';
+  if (model.type === 'cut-mark-reminder' && model.url) return '[URL=' + model.url + ']Открыть лист печати ↗[/URL]';
+  if (['task-reminder', 'cut-mark-reminder'].includes(model.type))
+    return '[URL=' + suppliesUrl + ']Открыть поставки в RITM ↗[/URL]';
   // Every raster scenario has the same boundary: content in the card, only
   // verified source links below it. Large lists never become a text appendix.
   return model.sections
@@ -113,6 +137,17 @@ export function arkadyCardCaption(model) {
 // remain clickable on desktop and mobile. No HTML or embedded script is sent.
 export function arkadyMessageFields(event) {
   const card = event.presentation;
+  if (card?.type === 'cut-mark-reminder') {
+    const model = arkadyCardContent(event);
+    if (!model) return {MESSAGE: event.message};
+    const blocks = [
+      {GRID: [grid(model.heading, model.subject, 'BLOCK', {WIDTH: 560}), grid('Участок', model.department)]},
+      {MESSAGE: model.subtitle},
+      {GRID: [grid(model.status, model.selection)]},
+      {GRID: [grid('', model.url ? 'Открыть лист печати' : 'Открыть поставки в RITM', 'BLOCK', {LINK: model.url || suppliesUrl, COLOR: '#2563eb'})]},
+    ];
+    return {MESSAGE: 'Аркадий · RITM', ATTACH: {ID: 1, COLOR: '#c66b10', BLOCKS: blocks}};
+  }
   if (card?.version === 1 && card.type === 'task-reminder') {
     const blocks = [{IMAGE: [{NAME: 'Аркадий · RITM', LINK: banner, PREVIEW: banner, WIDTH: 642, HEIGHT: 214}]}];
     blocks.push({GRID: [grid('Напоминание о задаче', card.title, 'BLOCK', {WIDTH: 560}), grid('Задача', card.task)]});

@@ -92,6 +92,16 @@ export async function loadArkadyRenderAssets(assets) {
         )
           throw Error("card_glyph_invalid");
       }
+    const avatar = metadata.avatar;
+    if (
+      avatar &&
+      (!Number.isSafeInteger(avatar.offset) ||
+        avatar.offset < 0 ||
+        avatar.width !== 54 ||
+        avatar.height !== 54 ||
+        avatar.offset + avatar.width * avatar.height * 4 > bytes.length)
+    )
+      throw Error("card_avatar_invalid");
     return { ...metadata, bytes };
   })();
   cache.set(assets, pending);
@@ -163,7 +173,42 @@ export function layoutArkadyCard(model, assets) {
     commands.push({ kind: "rect", x, y: top, width, height, color, radius });
   const icon = (name, x, top, color) =>
     commands.push({ kind: "icon", name, x, y: top, color });
-  commands.push({ kind: "branch", x: WIDTH - 240, y: 0, scale: 0.75 });
+  if (model.type === "cut-mark-reminder") {
+    const inset = 48;
+    const contentWidth = WIDTH - inset * 2;
+    const header = { kind: "premium-header", x: 0, y: 0, height: 0 };
+    commands.push(header);
+    if (assets.avatar) commands.push({ kind: "bitmap", name: "avatar", x: inset, y: 35 });
+    text("Аркадий", inset + (assets.avatar ? 71 : 0), 47, "small", "#d4e3ff");
+    text("RITM", 835, 45, "strong", "#ffffff");
+    text("/", 935, 45, "strong", "#67b6ff");
+    header.height = 113 + block(model.heading, inset, 113, 695, "brand", "#ffffff") + 27;
+    y = header.height + 17;
+    y += block(model.subtitle, inset, y, contentWidth) + 17;
+
+    const departmentX = inset + 586;
+    const departmentWidth = WIDTH - departmentX - inset;
+    text("Поставка", inset, y, "small", COLORS.muted);
+    text("Участок", departmentX, y, "small", COLORS.muted);
+    y += 34;
+    const supplyHeight = block(model.subject, inset, y, 549, "strong");
+    const departmentHeight = block(model.department, departmentX, y, departmentWidth, "strong");
+    const contextHeight = Math.max(supplyHeight, departmentHeight);
+    rect(departmentX - 27, y - 31, 1, contextHeight + 30, "#d2dcec");
+    y += contextHeight + 12;
+
+    const statusTop = y;
+    const statusBox = { kind: "rect", x: inset, y, width: contentWidth, height: 0, color: "#fff3df", radius: 11 };
+    commands.push(statusBox);
+    y += block(model.status, inset + 21, y + 5, contentWidth - 42, "strong", "#6a3f12") + 8;
+    if (model.selection) y += block(model.selection, inset + 21, y, contentWidth - 42, "small", "#6a3f12");
+    statusBox.height = y - statusTop + 10;
+    y += 36;
+    if (y > MAX_HEIGHT) throw Error("card_layout_too_tall");
+    commands.unshift({ kind: "rect", x: 0, y: 0, width: WIDTH, height: y, color: "#f6f8fc" });
+    return { width: WIDTH, height: y, commands, lines, hiddenRows: 0, shownRows: [] };
+  }
+  commands.push({ kind: "bitmap", name: "branch", x: WIDTH - 240, y: 0, scale: 0.75 });
   text("RITM", 32, y, "brand");
   text("/", 196, y, "brand", "#00a58e");
   y = 124;
@@ -379,11 +424,11 @@ function paint(layout, assets) {
             );
         left += glyph.advance;
       }
-    } else if (command.kind === "branch") {
-      const branch = assets.branch, scale = command.scale || 1;
-      for (let dy = 0; dy < Math.round(branch.height * scale); dy++)
-        for (let dx = 0; dx < Math.round(branch.width * scale); dx++) {
-          const index = branch.offset + (Math.floor(dy / scale) * branch.width + Math.floor(dx / scale)) * 4;
+    } else if (command.kind === "bitmap") {
+      const raster = assets[command.name], scale = command.scale || 1;
+      for (let dy = 0; dy < Math.round(raster.height * scale); dy++)
+        for (let dx = 0; dx < Math.round(raster.width * scale); dx++) {
+          const index = raster.offset + (Math.floor(dy / scale) * raster.width + Math.floor(dx / scale)) * 4;
           pixel(
             x + dx,
             y + dy,
@@ -391,6 +436,18 @@ function paint(layout, assets) {
             assets.bytes[index + 3],
           );
         }
+    } else if (command.kind === "premium-header") {
+      const base = rgb("#111f38"), accent = rgb("#2451a1");
+      for (let dy = 0; dy < command.height; dy++) {
+        for (let dx = 0; dx < width; dx++) {
+          const glow = Math.max(0, 1 - Math.hypot((dx - 930) / 720, (dy - command.height) / 270));
+          const contour = Math.hypot(dx - 873, dy - 127);
+          const ring = Math.abs(contour - 112) < 0.8 || Math.abs(contour - 150) < 0.8 || Math.abs(contour - 194) < 0.8 ? 11 : 0;
+          const index = (dy * width + dx) * 3;
+          for (let channel = 0; channel < 3; channel++)
+            canvas[index + channel] = Math.round(base[channel] + (accent[channel] - base[channel]) * glow + ring);
+        }
+      }
     } else if (command.kind === "icon") {
       const name = command.name;
       if (name === "check") {

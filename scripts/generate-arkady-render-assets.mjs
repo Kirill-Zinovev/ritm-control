@@ -15,7 +15,8 @@ const { chromium } = await import(pathToFileURL(browserModule));
 const font = fs.readFileSync(fontFile),
   header = fs.readFileSync(
     new URL("../public/images/arkady-notification-v2.png", import.meta.url),
-  );
+  ),
+  avatar = fs.readFileSync(new URL("../public/help/arkady.webp", import.meta.url));
 const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage();
@@ -24,7 +25,7 @@ try {
     '<!doctype html><meta charset="utf-8"><canvas></canvas>',
   );
   const result = await page.evaluate(
-    async ({ font, header }) => {
+    async ({ font, header, avatar }) => {
       const face = new FontFace(
         "ArkadyGolos",
         `url(data:font/ttf;base64,${font})`,
@@ -93,6 +94,21 @@ try {
         branchOffset = offset;
       chunks.push(branch);
       offset += branch.length;
+      image.src = `data:image/webp;base64,${avatar}`;
+      await image.decode();
+      canvas.width = 54;
+      canvas.height = 54;
+      ctx.beginPath();
+      ctx.roundRect(0, 0, 54, 54, 17);
+      ctx.clip();
+      ctx.drawImage(image, 0, 0, 54, 54);
+      ctx.strokeStyle = "#92baff9c";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      const avatarPixels = new Uint8Array(ctx.getImageData(0, 0, 54, 54).data),
+        avatarOffset = offset;
+      chunks.push(avatarPixels);
+      offset += avatarPixels.length;
       const bytes = new Uint8Array(offset);
       let cursor = 0;
       for (const chunk of chunks) {
@@ -108,12 +124,13 @@ try {
           fontFamily: "Golos Text",
           fonts,
           branch: { width: 320, height: 160, offset: branchOffset },
+          avatar: { width: 54, height: 54, offset: avatarOffset },
           rawBytes: offset,
         },
         data: btoa(binary),
       };
     },
-    { font: font.toString("base64"), header: header.toString("base64") },
+    { font: font.toString("base64"), header: header.toString("base64"), avatar: avatar.toString("base64") },
   );
   const data = deflateSync(Buffer.from(result.data, "base64"), { level: 9 });
   result.metadata.sha256 = createHash("sha256").update(data).digest("hex");

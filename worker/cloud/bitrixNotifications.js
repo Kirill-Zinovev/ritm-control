@@ -1,7 +1,7 @@
 // Notification records live in the existing operation journal. An ambiguous
 // delivery is never replayed automatically: the message may already exist.
 import { nextArkadyPhrase, nextAssignmentJoke } from './arkadyPhrases.js';
-import { assignmentPresentation, arkadyMessageFields, taskReminderPresentation } from './arkadyCards.js';
+import { assignmentPresentation, arkadyMessageFields, cutMarkReminderPresentation, taskReminderPresentation } from './arkadyCards.js';
 import { renderArkadyCard, pngBase64 } from './arkadyCardImage.js';
 import { validBitrixRecipient } from './bitrixRecipients.js';
 const departments = new Set(['box', 'roll']);
@@ -260,6 +260,13 @@ export async function sendBitrixTaskReminder(bindings, schedule, controls, fetch
   return deliverBitrixNotification(bindings, event, fetcher, schedule.recipientId, true);
 }
 
+export async function sendBitrixCutReminder(bindings, recipientId, issue, fetcher = fetch) {
+  if (!bitrixConfigured(bindings) || !validBitrixRecipient(recipientId)) return { status: 'failed' };
+  return deliverBitrixNotification(bindings, {
+    presentation: cutMarkReminderPresentation({ ...issue, articleCount: issue.articles.length }),
+  }, fetcher, recipientId, true);
+}
+
 async function deliverBitrixNotification(bindings, event, fetcher, dialogId, requireReceipt = false) {
   let card=null;
   if(bindings.ASSETS&&event.presentation){
@@ -287,7 +294,7 @@ async function deliverBitrixNotification(bindings, event, fetcher, dialogId, req
         // File.upload has no urlPreview option. Update only the acknowledged
         // message to remove the large Sheets unfurl, preserving image + caption.
         // A cosmetic update failure must never turn an accepted send into a retry.
-        if(card.model.type==='task-reminder'||card.model.sections.some(section=>section.url))try {
+        if(['task-reminder','cut-mark-reminder'].includes(card.model.type)||card.model.sections.some(section=>section.url))try {
           const update=await fetcher(`${bindings.RITM_BITRIX_WEBHOOK_URL}imbot.v2.Chat.Message.update`,{
             method:'POST',redirect:'manual',signal:AbortSignal.timeout(3000),
             headers:{'content-type':'application/json'},

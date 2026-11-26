@@ -1,2 +1,48 @@
 .arkady-panel{max-width:1050px;padding:28px}.arkady-heading{display:flex;align-items:center;gap:18px;margin-bottom:24px}.arkady-heading img{width:68px;height:68px;border-radius:15px;object-fit:cover}.arkady-panel h2,.arkady-panel h3{margin:0 0 6px}.arkady-panel h3{font-size:14px}.arkady-panel p{margin:0;color:#50627a}.arkady-panel small{display:block;margin-top:5px;color:#50627a;line-height:1.5}.arkady-row{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:20px 0;border-top:1px solid #e3eaf2}.arkady-row>div{max-width:690px}.arkady-panel a{color:#2563eb;font-weight:600;white-space:nowrap}.arkady-badge{border-radius:9px;padding:6px 10px;color:#8a510c;background:#fff5e5;white-space:nowrap}.arkady-badge.ok{color:#0b7350;background:#e8f7f0}.arkady-actions{display:flex;align-items:center;gap:20px;border-top:1px solid #e3eaf2;padding-top:20px}.arkady-chat-actions{display:flex;align-items:center;gap:14px;flex-wrap:wrap}.arkady-chat-form{display:flex;align-items:end;gap:8px;flex-wrap:wrap;margin-top:14px}.arkady-chat-form label{width:100%;font-weight:600}.arkady-chat-form input{border:1px solid #e3eaf2;border-radius:9px;padding:10px;font:inherit}.arkady-panel .notice{margin-bottom:15px}@media(max-width:600px){.arkady-panel{padding:20px}.arkady-row{align-items:flex-start;flex-direction:column;gap:12px}.arkady-actions{align-items:flex-start;flex-direction:column}}
 .arkady-humor{display:flex;flex-direction:column;gap:6px;min-width:260px;color:#10213a;font-size:14px;font-weight:600}.arkady-humor select{max-width:100%;border:1px solid #e3eaf2;border-radius:9px;padding:10px;color:#10213a;background:#fff;font:inherit}.arkady-humor select:focus-visible{outline:2px solid #2563eb;outline-offset:2px}@media(max-width:600px){.arkady-humor{min-width:0;width:100%}}
+
+.arkady-cut-reminders {
+  align-items: flex-start;
+}
+
+.arkady-cut-reminders-info {
+  flex: 1 1 360px;
+}
+
+.arkady-cut-reminders-summary,
+.arkady-cut-reminders-form {
+  display: grid;
+  gap: 12px;
+  width: min(100%, 350px);
+  max-width: 100%;
+  min-width: 0;
+}
+
+.arkady-cut-reminders-summary > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 7px 10px;
+  background: #f6f8fc;
+  border-radius: 9px;
+}
+
+.arkady-cut-reminders-summary > button {
+  justify-self: start;
+}
+
+.arkady-cut-reminders-form .arkady-humor {
+  min-width: 0;
+}
+
+.arkady-cut-reminders-form .notice {
+  margin-bottom: 0;
+}
+
+@media (max-width: 600px) {
+  .arkady-cut-reminders-info {
+    flex: auto;
+  }
+}

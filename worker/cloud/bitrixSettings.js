@@ -1,9 +1,27 @@
 import { CloudError } from './access.js';
+import { validBitrixRecipient } from './bitrixRecipients.js';
+
+export const cutReminderRecipientsKey = 'arkadyCutReminderRecipients';
+
+export function cutReminderRecipients(value) {
+  return {
+    roll: validBitrixRecipient(value?.roll) ? value.roll : null,
+    box: validBitrixRecipient(value?.box) ? value.box : null,
+  };
+}
+
+export function validateCutReminderRecipients(value) {
+  if (!value || typeof value !== 'object' || Object.keys(value).length !== 2 ||
+      !['roll', 'box'].every(key => Object.hasOwn(value, key) && (value[key] === null || validBitrixRecipient(value[key]))))
+    throw new CloudError('bitrix_setting_invalid', 'Выберите получателей порезки из сотрудников Битрикс24.', 400);
+  return cutReminderRecipients(value);
+}
 
 const preferences = {
   enabled: {key: 'bitrixNotificationsEnabled', valid: value => typeof value === 'boolean'},
   humorLevel: {key: 'bitrixHumorLevel', valid: value => ['off', 'sometimes', 'always'].includes(value)},
   reminderHumorLevel: {key: 'bitrixReminderHumorLevel', valid: value => ['off', 'sometimes', 'always'].includes(value)},
+  cutReminderRecipients: {key: cutReminderRecipientsKey, valid: value => !!validateCutReminderRecipients(value)},
 };
 
 // These independent settings are never written by production callbacks. Update

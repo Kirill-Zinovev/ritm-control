@@ -388,7 +388,8 @@ export function indexOrders(sheets) {
     const heightColumn = fieldColumn(8, "Высота");
     const areaColumn = fieldColumn(9, "Объем на все кол-во скинули");
     const rollPrintColumn = fieldColumn(19, "Прогресс печати");
-    const rollCutColumn = fieldColumn(20, "Прогресс порезки");
+    const namedRollCutColumn = findColumn("Прогресс порезки");
+    const rollCutColumn = namedRollCutColumn >= 0 ? namedRollCutColumn : legacyLayout ? 20 : -1;
     const rollRemainingColumn = fieldColumn(23, "Остаток по печати:", "Остаток по печати");
     // The stock-only header can occur more than once on unrelated seasonal
     // templates. Resolve it only when the stock history proof is available.
@@ -401,13 +402,13 @@ export function indexOrders(sheets) {
       "Печать завершена",
       "Завершена печать",
     );
-    const boxCutColumn = fieldColumn(
-      18,
+    const namedBoxCutColumn = findColumn(
       "Готовность порезки",
       "Завершил порезку",
       "Порезка завершена",
       "Завершена порезка",
     );
+    const boxCutColumn = namedBoxCutColumn >= 0 ? namedBoxCutColumn : legacyLayout ? 18 : -1;
     const planningPrintColumn=headers.findIndex(h=>normal(h).startsWith('напечатано годных'));
     const planningCutColumn=headers.findIndex(h=>normal(h).startsWith('порезано годных'));
     const uidHeaderCol = (rows[uidHeaderRow - 1] || []).indexOf("UID");
@@ -512,6 +513,12 @@ export function indexOrders(sheets) {
         ? readyStatus(r[boxPrintColumn]) && readyStatus(r[boxCutColumn])
         : sourceId === "roll-printing" && rollStartEvidenceColumns.slice(0, 2).every(column =>
           column >= 0 && readyStatus(r[column]));
+      // A known, blank completion cell can prompt a check. Formula errors,
+      // missing headers and conflicting roll completion marks stay unknown.
+      const empty = column => column >= 0 && String(r[column] ?? "").trim() === "";
+      const cutMarkMissing = sourceId === "box-printing" ? empty(namedBoxCutColumn)
+        : sourceId === "roll-printing" && empty(namedRollCutColumn) &&
+          empty(rollStartEvidenceColumns[1]) && empty(rollStartEvidenceColumns[3]);
       // Fresh RITM-created orders have an explicit full remaining-print plan,
       // but templates leave status/progress cells blank. Forecast zero work only
       // when every start-evidence column is present and empty. Legacy, started,
@@ -526,7 +533,7 @@ export function indexOrders(sheets) {
       const unstartedRitmRoll = sourceId === 'roll-printing' && quantity > 0 &&
         /^ritm-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[1-9]\d*$/i.test(raw) &&
         (remainingPrint === quantity || stockRemainingConfirmed) && rollPrintColumn >= 0 && rollCutColumn >= 0 &&
-        [rollPrintColumn,rollCutColumn,...rollStartEvidenceColumns].every(col=>col >= 0 && String(r[col] ?? '').trim() === '');
+        [rollPrintColumn,rollCutColumn,...rollStartEvidenceColumns].every(empty);
       const o = {
         uid,
         rawUid: raw || null,
@@ -568,6 +575,7 @@ export function indexOrders(sheets) {
           sourceId === "box-printing" ? boxProgress(r[boxCutColumn]) : sourceId === "roll-printing"
             ? optionalProgress(r[rollCutColumn], quantity)
             : null,
+        ...(cutMarkMissing && {cutMarkMissing}),
         remainingPrint,
         shop: shopColumn >= 0 ? String(r[shopColumn] || "") : "",
         sourceId,
