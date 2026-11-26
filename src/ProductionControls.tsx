@@ -4,6 +4,7 @@ import { useCloudAuth } from "./CloudAuth";
 import {
   ProductionTaskReminder,
   ProductionTaskReminderDetails,
+  newBitrixTaskReminderDraft,
   taskReminderRequest,
   type BitrixTaskRecipient,
   type BitrixTaskReminder,
@@ -120,7 +121,7 @@ export function ProductionControls({
   shipmentName: string;
   articles: string[];
   onLocksChanged?: (locks: ShipmentLock[]) => void;
-  taskDraft?: { note: string; article?: string; title?: string } | null;
+  taskDraft?: { note: string; article?: string; title?: string; startReminder?: boolean; reminderCheck?: BitrixTaskReminderDraft["check"] } | null;
   onTaskDraftOpened?: () => void;
 }) {
   const auth = useCloudAuth();
@@ -147,6 +148,7 @@ export function ProductionControls({
   const [title, setTitle] = useState("");
   const [note, setNote] = useState("");
   const [bitrixReminder, setBitrixReminder] = useState<BitrixTaskReminderDraft | null>(null);
+  const [reminderFirst, setReminderFirst] = useState(false);
   const [taskFormError, setTaskFormError] = useState("");
   const batchRequest = useRef<{ fingerprint: string; id: string } | null>(null);
   const refreshSequence = useRef(0);
@@ -155,6 +157,11 @@ export function ProductionControls({
   const activeKeyRef = useRef(shipmentIdsKey);
   const showingArkadyDraft = useRef(false);
   activeKeyRef.current = shipmentIdsKey;
+  useEffect(() => {
+    setBitrixReminder(null);
+    setTaskFormError("");
+  }, [shipmentIdsKey]);
+
   useEffect(() => {
     if (!taskDraft || !activeShipmentIds.length || saving || modalOpen) return;
     const draftArticle = taskDraft.article?.trim();
@@ -165,23 +172,21 @@ export function ProductionControls({
     setSelectedArticles(matchedArticle ? [matchedArticle.trim()] : []);
     setArticleSearch(draftArticle || "");
     setPasteWarning("");
-    setPriority("urgent");
+    setPriority(taskDraft.startReminder ? "attention" : "urgent");
     setTrigger("shipment_received");
-    setTitle(taskDraft.title?.trim().slice(0, 90) || "Проверить остаток упаковки");
+    setTitle(taskDraft.title?.trim().slice(0, 90) || (taskDraft.startReminder ? "" : "Проверить остаток упаковки"));
     setNote(taskDraft.note.slice(0, 320));
-    setBitrixReminder(null);
+    const startReminder = canScheduleReminder && taskDraft.startReminder === true;
+    setReminderFirst(startReminder);
+    setBitrixReminder(startReminder ? newBitrixTaskReminderDraft(taskDraft.reminderCheck) : null);
     setTaskFormError("");
     setModalOpen(true);
     onTaskDraftOpened?.();
-  }, [taskDraft, activeShipmentIds.length, articles, saving, modalOpen, onTaskDraftOpened]);
-
-  useEffect(() => {
-    setBitrixReminder(null);
-    setTaskFormError("");
-  }, [shipmentIdsKey]);
+  }, [taskDraft, activeShipmentIds.length, articles, canScheduleReminder, saving, modalOpen, onTaskDraftOpened]);
 
   function closeTaskEditor() {
     setModalOpen(false);
+    setReminderFirst(false);
     setTaskFormError("");
     if (!showingArkadyDraft.current) return;
     showingArkadyDraft.current = false;
@@ -413,6 +418,15 @@ export function ProductionControls({
   const visibleControls = controls.filter((control) => (control.shipmentIds || [control.shipmentId]).some((id) => activeShipmentIds.includes(id)));
   const activeCount = visibleControls.filter((control) => control.status === "active").length;
   const visibleGroups = groupControls(visibleControls);
+  const reminderFields = canScheduleReminder && (
+    <ProductionTaskReminder
+      draft={bitrixReminder}
+      loadRecipients={loadBitrixTaskRecipients}
+      onChange={(draft) => { setBitrixReminder(draft); setTaskFormError(""); }}
+      saving={saving}
+      scope={scope}
+    />
+  );
   return (
     <>
       <section className="production-controls" aria-label="Контроль поставки">
@@ -493,8 +507,9 @@ export function ProductionControls({
         )}
       </section>
 
-      <Modal open={modalOpen} onClose={() => !saving && closeTaskEditor()} title="Добавить задачу для сборщиков" description="Задача появится в окне упаковки «RITM Сборка» для выбранной поставки или артикула.">
+      <Modal open={modalOpen} onClose={() => !saving && closeTaskEditor()} title="Добавить задачу для сборщиков" description={`Поставка «${shipmentName}». Задача появится в окне упаковки «РИТМ Сборка».`}>
         <form className="production-control-form" onSubmit={(event) => void create(event)}>
+          {reminderFirst && reminderFields}
           <div className="production-control-form-grid">
             <label><span>Задача</span><select value={kind} onChange={(event) => setKind(event.target.value as ControlKind)}><option value="quality_check">Проверка качества</option><option value="notification">Уведомление</option><option value="instruction">Инструкция</option></select></label>
             <label><span>Важность</span><select value={priority} onChange={(event) => setPriority(event.target.value as Priority)}><option value="attention">Особое внимание</option><option value="urgent">Срочно</option></select></label>
@@ -543,15 +558,7 @@ export function ProductionControls({
             <label className="wide"><span>Короткое название</span><input required minLength={3} maxLength={90} value={title} onChange={(event) => setTitle(event.target.value)} placeholder={kind === "quality_check" ? "Например, проверить комплектность" : kind === "notification" ? "Например, заказ срочный" : "Например, вложить вкладыш"} /></label>
             <label className="wide"><span>Комментарий для сборщиков <small>необязательно</small></span><textarea maxLength={320} rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Уточните, на что обратить внимание" /></label>
           </div>
-          {canScheduleReminder && (
-            <ProductionTaskReminder
-              draft={bitrixReminder}
-              loadRecipients={loadBitrixTaskRecipients}
-              onChange={(draft) => { setBitrixReminder(draft); setTaskFormError(""); }}
-              saving={saving}
-              scope={scope}
-            />
-          )}
+          {!reminderFirst && reminderFields}
           {taskFormError && <div className="production-controls-error" role="alert">{taskFormError}</div>}
           <div className="production-control-form-footer"><span><ClipboardCheck size={15} /> Участок: Сборка · Упаковка</span><div><Button type="button" onClick={closeTaskEditor} disabled={saving}>Отмена</Button><Button type="submit" kind="primary" disabled={saving || !activeShipmentIds.length || (scope === "article" && !selectedArticles.length)}>{saving ? "Сохраняю…" : scope === "article" ? `Добавить задачу · ${selectedArticles.length || 0}` : "Добавить задачу"}</Button></div></div>
         </form>

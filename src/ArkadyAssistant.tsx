@@ -14,6 +14,7 @@ import {
   ChartNoAxesColumn,
   ListChecks,
   FileSpreadsheet,
+  BellPlus,
   Monitor,
   Route,
   SendHorizontal,
@@ -110,7 +111,13 @@ type Props = {
   };
   onRevealOrder?: (order: LiveOrder) => void;
   createCatalogDraft?: boolean;
+  onCatalogIntakeSaved?: () => void;
   onPrepareCatalogTask?: (article: string) => void;
+  reminderTask?: {
+    currentId?: string;
+    supplies: readonly { id: string; name: string }[];
+    prepare: (id: string) => void;
+  };
   onPrepareSupply?: (draft: ArkadySupplyDraftInput) => void;
   catalog?: {
     market: "WB" | "OZON";
@@ -212,7 +219,9 @@ function AssistantDrawer({
   diagnostics,
   onRevealOrder,
   createCatalogDraft,
+  onCatalogIntakeSaved,
   onPrepareCatalogTask,
+  reminderTask,
   onPrepareSupply,
   catalog,
   operation,
@@ -227,6 +236,7 @@ function AssistantDrawer({
     | "attention"
     | "catalog-draft"
     | "supply-draft"
+    | "reminder-task"
   >(start?.panel ?? "summary");
   const [routingArticle, setRoutingArticle] = useState<string>();
   const [question, setQuestion] = useState("");
@@ -254,6 +264,10 @@ function AssistantDrawer({
     {},
   );
   const [missingArticle, setMissingArticle] = useState("");
+  const [catalogBarcodeReply, setCatalogBarcodeReply] = useState<{
+    value: string;
+  } | null>(null);
+  const [taskSupply, setTaskSupply] = useState(reminderTask?.currentId ?? "");
   const request = useRef<AbortController | null>(null);
   const scroll = useRef<HTMLDivElement | null>(null);
   const writeInProgress = useRef(false);
@@ -522,7 +536,10 @@ function AssistantDrawer({
   function prepareCatalogDraft(draft: ArkadyCatalogDraftRequest, text = "") {
     const sourceArticle =
       draft.article ??
-      (panel === "catalog" ? missingArticle || undefined : undefined);
+      (panel === "catalog" &&
+      (!draft.market || draft.market === catalog?.market)
+        ? missingArticle || undefined
+        : undefined);
     const market = draft.market ?? catalog?.market;
     const store =
       draft.store ??
@@ -535,6 +552,7 @@ function AssistantDrawer({
       article: sourceArticle,
       barcode: draft.barcode,
     });
+    setCatalogBarcodeReply(null);
     openPanel("catalog-draft", text);
   }
 
@@ -546,6 +564,10 @@ function AssistantDrawer({
     const intent = parseArkadyIntent(text);
     if (intent.type === "attention" && attention) {
       openPanel("attention", text);
+      return;
+    }
+    if (intent.type === "reminder-task" && reminderTask) {
+      openPanel("reminder-task", text);
       return;
     }
     if (intent.type === "supply-draft" && onPrepareSupply) {
@@ -564,13 +586,12 @@ function AssistantDrawer({
         code &&
         (panel === "catalog-draft" || (panel === "catalog" && missingArticle))
       ) {
-        prepareCatalogDraft(
-          {
-            ...(panel === "catalog-draft" ? catalogDraft : {}),
-            barcode: code.toUpperCase(),
-          },
-          text,
-        );
+        if (panel === "catalog-draft") {
+          setCatalogBarcodeReply({ value: code.toUpperCase() });
+          openPanel("catalog-draft", text);
+        } else {
+          prepareCatalogDraft({ barcode: code.toUpperCase() }, text);
+        }
         return;
       }
     }
@@ -653,7 +674,13 @@ function AssistantDrawer({
       open={open}
       title="Аркадий"
       description={
-        panel === "attention" || !supplyName ? "Контроль поставок" : supplyName
+        panel === "catalog-draft"
+          ? "Справочник РИТМ Сборки"
+          : panel === "reminder-task"
+            ? "Поручения по поставкам"
+            : panel === "attention" || !supplyName
+              ? "Контроль поставок"
+              : supplyName
       }
       className="arkady-assistant"
       onClose={close}
@@ -672,6 +699,16 @@ function AssistantDrawer({
               onClick={() => openPanel("attention")}
             >
               <Bell size={16} /> Требует внимания
+            </Button>
+          )}
+          {reminderTask && (
+            <Button
+              type="button"
+              disabled={Boolean(busy)}
+              aria-pressed={panel === "reminder-task"}
+              onClick={() => openPanel("reminder-task")}
+            >
+              <BellPlus size={16} /> Задача и напоминание
             </Button>
           )}
           {supplyName && (
@@ -725,9 +762,9 @@ function AssistantDrawer({
               type="button"
               disabled={Boolean(busy)}
               aria-pressed={panel === "catalog-draft"}
-              onClick={() => prepareCatalogDraft({})}
+              onClick={() => prepareCatalogDraft({ market: "WB" })}
             >
-              <BookPlus size={16} /> Новый товар
+              <BookPlus size={16} /> Карточка WB
             </Button>
           )}
           {onPrepareSupply && (
@@ -806,12 +843,59 @@ function AssistantDrawer({
           <ArkadyCatalogDraft
             key={JSON.stringify(catalogDraft)}
             initial={catalogDraft}
+            barcodeReply={catalogBarcodeReply ?? undefined}
+            onSaved={onCatalogIntakeSaved}
+            onSavingChange={(saving) => {
+              writeInProgress.current = saving;
+              setBusy(saving ? "Сохраняю карточку…" : "");
+            }}
             fromMissing={
               !!missingArticle &&
               catalogDraft.article === missingArticle &&
               catalogDraft.market === catalog?.market
             }
           />
+        )}
+        {panel === "reminder-task" && reminderTask && (
+          <section className="arkady-assistant__card">
+            <h3>Задача и напоминание</h3>
+            {reminderTask.supplies.length > 0 ? (
+              <>
+                <Field label="Поставка">
+                  <select
+                    value={taskSupply}
+                    onChange={(event) => setTaskSupply(event.target.value)}
+                  >
+                    <option value="">Выберите поставку</option>
+                    {reminderTask.supplies.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <div className="arkady-assistant__actions">
+                  <Button
+                    type="button"
+                    kind="primary"
+                    disabled={
+                      !reminderTask.supplies.some(
+                        (item) => item.id === taskSupply,
+                      )
+                    }
+                    onClick={() => reminderTask.prepare(taskSupply)}
+                  >
+                    Настроить напоминание в Битриксе
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <p>
+                Когда появится поставка, связанная с РИТМ Сборкой, её можно
+                будет выбрать здесь.
+              </p>
+            )}
+          </section>
         )}
         {panel === "supply-draft" && onPrepareSupply && (
           <ArkadySupplyDraft onPrepare={onPrepareSupply} />

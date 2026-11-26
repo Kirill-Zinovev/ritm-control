@@ -77,6 +77,17 @@ type Props = {
   scope: "shipment" | "article";
 };
 
+export function newBitrixTaskReminderDraft(
+  check: BitrixTaskReminderDraft["check"] = "manual",
+): BitrixTaskReminderDraft {
+  return {
+    recipientId: "",
+    moscowTime: moscowInput(new Date(Date.now() + 3_600_000).toISOString()),
+    intervalMinutes: 0,
+    check,
+  };
+}
+
 export function ProductionTaskReminder({
   draft,
   onChange,
@@ -92,18 +103,7 @@ export function ProductionTaskReminder({
           checked={draft !== null}
           disabled={saving}
           onChange={(event) =>
-            onChange(
-              event.target.checked
-                ? {
-                    recipientId: "",
-                    moscowTime: moscowInput(
-                      new Date(Date.now() + 3_600_000).toISOString(),
-                    ),
-                    intervalMinutes: 0,
-                    check: "manual",
-                  }
-                : null,
-            )
+            onChange(event.target.checked ? newBitrixTaskReminderDraft() : null)
           }
         />
         <span>

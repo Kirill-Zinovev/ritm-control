@@ -45,6 +45,7 @@ import { supplyMarketplace } from "./liveSupplyMarketplace";
 import { ShipmentHero } from "./ShipmentHero";
 import { AssemblyTransfer } from "./AssemblyTransfer";
 import { ProductionControls } from "./ProductionControls";
+import type { BitrixTaskReminderDraft } from "./ProductionTaskReminder";
 import { LockKeyhole, Clock3, Layers3, ChevronDown, Eye, EyeOff, MessageCircle } from "lucide-react";
 import { supplyLockState, type SupplyLockRecord } from "./supplyLockState";
 import {
@@ -629,7 +630,10 @@ export function LiveSuppliesWorkspace({
   const [supplyView, setSupplyView] = useState<'directions' | 'jobs'>('directions');
   const [arkadyStart, setArkadyStart] = useState<ArkadyStart | null>(null);
   const arkadyOpen = arkadyStart !== null;
-  const [arkadyTaskDraft, setArkadyTaskDraft] = useState<{ sheetKey: string; note: string; article?: string; title?: string } | null>(null);
+  const [arkadyTaskDraft, setArkadyTaskDraft] = useState<{
+    sheetKey: string; note: string; article?: string; title?: string;
+    startReminder?: boolean; reminderCheck?: BitrixTaskReminderDraft["check"];
+  } | null>(null);
   const [arkadyPosition, setArkadyPosition] = useState<LiveOrder | null>(null);
   const [writer, setWriter] = useState<WriterState | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(() => new URLSearchParams(location.search).get("supplySheet"));
@@ -2863,6 +2867,10 @@ export function LiveSuppliesWorkspace({
         const attentionOperations = (writer?.production?.operations ?? [])
           .filter(item => ["partial", "uncertain", "written_unverified", "verified_with_calculation_errors"].includes(item.status))
           .map(item => ({ id: item.id, title: item.name, detail: supplyOperationStatus(item) }));
+        const reminderSupplies = canReviewAttention && auth.mode === "cloud" ? summaries
+          .filter(summary => !(summary.sheet.sourceId === "box-printing" && linkedBoxSheetIds.has(summary.sheet.sheetId)))
+          .filter(summary => controlIdsForSummary(summary, summaries, effectiveBoxLinks, live?.sheets || []).length > 0)
+          .map(({ sheet }) => ({ id: `${sheet.sourceId}:${sheet.sheetId}`, name: sheet.name })) : [];
         function getAttentionActions(item: ArkadyAttentionItem) {
           const target = summaries.find(({ sheet }) => sheet.sourceId === item.sourceId && sheet.sheetId === item.sheetId);
           if (!target) return {};
@@ -2880,7 +2888,7 @@ export function LiveSuppliesWorkspace({
           };
           const article = item.article;
           const canInspectCatalog = article && auth.mode === "cloud" && supplyMarketplace(summary.sheet.name);
-          const canDraftTask = (item.stage === "packing" || item.stage === "catalog") && canReviewAttention
+          const canDraftTask = canReviewAttention
             && controlIdsForSummary(summary, summaries, effectiveBoxLinks, live?.sheets || []).length > 0;
           return {
             shipment: () => navigate(null),
@@ -2892,7 +2900,10 @@ export function LiveSuppliesWorkspace({
                 sheetKey,
                 note: item.detail,
                 article: item.article,
-                title: item.stage === "catalog" ? "Проверить товар в справочнике" : undefined,
+                title: item.stage === "catalog" ? "Проверить товар в справочнике" :
+                  item.stage === "packing" ? "Проверить остаток упаковки" : "Проверить печать и порезку",
+                startReminder: true,
+                reminderCheck: item.stage === "catalog" ? "manual" : item.stage,
               });
             } : undefined,
           };
@@ -2926,7 +2937,20 @@ export function LiveSuppliesWorkspace({
             packingAvailable: live?.packing?.status !== "unavailable",
           }}
           onRevealOrder={revealArkadyOrder}
+          reminderTask={canReviewAttention && auth.mode === "cloud" ? {
+            currentId: selected ? `${selected.sheet.sourceId}:${selected.sheet.sheetId}` : undefined,
+            supplies: reminderSupplies,
+            prepare: id => {
+              if (!reminderSupplies.some(item => item.id === id)) return;
+              setSearch("");
+              setSelectedId(id);
+              setSupplyView("jobs");
+              setArkadyStart(null);
+              setArkadyTaskDraft({ sheetKey: id, note: "", startReminder: true });
+            },
+          } : undefined}
           createCatalogDraft={canReviewAttention && auth.mode === "cloud"}
+          onCatalogIntakeSaved={() => { void onRefresh().catch(() => {}); }}
           onPrepareCatalogTask={canReviewAttention && selected && selectedControlShipmentIds.length ? article => {
             setSupplyView("jobs");
             setArkadyStart(null);
@@ -2935,6 +2959,8 @@ export function LiveSuppliesWorkspace({
               title: "Добавить карточку в справочник",
               article,
               note: `В справочнике не нашлась карточка артикула ${article}. Проверьте маркетплейс и магазин.`,
+              startReminder: true,
+              reminderCheck: "catalog-exists",
             });
           } : undefined}
           onPrepareSupply={canReviewAttention && !busy ? draft => {

@@ -28,12 +28,14 @@
     "@radix-ui/react-dialog": "https://registry.npmjs.org/@radix-ui/react-dialog/-/react-dialog-1.1.23.tgz",
     "@vitejs/plugin-react": "5.0.4",
     "exceljs": "4.4.0",
+    "jsbarcode": "3.12.3",
     "lucide-react": "https://registry.npmjs.org/lucide-react/-/lucide-react-0.525.0.tgz",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "vite": "6.4.2"
   },
   "devDependencies": {
+    "@types/jsbarcode": "3.11.4",
     "@types/react": "https://registry.npmjs.org/@types/react/-/react-19.2.14.tgz",
     "@types/react-dom": "https://registry.npmjs.org/@types/react-dom/-/react-dom-19.2.3.tgz",
     "drizzle-kit": "0.31.11",

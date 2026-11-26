@@ -151,6 +151,12 @@ test("Arkady interprets known requests and only prepares exact supported catalog
   assert.deepEqual(parseArkadyIntent("Подготовь черновик поставки"), {
     type: "supply-draft",
   });
+  assert.deepEqual(
+    parseArkadyIntent("Аркадий, настрой личное напоминание в Битриксе"),
+    {
+      type: "reminder-task",
+    },
+  );
   assert.deepEqual(parseArkadyIntent("Аркадий, что срочно?"), {
     type: "attention",
   });

@@ -51,6 +51,7 @@ import { productionTabVisibility, reconcileProductionTabs } from "./productionTa
 import { syncProductionSheetCatalog } from "./productionSheetCatalog.js";
 import { importAssemblyProductionExtensions, readAssemblyItemCatalog, readWorkloadCatalog } from "./assemblyProductionCatalog.js";
 import { arkadyCatalog } from "./arkadyCatalog.js";
+import { arkadyWbIntake, arkadyWbIntakeMaxBytes } from "./arkadyWbIntake.js";
 import { ARKADY_COMPLETION_RECIPIENTS, bitrixConfigured, decryptBitrixConfig, drainBitrixNotifications, encryptBitrixConfig, sendBitrixNotification, sendBitrixTaskReminder, completionPraise, retireObsoleteBitrixNotifications } from './bitrixNotifications.js';
 import { saveBitrixPreference, saveBitrixConfiguration } from './bitrixSettings.js';
 import { listBitrixRecipients, readBitrixRecipient } from './bitrixRecipients.js';
@@ -105,6 +106,7 @@ function managerRouteAllowed(method, path) {
     "/api/arkady-reminder",
     "/api/stocks/preview",
     "/api/arkady/catalog",
+    "/api/arkady/catalog/wb-intake",
     "/api/stocks/close",
     "/api/stocks/close/batch",
     "/api/stocks",
@@ -1002,6 +1004,14 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
     if (path === "/api/arkady/catalog") {
       methods(request, ["POST"]);
       return json(await arkadyCatalog(await readJson(request, 4096), {
+        bindings, principal, writesEnabled: config.writesEnabled, fetcher,
+      }));
+    }
+    if (path === "/api/arkady/catalog/wb-intake") {
+      methods(request, ["POST"]);
+      if (!principal || !["owner", "manager"].includes(principal.role))
+        throw new CloudError("arkady_wb_intake_forbidden", "Проверка карточки WB доступна в РИТМ.", 403);
+      return json(await arkadyWbIntake(await readJson(request, arkadyWbIntakeMaxBytes), {
         bindings, principal, writesEnabled: config.writesEnabled, fetcher,
       }));
     }

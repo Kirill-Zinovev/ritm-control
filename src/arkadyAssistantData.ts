@@ -277,6 +277,7 @@ export type ArkadyCatalogDraftRequest = {
 export type ArkadyIntent =
   | { type: "attention" }
   | { type: "supply-draft" }
+  | { type: "reminder-task" }
   | ({ type: "catalog-draft" } & ArkadyCatalogDraftRequest)
   | { type: "summary" }
   | { type: "deadlines" }
@@ -367,6 +368,12 @@ export function parseArkadyIntent(text: string): ArkadyIntent {
     )
   )
     return { type: "supply-draft" };
+  if (
+    /^(?:задача и напоминание|(?:подготовь|создай|настрой)\s+(?:личное\s+)?напоминание(?:\s+в\s+битриксе)?)[?!.]*$/iu.test(
+      command,
+    )
+  )
+    return { type: "reminder-task" };
   if (/^добавь/iu.test(command)) return { type: "unsupported" };
   if (
     !article &&
