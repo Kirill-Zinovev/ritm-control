@@ -29,6 +29,44 @@ function isId(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.length <= 300;
 }
 
+export async function returnSentCarton(store: SqlStore, cartonId: string, expectedDispatchId?: string) {
+  const [box] = await store.all<{ dispatchId: string; cartonIds: string | null }>(`
+    select d.id dispatch_id,d.carton_ids
+    from av2_production_cartons c join av2_dispatches d on d.id=c.dispatch_id
+    where c.id=? and c.state='closed' and d.state='sent'
+      and (d.carton_ids is null or c.id in (select value from json_each(d.carton_ids)))
+  `, [cartonId]);
+  check(box && (!expectedDispatchId || box.dispatchId === expectedDispatchId),
+    "Короб уже вернули или его отгрузка изменилась. Обновите историю.");
+
+  const statements: Statement[] = [];
+  // Some older departures have no stored list. Keep the original links in
+  // history before releasing the physical carton, even without a frozen export.
+  if (box.cartonIds === null) statements.push({
+    sql: `update av2_dispatches
+      set carton_ids=coalesce(json_extract(sent_payload,'$.dispatch.cartonIds'),
+        (select json_group_array(id) from (
+          select id from av2_cartons where dispatch_id=? order by label,id
+        ))),
+      qty=coalesce(qty,(select coalesce(sum(a.qty),0) from av2_cartons c
+        join av2_all_allocations a on a.carton_id=c.id and a.removed_at is null where c.dispatch_id=?))
+      where id=?`,
+    args: [box.dispatchId, box.dispatchId, box.dispatchId],
+  });
+  statements.push({
+    sql: "update av2_cartons set dispatch_id=null where id=? and dispatch_id=?",
+    args: [cartonId, box.dispatchId],
+  });
+  return { statements, result: { cartonId, dispatchId: box.dispatchId, status: "pending", sentAt: null } };
+}
+
+export function planCartonReturn(store: SqlStore, payload: Record<string, unknown>) {
+  check(payload.confirmed === true, "Подтвердите, что короб не уехал.");
+  const { cartonId, dispatchId } = payload;
+  check(isId(cartonId) && isId(dispatchId), "Выберите короб в истории отгрузок.");
+  return returnSentCarton(store, cartonId, dispatchId);
+}
+
 export async function planDeparture(
   store: SqlStore,
   payload: Record<string, unknown>,

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight, Download } from "lucide-react";
+import { ChevronRight, Download, RotateCcw } from "lucide-react";
 import { catalogKey } from "../shared/catalog";
 import {
   dispatchHistoryPageSize, type DispatchHistoryDetail, type DispatchHistoryEntry, type DispatchHistoryPage,
@@ -7,7 +7,7 @@ import {
 import { countLabel, dateTime, number, type Dispatch, type Scope } from "../shared/model";
 import { ozonArticle, ozonCodesByCarton, summarizeOzonProducts, type OzonProduct } from "../shared/ozon-shipment";
 import { warehouseCity } from "../shared/warehouse-filter";
-import { Button, Empty, Pagination, Search } from "./ui";
+import { Button, Dialog, Empty, Pagination, Search } from "./ui";
 import { request } from "./useWorkspace";
 import { CatalogArticleLink } from "./CatalogArticleLink";
 import "./dispatch-history.css";
@@ -19,6 +19,8 @@ const errorMessage = (error: unknown) => error instanceof Error ? error.message 
 const historyDate = new Intl.DateTimeFormat("ru-RU", {
   day: "numeric", month: "long", year: "numeric", timeZone: "Europe/Moscow",
 });
+
+type CartonReturn = { dispatchId: string; cartonId: string; label: string };
 
 function shipmentDays(entries: DispatchHistoryEntry[]) {
   const days = new Map<string, DispatchHistoryEntry[]>();
@@ -32,9 +34,11 @@ function shipmentDays(entries: DispatchHistoryEntry[]) {
   return days;
 }
 
-export default function DispatchHistory({ revision, onExport }: {
-  revision: string;
+export default function DispatchHistory({ revision, busy, onExport, onReturn }: {
+  revision: number;
+  busy: boolean;
   onExport(dispatch: Dispatch): void;
+  onReturn(box: CartonReturn): Promise<unknown>;
 }) {
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(0);
@@ -45,6 +49,8 @@ export default function DispatchHistory({ revision, onExport }: {
   const [detailError, setDetailError] = useState("");
   const [listRetry, setListRetry] = useState(0);
   const [detailRetry, setDetailRetry] = useState(0);
+  const [returnBox, setReturnBox] = useState<CartonReturn | null>(null);
+  const [returnError, setReturnError] = useState("");
   const search = query.trim();
   const firstEntry = list?.entries[0];
   const selected = list?.entries.find((entry) => historyEntryKey(entry) === selection?.key)
@@ -87,7 +93,6 @@ export default function DispatchHistory({ revision, onExport }: {
   useEffect(() => {
     if (!shipmentId) return;
     const abort = new AbortController();
-    setDetail(null);
     setDetailError("");
     void request<DispatchHistoryDetail>(historyPath + "?id=" + encodeURIComponent(shipmentId), { signal: abort.signal })
       .then((item) => {
@@ -97,7 +102,20 @@ export default function DispatchHistory({ revision, onExport }: {
         if (!abort.signal.aborted) setDetailError(errorMessage(error));
       });
     return () => abort.abort();
-  }, [shipmentId, detailRetry]);
+  }, [shipmentId, detailRetry, revision]);
+
+  async function confirmReturn() {
+    if (!returnBox || busy) return;
+    setReturnError("");
+    try {
+      await onReturn(returnBox);
+      setReturnBox(null);
+      setListRetry((value) => value + 1);
+      setDetailRetry((value) => value + 1);
+    } catch (error) {
+      setReturnError(errorMessage(error));
+    }
+  }
 
   return (
     <div className="shipment-history">
@@ -125,7 +143,8 @@ export default function DispatchHistory({ revision, onExport }: {
                         aria-pressed={entry === selected}
                         onClick={() => setSelection((current) => ({ key, clickCount: (current?.clickCount ?? 0) + 1 }))}>
                         <span className="history-select-title">
-                          <strong>{warehouseCity(entry).label}</strong><HistoryStatus state={entry.state} />
+                          <strong>{warehouseCity(entry).label}</strong>
+                          <HistoryStatus state={entry.state} returned={entry.returnedCartonCount} total={entry.cartonCount} />
                         </span>
                         <span>{entry.market} · Магазин {entry.store}</span>
                         {match ? (
@@ -163,6 +182,11 @@ export default function DispatchHistory({ revision, onExport }: {
               matchedCartonId={matchedCartonId}
               searchedArticle={selected.matchedCarton?.articleQty ? search : undefined}
               onExport={onExport}
+              busy={busy}
+              onReviewReturn={(cartonId, label) => {
+                setReturnError("");
+                setReturnBox({ dispatchId: detail.dispatch.id, cartonId, label });
+              }}
             />
           ) : detailError ? (
             <div className="panel history-read-error">
@@ -178,24 +202,44 @@ export default function DispatchHistory({ revision, onExport }: {
       ) : !listError ? (
         <p role="status">{search ? "Ищем короб в истории…" : "Загружаем историю отгрузок…"}</p>
       ) : null}
+      {returnBox && (
+        <Dialog title={`Вернуть короб ${returnBox.label} на склад?`} busy={busy} onClose={() => setReturnBox(null)}>
+          <div className="stack">
+            <p>Подтвердите, что короб остался на складе. Он снова появится в списке «Готовы к отгрузке».</p>
+            {returnError && <p className="field-error" role="alert">{returnError}</p>}
+            <div className="actions">
+              <Button disabled={busy} onClick={() => setReturnBox(null)}>Отмена</Button>
+              <Button primary disabled={busy} onClick={() => void confirmReturn()}>
+                {busy ? "Возвращаем…" : "Короб не уехал, вернуть"}
+              </Button>
+            </div>
+          </div>
+        </Dialog>
+      )}
     </div>
   );
 }
 
-function HistoryStatus({ state }: { state: Dispatch["state"] }) {
-  return <span className="history-status" data-state={state}>{state === "sent" ? "Отправлена" : "Отменена"}</span>;
+function HistoryStatus({ state, returned, total }: { state: Dispatch["state"]; returned: number; total: number }) {
+  const label = state !== "sent" ? "Отменена" : returned > 0
+    ? returned === total ? "Возвращена" : "Частично возвращена"
+    : "Отправлена";
+  return <span className="history-status" data-state={returned > 0 ? "returned" : state}>{label}</span>;
 }
 
-function ShipmentDetails({ detail, matchedCartonId, searchedArticle, onExport }: {
+function ShipmentDetails({ detail, matchedCartonId, searchedArticle, onExport, busy, onReviewReturn }: {
   detail: DispatchHistoryDetail;
   matchedCartonId?: string;
   searchedArticle?: string;
   onExport(dispatch: Dispatch): void;
+  busy: boolean;
+  onReviewReturn(cartonId: string, label: string): void;
 }) {
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState("");
   const matchedBox = useRef<HTMLElement | null>(null);
   const { dispatch, archive, ozon, cartonLabels } = detail;
+  const cartonStates = detail.cartonStates ?? {};
   const isOzon = dispatch.market === "OZON";
   const codes = ozonCodesByCarton(ozon);
   const city = warehouseCity(dispatch).label;
@@ -204,10 +248,27 @@ function ShipmentDetails({ detail, matchedCartonId, searchedArticle, onExport }:
   const highlightedSku = searchedArticle ? catalogKey(article?.(searchedArticle) ?? searchedArticle) : undefined;
   const cartons = archive?.payload.cartons.map(({ id, label, qty, items }) => ({ id, label, qty, products: items }))
     ?? ozon?.boxes ?? [];
-  const productTotals = summarizeOzonProducts(cartons, article);
-  const quantity = cartons.length ? cartons.reduce((total, box) => total + box.qty, 0) : dispatch.qty;
+  const cartonIdsWithComposition = new Set(cartons.map((box) => box.id));
+  const cartonsWithoutComposition = dispatch.cartonIds.filter((id) => !cartonIdsWithComposition.has(id) && cartonLabels[id]);
+  const originalCount = dispatch.cartonIds.length || cartons.length;
+  const returnedCount = Object.values(cartonStates).filter((state) => state === "returned").length;
+  const remainingCount = originalCount - returnedCount;
+  const remaining = cartons.filter((box) => cartonStates[box.id] !== "returned");
+  const productTotals = summarizeOzonProducts(remaining, article);
+  const quantity = returnedCount > 0 && remaining.length !== remainingCount
+    ? null
+    : cartons.length || returnedCount > 0 ? remaining.reduce((total, box) => total + box.qty, 0) : dispatch.qty;
+  const quantityLabel = quantity === null ? "—" : number(quantity);
   const source = archive?.kind === "export" ? "Сохранённая выгрузка · " + dateTime(archive.createdAt) + " МСК"
     : !archive && ozon ? "Состав на этапе подготовки" : "";
+
+  function returnButton(id: string, label: string) {
+    if (cartonStates[id] !== "sent") return null;
+    return <Button className="history-carton-return" disabled={busy}
+      aria-label={`Вернуть короб ${label} на склад`} onClick={() => onReviewReturn(id, label)}>
+      <RotateCcw size={15} aria-hidden="true" />Вернуть на склад
+    </Button>;
+  }
 
   useEffect(() => {
     const box = matchedBox.current;
@@ -251,30 +312,31 @@ function ShipmentDetails({ detail, matchedCartonId, searchedArticle, onExport }:
           <p>{scope}</p>
           {city !== dispatch.destination && dispatch.destination && <p>{dispatch.destination}</p>}
           <div className="history-event">
-            <HistoryStatus state={dispatch.state} />
+            <HistoryStatus state={dispatch.state} returned={returnedCount} total={originalCount} />
             <time dateTime={dispatch.sentAt ?? dispatch.createdAt}>{dateTime(dispatch.sentAt ?? dispatch.createdAt)} МСК</time>
           </div>
         </div>
         <div className="history-metric">
-          <strong>{number(cartons.length || dispatch.cartonIds.length)}</strong><span>Короба</span>
+          <strong>{number(remainingCount)}</strong><span>Короба</span>
         </div>
-        <div className="history-metric"><strong>{number(quantity)}</strong><span>Штук</span></div>
+        <div className="history-metric"><strong>{quantityLabel}</strong><span>Штук</span></div>
         {cartons.length > 0 && <div className="history-download">
           <Button disabled={downloading} onClick={() => void download()}>
-            <Download size={17} />Скачать Excel
+            <Download size={17} aria-hidden="true" />{returnedCount > 0 ? "Скачать архив Excel" : "Скачать Excel"}
           </Button>
           {archive?.kind === "departure" && <button className="history-format" type="button"
             onClick={() => onExport(dispatch)}>Другие форматы</button>}
         </div>}
       </header>
       {downloadError && <p className="field-error" role="alert">{downloadError}</p>}
-      {source && <p className="history-source">{source}</p>}
+      {(source || returnedCount > 0) && <p className="history-source">
+        {returnedCount > 0 ? "В архиве сохранён состав на момент отметки выезда." : source}
+      </p>}
       <div className="history-compositions">
         <section>
           <h3>Короба поставки</h3>
-          {cartons.length ? (
-            <div className="history-cartons">
-              {isOzon && <div className="history-carton-columns" aria-hidden="true">
+          <div className="history-cartons">
+              {isOzon && cartons.length > 0 && <div className="history-carton-columns" aria-hidden="true">
                 <span>Короб RITM</span><span>ШК грузоместа Ozon</span><span>Кол-во</span>
               </div>}
               {cartons.map((box) => (
@@ -283,27 +345,32 @@ function ShipmentDetails({ detail, matchedCartonId, searchedArticle, onExport }:
                   ref={box.id === matchedCartonId ? (element) => { matchedBox.current = element; } : undefined}>
                   <summary>
                     <ChevronRight size={17} aria-hidden="true" />
-                    <strong>{box.label}</strong>
+                    <div className="history-carton-name">
+                      <strong>{box.label}</strong>
+                      {cartonStates[box.id] === "returned" && <ReturnedCarton />}
+                    </div>
                     {isOzon && <OzonCode code={codes.get(box.id)} />}
                     <b className="history-carton-qty">{number(box.qty)} шт.</b>
                   </summary>
+                  {cartonStates[box.id] === "sent" && (
+                    <div className="history-carton-actions">{returnButton(box.id, box.label)}</div>
+                  )}
                   <ProductTable products={summarizeOzonProducts([box], article)} scope={dispatch}
                     highlightedSku={box.id === matchedCartonId ? highlightedSku : undefined} />
                 </details>
               ))}
-            </div>
-          ) : (
-            <div className="history-cartons">
-              {dispatch.cartonIds.filter((id) => cartonLabels[id]).map((id) => (
+              {cartonsWithoutComposition.map((id) => (
                 <div className="history-archived-box" key={id} data-match={id === matchedCartonId || undefined}
                   ref={id === matchedCartonId ? (element) => { matchedBox.current = element; } : undefined}>
                   <strong>{cartonLabels[id]}</strong>
                   {isOzon && <OzonCode code={codes.get(id)} />}
+                  {cartonStates[id] === "returned" && <ReturnedCarton />}
+                  {returnButton(id, cartonLabels[id])}
                 </div>
               ))}
-              <p className="muted">{dispatch.state === "sent" ? "Архивный состав на дату выезда отсутствует." : "Архивный состав подготовки отсутствует."}</p>
-            </div>
-          )}
+              {!cartons.length && <p className="muted">{dispatch.state === "sent"
+                ? "Архивный состав на дату выезда отсутствует." : "Архивный состав подготовки отсутствует."}</p>}
+          </div>
         </section>
         <section>
           <h3>Общий состав поставки</h3>
@@ -312,12 +379,17 @@ function ShipmentDetails({ detail, matchedCartonId, searchedArticle, onExport }:
               <p className="history-product-count">{countLabel(productTotals.length, ["артикул", "артикула", "артикулов"])}</p>
               <ProductTable products={productTotals} scope={dispatch} />
             </>
-          ) : <p className="history-product-count">Доступен итог отгрузки.</p>}
-          <div className="history-total"><span>Всего</span><strong>{number(quantity)} шт.</strong></div>
+          ) : <p className="history-product-count">{returnedCount > 0 && remainingCount === 0
+            ? "Все короба возвращены." : "Доступен итог отгрузки."}</p>}
+          <div className="history-total"><span>Всего</span><strong>{quantityLabel}{quantity !== null && " шт."}</strong></div>
         </section>
       </div>
     </article>
   );
+}
+
+function ReturnedCarton() {
+  return <span className="history-status" data-state="returned">Возвращён</span>;
 }
 
 function OzonCode({ code }: { code: string | undefined }) {

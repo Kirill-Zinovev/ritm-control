@@ -5,6 +5,7 @@ export const dispatchHistoryPageSize = 30;
 
 export type DispatchHistoryEntry = Omit<Dispatch, "cartonIds"> & {
   cartonCount: number;
+  returnedCartonCount: number;
   cartonLabels: string[];
   matchedCarton?: {
     id: string;
@@ -29,4 +30,5 @@ export interface DispatchHistoryDetail {
   } | null;
   ozon: OzonGroup | null;
   cartonLabels: Record<string, string>;
+  cartonStates: Record<string, "sent" | "returned" | null>;
 }

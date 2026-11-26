@@ -4,6 +4,7 @@ import { api } from "../server/api";
 import { openDatabase } from "../server/local-db";
 import type { PreparedDispatch, Snapshot } from "../shared/model";
 import { ozonCodesByCarton } from "../shared/ozon-shipment";
+import { readRitmWarehousePage } from "../server/ritm-warehouse";
 import { bootstrap, fixture } from "./fixtures";
 
 test("выезд выбранных коробов разделяет подготовку Ozon и сохраняет пары и оставшиеся резервы", async (t) => {
@@ -101,4 +102,81 @@ test("после частичного выезда отменённая подг
   assert.deepEqual(detail?.archive?.payload.cartons.map((box) => box.id), [second.id]);
   assert.equal((await db.dispatchHistory!.page(0, first.label)).total, 1);
   assert.equal(((await db.export(String(saved.exportId))) as { payload: { cartons: unknown[] } }).payload.cartons.length, 2);
+});
+
+test("возврат из истории освобождает только выбранный короб и сохраняет исходную отгрузку Ozon", async (t) => {
+  const db = await openDatabase();
+  t.after(() => db.sqlite.close());
+  const f = await bootstrap(db);
+  await f.cmd("work.save", { positionId: f.a.id, employeeId: f.employee.id, operation: "packing", qty: 20 });
+  for (const qty of [8, 12]) await f.cmd("allocation.add", { positionId: f.a.id, qty, newCarton: true });
+  const cartons = (await db.snapshot(null) as Snapshot).cartons;
+  const preview = await db.ozon!.preview(cartons.map((box) => box.label).join("\n"));
+  const { batchId } = await f.cmd("ozon.prepare", {
+    boxes: preview.groups.flatMap(({ boxes, cluster }) => boxes.map(({ id, proof }) => ({ id, proof, cluster }))),
+  });
+  const { boxes: [first, second], dispatch } = (await db.ozon!.batch(String(batchId)))!.groups[0];
+  const codes = ["1022124184350001", "1022124184350002"];
+  await f.cmd("ozon.assign", { dispatchId: dispatch.id, codes, previousLabelId: null });
+  await f.cmd("dispatch.send", { dispatchId: dispatch.id, confirmed: true });
+  const archiveBefore = (await db.dispatchHistory!.detail(dispatch.id))!;
+  assert.deepEqual(archiveBefore.cartonStates, { [first.id]: "sent", [second.id]: "sent" });
+
+  const payload = { cartonId: first.id, dispatchId: dispatch.id, confirmed: true };
+  const returnFromHistory = (role: "manager" | "collector", data: typeof payload, key = crypto.randomUUID()) =>
+    api(new Request("https://assembly.test/api/command", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "dispatch.returnCarton", key, payload: data }),
+    }), db, "test-actor", role);
+  assert.equal((await returnFromHistory("collector", payload)).status, 403);
+  assert.equal((await returnFromHistory("manager", { ...payload, confirmed: false })).status, 409);
+
+  const key = crypto.randomUUID();
+  const response = await returnFromHistory("manager", payload, key);
+  assert.equal(response.status, 200);
+  const { result, state } = await response.json() as { result: Record<string, unknown>; state: Snapshot };
+  assert.deepEqual(result, { cartonId: first.id, dispatchId: dispatch.id, status: "pending", sentAt: null });
+  assert.deepEqual((await (await returnFromHistory("manager", payload, key)).json()).result, result);
+  assert.deepEqual(state.cartons.map((box) => [box.id, box.qty, box.state, box.dispatchId]), [[first.id, first.qty, "closed", null]]);
+  assert.equal(state.positions.find((position) => position.id === f.a.id)?.packing, 20);
+  const ritm = await readRitmWarehousePage(db.store, new URL("https://assembly.test/api/ritm/warehouse"));
+  assert.equal(ritm.cartons.find((box) => box.assemblyV2Id === first.id)?.dispatchStatus, "pending");
+  assert.equal(ritm.cartons.find((box) => box.assemblyV2Id === second.id)?.dispatchStatus, "sent");
+
+  const history = (await db.dispatchHistory!.detail(dispatch.id))!;
+  assert.deepEqual(history.archive, archiveBefore.archive);
+  assert.deepEqual(history.cartonStates, { [first.id]: "returned", [second.id]: "sent" });
+  assert.equal((await db.dispatchHistory!.page(0, codes[0])).entries[0].returnedCartonCount, 1);
+  assert.equal(ozonCodesByCarton(history.ozon).get(first.id), codes[0]);
+  assert.equal((await db.ozon!.preview(first.label)).issues.length, 0);
+
+  const next = await f.cmd("dispatch.create", { cartonIds: [first.id] });
+  await f.cmd("dispatch.send", { dispatchId: next.dispatchId, confirmed: true });
+  assert.equal((await returnFromHistory("manager", payload)).status, 409);
+  assert.deepEqual((await db.dispatchHistory!.detail(String(next.dispatchId)))?.cartonStates, { [first.id]: "sent" });
+});
+
+test("возврат старого короба сохраняет его номер в истории без архивного состава", async (t) => {
+  const db = await openDatabase();
+  t.after(() => db.sqlite.close());
+  const f = await bootstrap(db);
+  await f.cmd("work.save", { positionId: f.a.id, employeeId: f.employee.id, operation: "packing", qty: 10 });
+  await f.cmd("allocation.add", { positionId: f.a.id, qty: 10, newCarton: true });
+  const [box] = (await db.snapshot(null) as Snapshot).cartons;
+  await f.cmd("carton.close", { cartonId: box.id, items: box.items.map(({ id, qty }) => ({ id, qty })) });
+  const { dispatchId } = await f.cmd("dispatch.create", { cartonIds: [box.id] });
+  await f.cmd("dispatch.send", { dispatchId, confirmed: true });
+  await db.store.batch([{
+    sql: "update av2_dispatches set carton_ids=null,sent_payload=null,qty=null where id=?",
+    args: [String(dispatchId)],
+  }]);
+  await f.cmd("dispatch.returnCarton", { dispatchId, cartonId: box.id, confirmed: true });
+  const detail = await db.dispatchHistory!.detail(String(dispatchId));
+  assert.deepEqual(detail?.dispatch.cartonIds, [box.id]);
+  assert.equal(detail?.dispatch.qty, 10);
+  assert.equal(detail?.archive, null);
+  assert.equal(detail?.cartonLabels[box.id], box.label);
+  assert.equal(detail?.cartonStates[box.id], "returned");
+  const byCarton = await db.dispatchHistory!.page(0, box.label);
+  assert.equal(byCarton.entries[0].returnedCartonCount, 1);
 });

@@ -8,6 +8,14 @@ import type { SqlStore } from "./database";
 const archiveStates = "d.state in ('sent','canceled')";
 const cartonIds = "coalesce(d.carton_ids,(select json_group_array(c.id) from av2_cartons c where c.dispatch_id=d.id))";
 const dispatchColumns = "d.id,d.label,d.market,d.store,d.destination,d.state,d.created_at,d.sent_at,coalesce(d.qty,0) qty";
+const cartonWasReturned = `exists(
+  select 1 from av2_commands cmd
+  where cmd.action in ('dispatch.returnCarton','ritm.carton.dispatch') and cmd.carton_id=ids.value
+    and json_extract(cmd.result,'$.dispatchId')=d.id and json_extract(cmd.result,'$.status')='pending'
+)`;
+const returnedCartonCount = `case when d.state='sent' then (
+  select count(*) from json_each(${cartonIds}) ids where ${cartonWasReturned}
+) else 0 end returned_carton_count`;
 function historyExports(singleDispatch = false) {
   return `
     left join (
@@ -28,6 +36,7 @@ export async function readDispatchHistoryPage(store: SqlStore, page: number, que
   const [rows, totals] = await store.readBatch([
     {
       sql: `select ${dispatchColumns},json_array_length(${cartonIds}) carton_count,
+        ${returnedCartonCount},
         (select json_group_array(label) from (
           select c.label from json_each(${cartonIds}) ids join av2_cartons c on c.id=ids.value
           order by cast(ids.key as integer) limit 3
@@ -72,6 +81,7 @@ async function searchDispatchHistory(store: SqlStore, page: number, query: strin
     with input(value,literal,suffix,ozon_base,ozon_length) as (values(?,?,?,?,?)),
     archived as (
       select ${dispatchColumns},json_array_length(${cartonIds}) carton_count,
+        ${returnedCartonCount},
         coalesce(
           nullif(coalesce(json_extract(d.sent_payload,'$.cartons'),
             case when saved.id is not null and d.carton_ids is not null then (
@@ -94,7 +104,7 @@ async function searchDispatchHistory(store: SqlStore, page: number, query: strin
         and length(code.value) between 12 and 24 and code.value not glob '*[^0-9]*'
         and json_array_length(a.ozon_labels,'$.codes')=json_array_length(a.ozon_composition,'$.boxes')
     ), cartons as (
-      select ${dispatchColumns},d.carton_count,json_extract(box.value,'$.id') carton_id,
+      select ${dispatchColumns},d.carton_count,d.returned_carton_count,json_extract(box.value,'$.id') carton_id,
         json_extract(box.value,'$.label') carton_label,c.ozon_code,
         (select sum(json_extract(item.value,'$.qty'))
          from json_each(coalesce(json_extract(box.value,'$.items'),json_extract(box.value,'$.products'))) item
@@ -138,6 +148,7 @@ async function searchDispatchHistory(store: SqlStore, page: number, query: strin
 type HistoryRow = Omit<Dispatch, "cartonIds"> & {
   cartonIds: string;
   cartonLabels: string;
+  cartonStates: string;
   sentPayload: string | null;
   savedPayload: string | null;
   savedAt: string | null;
@@ -151,6 +162,13 @@ export async function readDispatchHistoryDetail(store: SqlStore, id: string): Pr
     select ${dispatchColumns},${cartonIds} carton_ids,d.sent_payload,
       (select json_group_object(c.id,c.label)
        from json_each(${cartonIds}) ids join av2_cartons c on c.id=ids.value) carton_labels,
+      (select json_group_object(ids.value,case
+          when ${cartonWasReturned} then 'returned'
+          when c.dispatch_id=d.id and c.state='closed' then 'sent'
+        end)
+        from json_each(${cartonIds}) ids
+        left join av2_production_cartons c on c.id=ids.value
+        where d.state='sent') carton_states,
       saved.payload saved_payload,saved.created_at saved_at,composition.payload ozon_composition,
       labels.id ozon_label_id,labels.payload ozon_label_payload
     from av2_dispatches d
@@ -159,7 +177,7 @@ export async function readDispatchHistoryDetail(store: SqlStore, id: string): Pr
   `, [id, id]);
   if (!row) return null;
 
-  const { cartonIds: ids, cartonLabels, sentPayload, savedPayload, savedAt,
+  const { cartonIds: ids, cartonLabels, cartonStates, sentPayload, savedPayload, savedAt,
     ozonComposition, ozonLabelPayload, ozonLabelId, ...fields } = row;
   const dispatch: Dispatch = { ...fields, cartonIds: JSON.parse(ids) as string[] };
   const payload = sentPayload ?? savedPayload;
@@ -178,5 +196,5 @@ export async function readDispatchHistoryDetail(store: SqlStore, id: string): Pr
   const ozon = ozonComposition
     ? { ...JSON.parse(ozonComposition) as OzonComposition, dispatch, labels }
     : null;
-  return { dispatch, archive, ozon, cartonLabels: JSON.parse(cartonLabels) };
+  return { dispatch, archive, ozon, cartonLabels: JSON.parse(cartonLabels), cartonStates: JSON.parse(cartonStates) };
 }

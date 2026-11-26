@@ -217,4 +217,4 @@ export const collectorActions = new Set([
   "warehouse.reopen",
   "warehouse.move",
 ]);
-export const managerActions=new Set([...collectorActions,'catalog.save','catalog.applyWorkNorms','catalog.activate','photo.assign','carton.create','carton.reopen','dispatch.create','dispatch.cancel','dispatch.send','export.create','ozon.prepare','ozon.assign','wb.prepare','wb.assign','wb.generate']);
+export const managerActions=new Set([...collectorActions,'catalog.save','catalog.applyWorkNorms','catalog.activate','photo.assign','carton.create','carton.reopen','dispatch.create','dispatch.cancel','dispatch.send','dispatch.returnCarton','export.create','ozon.prepare','ozon.assign','wb.prepare','wb.assign','wb.generate']);

@@ -7,6 +7,7 @@ import {
   type RitmCartonItem,
 } from "../shared/ritm-warehouse";
 import { requireCatalog as check } from "./catalog-store";
+import { returnSentCarton } from "./dispatch-departure";
 const q = (sql: string, ...args: (string | number | null)[]): Statement => ({
   sql,
   args,
@@ -66,7 +67,7 @@ export async function readRitmWarehousePage(store: SqlStore, url: URL) {
         or exists(select 1 from av2_legacy_allocations a where a.carton_id=c.id and a.removed_at is not null)
         or exists(select 1 from av2_quality_repairs q join av2_all_allocations a on a.id=q.entity_id where a.carton_id=c.id and q.kind like 'work.cancel.%')
         or exists(select 1 from av2_quality_repairs q where q.kind='carton.merge' and q.entity_id=c.id)
-        or exists(select 1 from av2_commands cmd where cmd.action in('carton.close','carton.reopen','ritm.carton.dispatch') and cmd.carton_id=c.id)) native_changes
+        or exists(select 1 from av2_commands cmd where cmd.action in('carton.close','carton.reopen','ritm.carton.dispatch','dispatch.returnCarton') and cmd.carton_id=c.id)) native_changes
       from av2_cartons c left join av2_dispatches d on d.id=c.dispatch_id
       left join av2_legacy_records alias on alias.kind='cartonAlias' and alias.source_id=c.id
       left join av2_legacy_records l on l.kind='cartons' and l.source_id=coalesce(json_extract(alias.data,'$.legacySourceId'),case when c.id like 'legacy:%' then substr(c.id,8) end)
@@ -358,11 +359,7 @@ export async function ritmCartonDispatchPlan(
     );
   } else {
     check(box.dispatchStatus === "sent", "Короб ещё не отправлен.");
-    // Detaching returns one physical carton. The original departure and its
-    // frozen contents remain in the immutable export history.
-    sql.push(
-      q("update av2_cartons set dispatch_id=null where id=?", p.cartonId),
-    );
+    return returnSentCarton(store, p.cartonId);
   }
   return {
     statements: sql,

@@ -31,7 +31,7 @@ import { nextCartonLabel } from "../shared/carton-number";
 import { cancelWarehouseWorkPlan, previewWarehouseNumbers, readWarehouse, warehousePlan } from "./warehouse";
 import { marketplaceShipments } from "./marketplace-shipments";
 import { readDispatchHistoryDetail, readDispatchHistoryPage } from "./dispatch-history";
-import { planDeparture, readPreparedDispatches } from "./dispatch-departure";
+import { planCartonReturn, planDeparture, readPreparedDispatches } from "./dispatch-departure";
 import { readWorkHistory } from "./work-history";
 import { legacyRestorePlan } from "./legacy-restore";
 import { legacyAdoptCartonPlan } from "./legacy-adopt";
@@ -205,6 +205,8 @@ export function createDatabase(store: SqlStore, onCatalogCommit?: () => void): D
     if (action === "dispatch.send")
       return planDeparture(store, payload, actor, rev, now, loadCartons,
         (market, ...args) => (market === "WB" ? wb : ozon).splitDeparture(...args));
+    if (action === "dispatch.returnCarton")
+      return planCartonReturn(store, payload);
     let result: Record<string, unknown> = {};
     const add = (query: string, ...args: (string | number | null)[]) =>
       sql.push(statement(query, ...args));

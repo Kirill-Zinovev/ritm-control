@@ -194,9 +194,11 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
         </Suspense>
       ) : tab === "history" ? (
         <Suspense fallback={<p role="status">Загружаем историю отгрузок…</p>}>
-          <DispatchHistory onExport={setExporting} revision={state.dispatches
-            .filter((dispatch) => dispatch.state !== "draft")
-            .map((dispatch) => [dispatch.id, dispatch.state, dispatch.sentAt].join("|")).join(";")} />
+          <DispatchHistory onExport={setExporting} revision={state.revision} busy={w.busy}
+            onReturn={({ dispatchId, cartonId, label }) => w.command(
+              "dispatch.returnCarton", { dispatchId, cartonId, confirmed: true },
+              `Короб ${label} возвращён. Он снова в списке «Готовы к отгрузке».`,
+            )} />
         </Suspense>
       ) : tab === "stock" ? <WarehouseStock workspace={w} manager /> : tab === "ready" ? (
         <>

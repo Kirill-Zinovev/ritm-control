@@ -94,6 +94,7 @@
   white-space: nowrap;
 }
 .history-status[data-state="sent"] { background: #dff6e9; color: #106341; }
+.history-status[data-state="returned"] { background: #fff1d9; color: #804c08; }
 .history-list > .pagination { margin: auto 0 0; padding: 12px; justify-content: center; }
 .history-list > .pagination .button { min-height: 36px; padding: 6px 10px; }
 
@@ -149,6 +150,7 @@
 .history-carton summary { padding: 11px 10px; cursor: pointer; list-style: none; }
 .history-carton summary::-webkit-details-marker { display: none; }
 .history-carton summary strong { font-size: 16px; overflow-wrap: anywhere; }
+.history-carton-name { display: flex; align-items: flex-start; flex-direction: column; gap: 4px; min-width: 0; }
 .history-carton summary:not(:has(code, .history-missing-code)) { grid-template-columns: 16px minmax(0, 1fr) auto; }
 .history-carton[open] summary { background: #edf3ff; border-radius: 8px 8px 0 0; }
 .history-carton[open] summary > svg { transform: rotate(90deg); }
@@ -179,6 +181,8 @@
 }
 .history-products small { display: block; color: #526984; margin-top: 3px; font-size: 12px; }
 .history-carton > .history-products { margin: 8px; width: auto; border-radius: 7px; }
+.history-carton-actions { display: flex; justify-content: flex-end; padding: 8px 8px 0; }
+.history-carton-return { min-height: 34px; padding: 5px 9px; white-space: nowrap; }
 .history-product-count { margin-bottom: 9px; color: #50647e; }
 .history-total {
   display: flex;
