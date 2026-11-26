@@ -1,10 +1,35 @@
+:root {
+  --arkady-panel-inset: 12px;
+  --arkady-panel-width: min(452px, calc(100% - 24px));
+}
+
+.live-supplies-actions .arkady-launcher {
+  gap: 8px;
+  padding: 5px 12px 5px 6px;
+  border-color: #c9dcfc;
+  background: linear-gradient(145deg, #fff, #eaf3ff);
+  color: #183f82;
+  font-weight: 700;
+}
+
+.live-supplies-actions .arkady-launcher:hover {
+  border-color: #9bbdf6;
+  background: #e3efff;
+}
+
+.arkady-launcher img {
+  flex: none;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
 .modal-overlay:has(+ .arkady-assistant) {
   background: rgb(16 33 58 / 17%);
 }
 
 .modal-content.arkady-assistant {
-  inset: 12px 12px 12px auto;
-  width: min(452px, calc(100% - 24px));
+  inset: var(--arkady-panel-inset) var(--arkady-panel-inset) var(--arkady-panel-inset) auto;
+  width: var(--arkady-panel-width);
   max-height: none;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
@@ -12,6 +37,14 @@
   padding: 0;
   overflow: hidden;
   box-shadow: var(--shadow-overlay);
+}
+
+.modal-content.arkady-assistant--welcome {
+  box-shadow:
+    0 0 0 1px #b4e7fb,
+    0 0 0 2px rgb(85 194 246 / 48%),
+    0 0 18px rgb(42 169 240 / 34%),
+    var(--shadow-overlay);
 }
 
 .arkady-assistant .modal-heading {
@@ -81,6 +114,116 @@
   border-color: #cbdcf6;
   background: #eaf2ff;
   color: #174a9f;
+}
+
+.arkady-assistant__prompts[hidden] {
+  display: none;
+}
+
+.arkady-assistant__home.button.ghost {
+  justify-self: start;
+  min-height: 32px;
+  padding: 4px 7px;
+}
+
+.arkady-welcome {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+
+.arkady-welcome__heading h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 29px;
+  font-weight: 750;
+  line-height: 1.17;
+}
+
+.arkady-welcome__heading p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.arkady-welcome__actions {
+  display: grid;
+  gap: 10px;
+}
+
+.arkady-welcome__action.button {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  gap: 14px;
+  width: 100%;
+  min-height: 76px;
+  padding: 11px 14px;
+  border-color: #c9d8eb;
+  border-radius: 12px;
+  color: var(--text);
+  text-align: left;
+  white-space: normal;
+}
+
+.arkady-welcome__action.button[data-tone="shipments"] {
+  border-color: #3167eb;
+  background: #edf5ff;
+  box-shadow: inset 0 0 0 1px #3167eb;
+}
+
+.arkady-welcome__action.button:hover:not(:disabled) {
+  border-color: #4077ef;
+  background: #edf5ff;
+}
+
+.arkady-welcome__action.button:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.arkady-welcome__action-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.arkady-welcome__action-copy strong {
+  font-size: 16px;
+  font-weight: 720;
+  line-height: 1.25;
+}
+
+.arkady-welcome__action-copy > span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.arkady-welcome__icon {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border-radius: 11px;
+  color: #1a459f;
+  background: #e0ecff;
+}
+
+.arkady-welcome__action[data-tone="shipments"] .arkady-welcome__icon {
+  background: #d5e7fc;
+}
+
+.arkady-welcome__action[data-tone="reminder"] .arkady-welcome__icon {
+  color: #106279;
+  background: #e0f4f7;
+}
+
+.arkady-welcome__action[data-tone="draft"] .arkady-welcome__icon {
+  color: #3b4195;
+  background: #ebeaff;
 }
 
 .arkady-assistant__actions {
@@ -280,43 +423,18 @@
     animation: arkady-drawer-enter 260ms cubic-bezier(0.18, 0.76, 0.3, 1);
   }
 
-  .arkady-assistant[data-state="open"] .modal-heading::before {
-    transform-origin: 50% 68%;
-    animation: arkady-portrait-enter 440ms cubic-bezier(0.19, 0.7, 0.26, 1);
+  .modal-content.arkady-assistant--portal[data-state="open"] {
+    animation: arkady-portal-reveal 540ms cubic-bezier(0.26, 0.68, 0.3, 1);
   }
 
-  .arkady-assistant[data-state="open"] .modal-heading::after {
-    content: "";
+  .arkady-assistant--portal[data-state="open"]::after {
     position: absolute;
-    z-index: 0;
-    inset-block-start: 50%;
-    inset-inline-start: 51px;
-    inline-size: 92px;
-    block-size: 92px;
-    border-radius: 50%;
-    background: conic-gradient(
-      from 126deg,
-      transparent 10%,
-      #84aefc 26%,
-      transparent 46%,
-      transparent 63%,
-      #55c9dc 82%,
-      transparent 97%
-    );
-    mask-image: radial-gradient(
-      circle,
-      transparent 47%,
-      #000 53%,
-      #000 62%,
-      transparent 71%
-    );
+    inset: 0;
+    border-radius: inherit;
+    box-shadow: inset 0 0 0 2px rgb(42 185 249 / 72%), inset 0 0 22px rgb(27 123 238 / 28%);
     pointer-events: none;
-    opacity: 0;
-    animation: arkady-light-arc 440ms cubic-bezier(0.17, 0.61, 0.34, 1);
-  }
-
-  .arkady-assistant[data-state="open"] .modal-heading > div {
-    animation: arkady-title-enter 220ms ease-out 36ms backwards;
+    animation: arkady-portal-rim-fade 620ms ease-out both;
+    content: "";
   }
 }
 
@@ -332,59 +450,50 @@
   }
 }
 
-@keyframes arkady-portrait-enter {
+@keyframes arkady-portal-reveal {
   0% {
-    clip-path: circle(27% at 52% 58%);
-    transform: translateY(7px) rotate(-9deg) scale(0.76);
+    opacity: 0.24;
+    clip-path: ellipse(30% 46% at center);
   }
 
-  66% {
-    clip-path: circle(72% at 50% 50%);
-    transform: translateY(-2px) rotate(3deg) scale(1.08);
-  }
-
-  100% {
-    clip-path: circle(72% at 50% 50%);
-    transform: none;
-  }
-}
-
-@keyframes arkady-light-arc {
-  0% {
-    opacity: 0.25;
-    transform: translate(-50%, -50%) rotate(-35deg) scale(0.64);
-  }
-
-  36% {
-    opacity: 0.76;
-  }
-
-  100% {
-    opacity: 0;
-    transform: translate(-50%, -50%) rotate(64deg) scale(1.18);
-  }
-}
-
-@keyframes arkady-title-enter {
-  from {
-    opacity: 0.82;
-    transform: translateY(5px);
-  }
-
-  to {
+  42% {
     opacity: 1;
-    transform: none;
+    clip-path: ellipse(48% 54% at center);
   }
+
+  100% {
+    opacity: 1;
+    clip-path: ellipse(76% 76% at center);
+  }
+}
+
+@keyframes arkady-portal-rim-fade {
+  from { opacity: 0.9; }
+  to { opacity: 0; }
 }
 
 @media (max-width: 520px) {
+  :root {
+    --arkady-panel-inset: 0px;
+    --arkady-panel-width: 100%;
+  }
+
   .modal-content.arkady-assistant {
-    inset: 0;
-    width: 100%;
     border-radius: 0;
   }
 
   .arkady-assistant .modal-heading {
     padding-top: max(14px, env(safe-area-inset-top));
+  }
+
+  .arkady-welcome__action.button {
+    grid-template-columns: 40px minmax(0, 1fr) auto;
+    gap: 10px;
+    padding-inline: 11px;
+  }
+
+  .arkady-welcome__icon {
+    width: 40px;
+    height: 40px;
   }
 }

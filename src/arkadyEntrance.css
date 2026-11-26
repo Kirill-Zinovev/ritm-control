@@ -1,0 +1,272 @@
+.arkady-entrance {
+  position: fixed;
+  z-index: 120;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.arkady-entrance::before {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at 61% 47%, rgb(38 146 216 / 10%), rgb(14 38 91 / 22%) 75%);
+  opacity: 0;
+  transition: opacity 180ms ease-out;
+  content: "";
+}
+
+.arkady-entrance[data-ready]::before {
+  opacity: 1;
+}
+
+.arkady-entrance[data-revealing]::before {
+  opacity: 0;
+}
+
+.arkady-entrance__actor,
+.arkady-entrance__shadow {
+  position: absolute;
+  inset: 0 auto auto 0;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+
+.arkady-entrance__actor {
+  width: min(44vw, 53dvh, 416px);
+  aspect-ratio: 1;
+  translate: -50% -100%;
+  transform-origin: center bottom;
+}
+
+.arkady-entrance__actor canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.arkady-entrance__shadow {
+  width: min(26vw, 210px);
+  height: 22px;
+  translate: -50% -50%;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, rgb(6 28 78 / 78%), rgb(6 28 78 / 21%) 55%, transparent 73%);
+}
+
+.arkady-entrance__impact {
+  position: absolute;
+  z-index: 1;
+  inset: var(--arkady-panel-inset) var(--arkady-panel-inset) var(--arkady-panel-inset) auto;
+  width: var(--arkady-panel-width);
+  --arkady-portal-ellipse: 2% 8%;
+}
+
+.arkady-entrance[data-portal-open] .arkady-entrance__actor {
+  z-index: 2;
+}
+
+.arkady-portal__core,
+.arkady-portal__rim {
+  position: absolute;
+  inset: var(--arkady-portal-ellipse);
+  border-radius: 50%;
+  opacity: 0;
+  will-change: opacity, transform;
+}
+
+.arkady-portal__core {
+  isolation: isolate;
+  overflow: hidden;
+  background: radial-gradient(ellipse at 57% 43%, #07152f 4%, #102e70 35%, #124da8 48%, #197bc4 58%, #267ed4 66%, #1b5ac7 75%);
+  box-shadow:
+    inset 0 0 28px rgb(99 241 253 / 72%),
+    inset 0 0 90px rgb(16 124 255 / 58%);
+}
+
+.arkady-portal__core::before,
+.arkady-portal__core::after,
+.arkady-portal__rim::before,
+.arkady-portal__rim::after {
+  position: absolute;
+  content: "";
+}
+
+.arkady-portal__core::before {
+  inset: -38%;
+  background:
+    radial-gradient(ellipse at 55% 45%, transparent 18%, #123c90 29%, #35dbef 35%, transparent 40%, #1e9adf 49%, transparent 55%),
+    conic-gradient(from 80deg at 53% 46%, transparent 3%, #4af2f4 12%, transparent 28%, #246bd9 41%, transparent 55%, #147ccf 65%, transparent 78%, #2354b9 89%, transparent 98%);
+  mask-image: radial-gradient(ellipse at 52% 47%, transparent 15%, #000 27% 64%, transparent 81%);
+  mix-blend-mode: screen;
+  opacity: 0.7;
+}
+
+.arkady-portal__core::after {
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(ellipse at 56% 46%, rgb(2 13 42 / 65%), transparent 62%);
+  box-shadow: inset -18px 5px 42px rgb(7 28 87 / 78%), inset 10px -4px 30px rgb(137 253 255 / 47%);
+}
+
+.arkady-portal__rim {
+  border: 2px solid #76eefb;
+  box-shadow:
+    inset 0 0 16px rgb(111 248 255 / 76%),
+    0 0 0 3px rgb(26 119 237 / 58%),
+    0 0 24px rgb(40 177 250 / 75%),
+    0 0 64px rgb(27 92 224 / 37%);
+}
+
+.arkady-portal__rim::before {
+  inset: -10px -12px;
+  padding: 8px;
+  border-radius: 48% 52% 49% 51% / 51% 46% 54% 49%;
+  background: conic-gradient(from 12deg, transparent, #43b5fa 12%, #c9fbfe 17%, #2da7f5 24%, transparent 31% 42%, #2568f0 49%, #64f3f5 62%, transparent 72% 84%, #43b1ff 93%, transparent 99%);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+
+.arkady-portal__rim::after {
+  inset: -16px -17px;
+  border: 1px solid rgb(137 245 255 / 56%);
+  border-inline-start-color: rgb(164 247 255 / 84%);
+  border-inline-end-color: transparent;
+  border-radius: 49% 51% 53% 47% / 49% 46% 54% 51%;
+  transform: rotate(4deg);
+}
+
+.arkady-entrance__impact > i:first-of-type {
+  position: absolute;
+  inset: var(--arkady-portal-ellipse);
+  border: 2px solid #59e3ff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px #166ae2, 0 0 14px rgb(37 130 255 / 66%);
+  opacity: 0;
+}
+
+.arkady-entrance__impact > i:not(:first-of-type) {
+  position: absolute;
+  top: var(--spark-origin-y);
+  left: var(--spark-origin-x);
+  width: clamp(9px, 1.8vw, 26px);
+  height: 2px;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #1d61d7, #5eeaff 72%, #c7faff);
+  box-shadow: 0 0 8px rgb(18 104 232 / 88%);
+  opacity: 0;
+}
+
+.arkady-entrance__impact > i:nth-of-type(2) {
+  --spark-origin-x: 10%;
+  --spark-origin-y: 48%;
+  --spark-x: -49px;
+  --spark-y: 15px;
+  --spark-angle: -12deg;
+  --spark-delay: 0ms;
+}
+
+.arkady-entrance__impact > i:nth-of-type(3) {
+  --spark-origin-x: 22%;
+  --spark-origin-y: 15%;
+  --spark-x: -41px;
+  --spark-y: -26px;
+  --spark-angle: 31deg;
+  --spark-delay: 35ms;
+}
+
+.arkady-entrance__impact > i:nth-of-type(4) {
+  --spark-origin-x: 19%;
+  --spark-origin-y: 81%;
+  --spark-x: -43px;
+  --spark-y: 31px;
+  --spark-angle: -36deg;
+  --spark-delay: 55ms;
+}
+
+.arkady-entrance__impact > i:nth-of-type(5) {
+  --spark-origin-x: 83%;
+  --spark-origin-y: 20%;
+  --spark-x: 41px;
+  --spark-y: -26px;
+  --spark-angle: -32deg;
+  --spark-delay: 80ms;
+}
+
+.arkady-entrance[data-portal-open] .arkady-portal__core,
+.arkady-entrance[data-portal-open] .arkady-portal__rim {
+  animation: arkady-tall-portal-open 280ms cubic-bezier(0.23, 0.77, 0.2, 1) both;
+}
+
+.arkady-entrance[data-portal-open] .arkady-portal__core::before {
+  animation: arkady-tall-portal-swirl 2.4s linear infinite;
+}
+
+.arkady-entrance[data-entering] .arkady-entrance__impact > i:first-of-type {
+  animation: arkady-tall-portal-pressure 420ms ease-out both;
+}
+
+.arkady-entrance[data-entering] .arkady-entrance__impact > i:not(:first-of-type) {
+  animation: arkady-tall-portal-spark 420ms cubic-bezier(0.15, 0.67, 0.25, 1) var(--spark-delay) both;
+}
+
+.arkady-entrance[data-revealing] .arkady-portal__core {
+  animation: arkady-tall-portal-clear 390ms ease-out both;
+}
+
+.arkady-entrance[data-revealing] .arkady-portal__rim {
+  animation: arkady-tall-portal-dissolve 580ms ease-out both;
+}
+
+@keyframes arkady-tall-portal-open {
+  0% { opacity: 0; transform: scale(0.025, 0.16); }
+  46% { opacity: 0.92; transform: scale(0.48, 0.9); }
+  80% { opacity: 1; transform: scale(1.03, 1); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes arkady-tall-portal-swirl {
+  0% { transform: rotate(-12deg); }
+  100% { transform: rotate(348deg); }
+}
+
+@keyframes arkady-tall-portal-clear {
+  0% { opacity: 1; }
+  35% { opacity: 0.48; }
+  100% { opacity: 0; }
+}
+
+@keyframes arkady-tall-portal-dissolve {
+  0% { opacity: 1; transform: scale(1); }
+  46% { opacity: 0.68; transform: scale(1.16, 1.01); }
+  100% { opacity: 0; transform: scale(1.23, 1.04); }
+}
+
+@keyframes arkady-tall-portal-spark {
+  0% { opacity: 0; transform: translate(-50%, -50%) rotate(var(--spark-angle)) scale(0.25); }
+  28% { opacity: 1; }
+  100% {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--spark-x)), calc(-50% + var(--spark-y))) rotate(var(--spark-angle)) scale(0.42);
+  }
+}
+
+@keyframes arkady-tall-portal-pressure {
+  0% { opacity: 0; transform: scale(0.93, 0.96); }
+  24% { opacity: 0.83; }
+  100% { opacity: 0; transform: scale(1.18, 1.025); }
+}
+
+@media (max-width: 640px) {
+  .arkady-entrance__actor {
+    width: min(81vw, 53dvh, 365px);
+  }
+
+  .arkady-entrance__shadow {
+    width: min(46vw, 180px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .arkady-entrance {
+    display: none;
+  }
+}

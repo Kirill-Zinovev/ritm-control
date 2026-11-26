@@ -45,10 +45,12 @@ export default function HelpWorkspace({
   identity,
   isOwner,
   go,
+  onWhatsNew,
 }: {
   identity: string;
   isOwner: boolean;
   go: (page: Page) => void;
+  onWhatsNew?: () => void;
 }) {
   const storageKey = "ritm-learning-v1:" + identity;
   const [progress, setProgress] = useState(() => readProgress(storageKey));
@@ -161,6 +163,11 @@ export default function HelpWorkspace({
             Попробуем на учебных примерах.
           </p>
           <div className="learning-hero-actions">
+            {onWhatsNew && (
+              <button type="button" className="learning-secondary" onClick={onWhatsNew}>
+                Что нового
+              </button>
+            )}
             <button
               type="button"
               className="learning-primary"

@@ -7,19 +7,24 @@ import {
   type FormEvent,
 } from "react";
 import {
+  Barcode,
   Bell,
   BookOpen,
   BookPlus,
   CalendarDays,
   ChartNoAxesColumn,
+  ChevronRight,
+  FileText,
   ListChecks,
   FileSpreadsheet,
   BellPlus,
   Monitor,
   Route,
   SendHorizontal,
+  Truck,
+  type LucideIcon,
 } from "lucide-react";
-import { ArrowRight, ArrowSquareOut } from "./icons";
+import { ArrowLeft, ArrowRight, ArrowSquareOut } from "./icons";
 import { Button, Busy, Field, Modal, Notice } from "./ui";
 import { ASSEMBLY_URL } from "./liveAssembly";
 import type { LiveOrder } from "./livePrinting";
@@ -79,8 +84,9 @@ export type ArkadyOperationReport = {
 };
 
 export type ArkadyStart = {
-  panel: "summary" | "attention" | "diagnosis" | "catalog";
+  panel: "welcome" | "summary" | "attention" | "diagnosis" | "catalog";
   article?: string;
+  fromPortal?: boolean;
 };
 
 type Props = {
@@ -198,6 +204,45 @@ function catalogLink(card: ArkadyCatalogCard) {
   return `${ASSEMBLY_URL}/?${params}`;
 }
 
+function ArkadyWelcomeAction({
+  icon: Icon,
+  title,
+  description,
+  tone,
+  onClick,
+  disabled,
+}: {
+  icon: LucideIcon;
+  title: string;
+  description: string;
+  tone: "shipments" | "catalog" | "reminder" | "draft";
+  onClick: () => void;
+  disabled: boolean;
+}) {
+  const labelId = useId();
+  const descriptionId = useId();
+  return (
+    <Button
+      type="button"
+      className="arkady-welcome__action"
+      data-tone={tone}
+      aria-labelledby={labelId}
+      aria-describedby={descriptionId}
+      onClick={onClick}
+      disabled={disabled}
+    >
+      <span className="arkady-welcome__icon">
+        <Icon size={23} aria-hidden="true" />
+      </span>
+      <span className="arkady-welcome__action-copy">
+        <strong id={labelId}>{title}</strong>
+        <span id={descriptionId}>{description}</span>
+      </span>
+      <ChevronRight size={17} aria-hidden="true" />
+    </Button>
+  );
+}
+
 export function ArkadyAssistant(props: Props) {
   if (!props.open) return null;
   return <AssistantDrawer {...props} />;
@@ -227,6 +272,7 @@ function AssistantDrawer({
   operation,
 }: Props) {
   const [panel, setPanel] = useState<
+    | "welcome"
     | "summary"
     | "diagnosis"
     | "catalog"
@@ -674,20 +720,84 @@ function AssistantDrawer({
       open={open}
       title="Аркадий"
       description={
-        panel === "catalog-draft"
-          ? "Справочник РИТМ Сборки"
-          : panel === "reminder-task"
-            ? "Поручения по поставкам"
-            : panel === "attention" || !supplyName
-              ? "Контроль поставок"
-              : supplyName
+        panel === "welcome"
+          ? "Помощник по поставкам"
+          : panel === "catalog-draft"
+            ? "Справочник РИТМ Сборки"
+            : panel === "reminder-task"
+              ? "Поручения по поставкам"
+              : panel === "attention" || !supplyName
+                ? "Контроль поставок"
+                : supplyName
       }
-      className="arkady-assistant"
+      className={`arkady-assistant${start?.fromPortal ? " arkady-assistant--portal" : ""}${panel === "welcome" ? " arkady-assistant--welcome" : ""}`}
       onClose={close}
     >
       <div className="arkady-assistant__scroll" ref={scroll}>
+        {panel === "welcome" && (
+          <section className="arkady-welcome" aria-label="Возможности Аркадия">
+            <div className="arkady-welcome__heading">
+              <h3>Чем помочь?</h3>
+              <p>Выберите действие или задайте вопрос.</p>
+            </div>
+            <div className="arkady-welcome__actions">
+              {(attention || supplyName) && (
+                <ArkadyWelcomeAction
+                  icon={Truck}
+                  title="Проверить поставки"
+                  description="Покажу сроки и причины задержек."
+                  tone="shipments"
+                  onClick={() => attention ? openPanel("attention") : explain("Что мешает завершить?")}
+                  disabled={Boolean(busy)}
+                />
+              )}
+              {createCatalogDraft && (
+                <ArkadyWelcomeAction
+                  icon={Barcode}
+                  title="Карточка WB"
+                  description="По штрихкоду и фото подготовлю карточку и этикетку."
+                  tone="catalog"
+                  onClick={() => prepareCatalogDraft({ market: "WB" })}
+                  disabled={Boolean(busy)}
+                />
+              )}
+              {reminderTask && (
+                <ArkadyWelcomeAction
+                  icon={CalendarDays}
+                  title="Задача и напоминание"
+                  description="Помогу выбрать сотрудника, время и частоту."
+                  tone="reminder"
+                  onClick={() => openPanel("reminder-task")}
+                  disabled={Boolean(busy)}
+                />
+              )}
+              {onPrepareSupply && (
+                <ArkadyWelcomeAction
+                  icon={FileText}
+                  title="Черновик поставки"
+                  description="Проверю состав и распределение по станкам."
+                  tone="draft"
+                  onClick={() => openPanel("supply-draft")}
+                  disabled={Boolean(busy)}
+                />
+              )}
+            </div>
+          </section>
+        )}
+        {panel !== "welcome" && (
+          <Button
+            kind="ghost"
+            type="button"
+            className="arkady-assistant__home"
+            disabled={Boolean(busy)}
+            onClick={() => openPanel("welcome")}
+          >
+            <ArrowLeft size={16} aria-hidden="true" /> Все возможности
+          </Button>
+        )}
         <div
           className="arkady-assistant__prompts"
+          hidden={panel === "welcome"}
           role="group"
           aria-label="Быстрые действия Аркадия"
         >

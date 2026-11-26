@@ -4,6 +4,7 @@ import type { LiveOrder } from "../src/livePrinting";
 import {
   diagnoseArkadySupply,
   parseArkadyIntent,
+  type ArkadyIntent,
 } from "../src/arkadyAssistantData";
 
 function position(fields: Partial<LiveOrder> = {}): LiveOrder {
@@ -212,4 +213,66 @@ test("Arkady interprets known requests and only prepares exact supported catalog
     parseArkadyIntent("Укажи PT0001.A0277 и KS0006.A7366 кратность 10"),
     { type: "unsupported" },
   );
+});
+
+test("Arkady uses words in natural questions to choose the relevant information", () => {
+  const questions: [string, ArkadyIntent][] = [
+    ["Подскажи, где горят сроки?", { type: "attention" }],
+    ["Какие у нас просроченные поставки?", { type: "attention" }],
+    [
+      "Аркадий, подскажи, когда упаковка должна быть готова?",
+      { type: "deadlines" },
+    ],
+    [
+      "Есть задержка по порезке QA0001.A0277?",
+      { type: "diagnosis", article: "QA0001.A0277" },
+    ],
+    [
+      "В какой участок уйдёт QA0001.A0277?",
+      { type: "routing", article: "QA0001.A0277" },
+    ],
+    [
+      "Как изменить кратность QA0001.A0277?",
+      { type: "catalog", article: "QA0001.A0277", field: "multiplicity" },
+    ],
+  ];
+
+  for (const [question, expected] of questions) {
+    assert.deepEqual(parseArkadyIntent(question), expected, question);
+  }
+});
+
+test("natural requests open forms and polite wording does not authorize destructive commands", () => {
+  const requests: [string, ArkadyIntent][] = [
+    [
+      "Аркадий, напомни Роману завтра отметить порезку",
+      { type: "reminder-task" },
+    ],
+    ["Подготовь новую поставку из Excel", { type: "supply-draft" }],
+    [
+      "Аркадий, нужна карточка для WB, магазин 2, штрихкод 04610000000201",
+      {
+        type: "catalog-draft",
+        market: "WB",
+        article: undefined,
+        store: "2",
+        barcode: "04610000000201",
+      },
+    ],
+    ["Пожалуйста, удали QA0001.A0277 из поставки", { type: "unsupported" }],
+  ];
+
+  for (const [request, expected] of requests) {
+    assert.deepEqual(parseArkadyIntent(request), expected, request);
+  }
+});
+
+test("Arkady distinguishes an Excel loading issue from a saved shipment operation", () => {
+  assert.deepEqual(
+    parseArkadyIntent("Не загружается Excel для новой поставки"),
+    { type: "unsupported" },
+  );
+  assert.deepEqual(parseArkadyIntent("Проверь зависшую загрузку поставки"), {
+    type: "operations",
+  });
 });

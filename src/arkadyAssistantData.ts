@@ -316,12 +316,16 @@ const articlePattern =
 
 export function parseArkadyIntent(text: string): ArkadyIntent {
   const query = text.trim().replace(/\s+/gu, " ");
-  const command = query.replace(/^аркадий[, ]+/iu, "");
+  const command = query.replace(
+    /^(?:(?:аркадий|привет|пожалуйста|подскажи|скажи|можешь|сможешь)[\s,.:!?]+)+/iu,
+    "",
+  );
+  const words = command.toLowerCase().replace(/ё/gu, "е");
   if (
-    !query ||
+    !words ||
     query.length > 500 ||
-    /^(?:не\s|отмени|удали|убери|спиши|отгрузи|сбрось|закрой|сними)/iu.test(
-      command,
+    /^(?:не\s|отмени|удали|убери|убрать|спиши|списать|отгрузи|сбрось|сбросить|закрой|закрыть|сними|снять)/u.test(
+      words,
     )
   )
     return { type: "unsupported" };
@@ -330,10 +334,21 @@ export function parseArkadyIntent(text: string): ArkadyIntent {
   ];
   if (articles.length > 1) return { type: "unsupported" };
   const article = articles[0];
+  const mentionsSupply = /поставк|поставок/u.test(words);
+  const mentionsExcel = /excel|xlsx|эксель/u.test(words);
   if (
-    /^(?:создай|подготовь|заведи|добавь)\s+(?:(?:новую\s+)?карточку|(?:новый\s+)?товар)(?!\p{L})|^новая карточка(?!\p{L})/iu.test(
-      command,
-    )
+    /^(?:(?:нужно|надо)\s+)?напомни(?:ть)?(?!\p{L})/u.test(words) ||
+    /^(?:подготовь|создай|настрой|поставь|сделай|открой)\s+(?:(?:личное|новое|мне)\s+)*(?:напоминание|задачу)(?!\p{L})/u.test(
+      words,
+    ) ||
+    /^(?:задача и напоминание|напоминание(?: в битриксе)?)[?!.]*$/u.test(words)
+  )
+    return { type: "reminder-task" };
+  if (
+    /^(?:создай|подготовь|заведи|добавь|сделай|создать|подготовить|завести|добавить|сделать)\s+(?:(?:новую|новый|мне)\s+)*(?:карточку|товар)(?!\p{L})/u.test(
+      words,
+    ) ||
+    /^(?:новая|нужна)\s+карточка(?!\p{L})/u.test(words)
   ) {
     const wb = /(?<![\p{L}\p{N}])(?:wb|вб|wildberries)(?![\p{L}\p{N}])/iu.test(
       command,
@@ -363,55 +378,76 @@ export function parseArkadyIntent(text: string): ArkadyIntent {
     };
   }
   if (
-    /^(?:(?:подготовь|сделай|открой|создай)\s+)?(?:черновик\s+поставки|поставку\s+из\s+excel)[?!.]*$/iu.test(
-      command,
-    )
+    /черновик\s+(?:новой\s+)?поставки/u.test(words) ||
+    /^(?:новая поставка|поставку из (?:excel|xlsx|эксель))[?!.]*$/u.test(
+      words,
+    ) ||
+    (mentionsSupply &&
+      (mentionsExcel || /новую\s+поставку/u.test(words)) &&
+      /^(?:подготовь|создай|сделай|собери|открой|хочу создать|хочу подготовить)(?!\p{L})/u.test(
+        words,
+      ))
   )
     return { type: "supply-draft" };
+  if (/^добав(?:ь|ить)(?!\p{L})/u.test(words)) return { type: "unsupported" };
   if (
-    /^(?:задача и напоминание|(?:подготовь|создай|настрой)\s+(?:личное\s+)?напоминание(?:\s+в\s+битриксе)?)[?!.]*$/iu.test(
-      command,
-    )
-  )
-    return { type: "reminder-task" };
-  if (/^добавь/iu.test(command)) return { type: "unsupported" };
-  if (
-    !article &&
-    /^(?:аркадий[, ]+)?(?:покажи[, ]+)?(?:что\s+(?:срочно|требует\s+внимания)|требует\s+внимания|срочные\s+поставки|какие\s+поставки\s+(?:сегодня\s+)?(?:горят|просрочены|требуют\s+внимания))[?!.]*$/iu.test(
-      query,
-    )
-  )
-    return { type: "attention" };
-  if (
-    /операци|возобнов|сохранени|завис\p{L}* (?:создани|сохранени|загрузк)\p{L}* поставк/iu.test(
-      query,
-    )
+    /операци|возобнов/u.test(words) ||
+    (mentionsSupply &&
+      !mentionsExcel &&
+      /создани|сохранени|загрузк|не создается|не сохраняется/u.test(words))
   )
     return { type: "operations" };
-  const mentionedFields = fields.filter(({ mention }) => mention.test(query));
-  const explicitlyEditing =
-    /^(?:поставь|укажи|измени|исправь|задай|обнови|заполни)\s/iu.test(query);
+  if (mentionsExcel && /завис|не\s+(?:загружа|груз)|ошибк/u.test(words))
+    return { type: "unsupported" };
   if (
     !article &&
-    /срок(?:и|ов|а|у|ом)?(?=$|[^\p{L}])|когда отгрузка/iu.test(query)
+    (/^(?:покажи[, ]+)?(?:что\s+(?:у нас\s+)?(?:срочно|требует\s+внимания)|требует\s+внимания)[?!.]*$/u.test(
+      words,
+    ) ||
+      /где\s+горят\s+срок/u.test(words) ||
+      (/поставок|поставках|(?:какие|которые)\p{L}*\s+.+поставки|какие\s+поставки|(?:срочные|просроченные)\s+поставки/u.test(
+        words,
+      ) &&
+        /срочн|горят|просроч|задерж|требуют\s+внимания/u.test(words)))
+  )
+    return { type: "attention" };
+  const mentionedFields = fields.filter(({ mention }) => mention.test(command));
+  const explicitlyEditing =
+    /^(?:поставь|укажи|измени|исправь|задай|обнови|заполни)\s/u.test(words);
+  if (
+    !article &&
+    (/срок(?:и|ов|а|у|ом)?(?=$|[^\p{L}])/u.test(words) ||
+      (/(?:^|[^\p{L}])(?:когда|к какому числу|к какому дню|до какого числа)(?!\p{L})/u.test(
+        words,
+      ) &&
+        /отгруз|отправ|печат|порез|(?:^|[^\p{L}])резк|упаков|поставк/u.test(
+          words,
+        )))
   )
     return { type: "deadlines" };
-  if (!explicitlyEditing && /распредел|округл|куда отправит/iu.test(query))
+  if (
+    !explicitlyEditing &&
+    /распредел|округл|куда отправит|как(?:ой|ом|ого)\s+участ(?:ок|ке|ка)|куда\s+(?:уйдет|пойдет)|не\s+кратно/u.test(
+      words,
+    )
+  )
     return { type: "routing", article };
   if (
     !article &&
     !explicitlyEditing &&
-    /сводк|что осталось|сколько осталось|обзор поставки/iu.test(query)
+    /сводк|что осталось|сколько осталось|обзор поставки|прогресс поставки/u.test(
+      words,
+    )
   )
     return { type: "summary" };
   if (mentionedFields.length > 1) return { type: "unsupported" };
   const field = mentionedFields[0];
   if (
     field ||
-    /справочник|данные товара|карточк[ау] товара|норм[ауые]|кэф/iu.test(query)
+    /справочник|данные товара|карточк[ау] товара|норм[ауые]|кэф/u.test(words)
   ) {
     const valueQuery = article
-      ? query
+      ? command
           .replace(
             new RegExp(
               `(?:\\s+(?:(?:для|у)(?:\\s+артикула)?|артикула)\\s+)?${articlePattern.source}`,
@@ -420,7 +456,7 @@ export function parseArkadyIntent(text: string): ArkadyIntent {
             "",
           )
           .trim()
-      : query;
+      : command;
     return {
       type: "catalog",
       article,
@@ -431,8 +467,8 @@ export function parseArkadyIntent(text: string): ArkadyIntent {
   }
   if (
     !explicitlyEditing &&
-    /почем|мешает|задерж|стоит|заверш|готовност|печат|порез|упаков|поставк|статус/iu.test(
-      query,
+    /почем|мешает|задерж|стоит|заверш|готовност|печат|порез|(?:^|[^\p{L}])резк|упаков|поставк|статус/u.test(
+      words,
     )
   )
     return { type: "diagnosis", article };

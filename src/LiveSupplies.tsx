@@ -11,13 +11,14 @@ import { boxPositionKey, useBoxPositionRemoval } from "./BoxPositionRemoval";
 import { startWriterStatusPolling } from "./writerStatusPolling";
 import { recoverableSupply } from "./supplyAutoRecovery";
 import { ArkadyAssistant, type ArkadyOperationReport, type ArkadyStart } from "./ArkadyAssistant";
+import { ArkadyEntrance, preloadArkadyEntrance } from "./ArkadyEntrance";
 import type { ArkadySupplyDraftInput } from "./ArkadySupplyDraft";
 import type { ArkadyAttentionItem } from "./arkadyAttentionData";
 import { checkArkadyDistribution, lookupArkadyCatalog, saveArkadyCatalog } from "./arkadyCatalogClient";
 import { buildProductionGroups, productionStoreName } from "./productionData";
 import { useCloudAuth } from "./CloudAuth";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bell, FileSpreadsheet } from "lucide-react";
+import { FileSpreadsheet } from "lucide-react";
 import { SupplyRoutingReview, type RoutingPreview, type RoundingDirection } from "./SupplyRoutingReview";
 import "./supplyCreation.css";
 import {
@@ -206,6 +207,8 @@ type Props = {
   loading: boolean;
   error: string;
   onRefresh: () => Promise<void>;
+  openArkadyWelcome?: boolean;
+  onArkadyWelcomeOpened?: () => void;
 };
 
 function buildSummaries(live: LivePrinting | null): SheetSummary[] {
@@ -624,12 +627,23 @@ export function LiveSuppliesWorkspace({
   loading,
   error,
   onRefresh,
+  openArkadyWelcome,
+  onArkadyWelcomeOpened,
 }: Props) {
   const auth = useCloudAuth();
   const canReviewAttention = auth.role === "owner" || auth.role === "manager";
   const [supplyView, setSupplyView] = useState<'directions' | 'jobs'>('directions');
   const [arkadyStart, setArkadyStart] = useState<ArkadyStart | null>(null);
+  const [arkadyLaunch, setArkadyLaunch] = useState<{ start: ArkadyStart; jobId?: string } | null>(null);
   const arkadyOpen = arkadyStart !== null;
+  useEffect(() => {
+    if (canReviewAttention) preloadArkadyEntrance();
+  }, [canReviewAttention]);
+  useEffect(() => {
+    if (!openArkadyWelcome || !canReviewAttention) return;
+    setArkadyLaunch({ start: { panel: "welcome" } });
+    onArkadyWelcomeOpened?.();
+  }, [openArkadyWelcome, canReviewAttention, onArkadyWelcomeOpened]);
   const [arkadyTaskDraft, setArkadyTaskDraft] = useState<{
     sheetKey: string; note: string; article?: string; title?: string;
     startReminder?: boolean; reminderCheck?: BitrixTaskReminderDraft["check"];
@@ -1775,6 +1789,21 @@ export function LiveSuppliesWorkspace({
     }
   };
 
+  const openArkadyAfterJump = useCallback((fromPortal: boolean) => {
+    if (!arkadyLaunch) return;
+    if (arkadyLaunch.jobId) {
+      setSearch("");
+      setSelectedId(arkadyLaunch.jobId);
+      setSupplyView("jobs");
+    }
+    setArkadyStart({ ...arkadyLaunch.start, fromPortal });
+  }, [arkadyLaunch]);
+  const finishArkadyLaunch = useCallback(() => setArkadyLaunch(null), []);
+
+  function launchArkady(start: ArkadyStart, jobId?: string) {
+    setArkadyLaunch(current => current ?? { start, jobId });
+  }
+
   return (
     <div className="live-supplies">
       <div className="live-supplies-toolbar">
@@ -1786,9 +1815,21 @@ export function LiveSuppliesWorkspace({
           </p>
         </div>
         <div className="live-supplies-actions">
-          {canReviewAttention && <Button onClick={() => setArkadyStart({ panel: "attention" })}>
-            <Bell size={16} /> Требует внимания
-          </Button>}
+          {canReviewAttention && (
+            <Button
+              type="button"
+              className="arkady-launcher"
+              aria-haspopup="dialog"
+              aria-expanded={arkadyOpen}
+              aria-disabled={arkadyLaunch !== null}
+              onPointerEnter={preloadArkadyEntrance}
+              onFocus={preloadArkadyEntrance}
+              onClick={() => launchArkady({ panel: "welcome" })}
+            >
+              <img src="/help/arkady.webp" width={26} height={26} alt="" />
+              Аркадий
+            </Button>
+          )}
           <a className="button secondary" href="https://assembly-v2.zinovevkirill234.chatgpt.site" target="_blank" rel="noreferrer">RITM Сборка <ArrowSquareOut size={17}/></a>
           {writer && writer.mode !== "cloud" && <AssemblyTransfer onDelivered={() => void refreshSupplyData()} />}
           <Button onClick={() => void refreshSupplyData()} disabled={loading}>
@@ -2066,12 +2107,7 @@ export function LiveSuppliesWorkspace({
             setSelectedId(id);
             setSupplyView("jobs");
           }}
-          onAskArkady={(id) => {
-            setSearch("");
-            setSelectedId(id);
-            setSupplyView("jobs");
-            setArkadyStart({ panel: "summary" });
-          }}
+          onAskArkady={(id) => launchArkady({ panel: "summary" }, id)}
         />
       )}
       {!live && loading ? (
@@ -2209,7 +2245,13 @@ export function LiveSuppliesWorkspace({
                 }
                 actions={
                   <>
-                    <Button onClick={() => setArkadyStart({ panel: "summary" })}>
+                    <Button
+                      type="button"
+                      aria-haspopup="dialog"
+                      onPointerEnter={preloadArkadyEntrance}
+                      onFocus={preloadArkadyEntrance}
+                      onClick={() => launchArkady({ panel: "summary" })}
+                    >
                       <MessageCircle size={16} /> Спросить Аркадия
                     </Button>
                     {visibility?.available && <Button disabled={visibilityBusy || busy} onClick={() => {
@@ -2848,6 +2890,7 @@ export function LiveSuppliesWorkspace({
         </div>
       ) : null}
 
+      {arkadyLaunch && <ArkadyEntrance onOpen={openArkadyAfterJump} onFinish={finishArkadyLaunch} />}
       {arkadyStart && (() => {
         const selectedMarket = selected ? supplyMarketplace(selected.sheet.name) : undefined;
         const market = selectedMarket === "Ozon" ? "OZON" : selectedMarket === "WB" ? "WB" : undefined;
@@ -2911,7 +2954,10 @@ export function LiveSuppliesWorkspace({
         return <ArkadyAssistant
           key={`${selected?.sheet.sourceId}:${selected?.sheet.sheetId}:${arkadyStart.panel}:${arkadyStart.article ?? ""}`}
           open={arkadyOpen}
-          onClose={() => setArkadyStart(null)}
+          onClose={() => {
+            setArkadyStart(null);
+            setArkadyLaunch(null);
+          }}
           start={arkadyStart}
           attention={canReviewAttention ? {
             live,

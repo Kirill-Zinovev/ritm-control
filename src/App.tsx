@@ -89,6 +89,7 @@ const StockWorkspace = lazy(() => import("./StockWorkspace"));
 const ArkadySettings = lazy(() => import("./ArkadySettings"));
 const HelpWorkspace = lazy(() => import("./HelpWorkspace"));
 const FirstVisitWelcome = lazy(() => import("./FirstVisitWelcome"));
+const ArkadyWhatsNew = lazy(() => import("./ArkadyWhatsNew").then(({ ArkadyWhatsNew }) => ({ default: ArkadyWhatsNew })));
 import { PrinterProfilePage, type PrinterRecord } from "./EmployeeProfiles";
 import {
   Badge,
@@ -179,6 +180,22 @@ function AppShell() {
   const cloudAuth = useCloudAuth();
   const learningIdentity = [cloudAuth.role || "local", cloudAuth.username || cloudAuth.displayName || ""].join(":");
   const firstVisitIdentity = `${cloudAuth.role}:${cloudAuth.username || cloudAuth.displayName || "owner"}`;
+  const canSeeArkadyNews = cloudAuth.role === "owner" || cloudAuth.role === "manager";
+  const arkadyNewsKey = `ritm-whats-new-arkady-v1:${firstVisitIdentity}`;
+  const [dismissedArkadyNews, setDismissedArkadyNews] = useState<string>();
+  const [reopenedArkadyNews, setReopenedArkadyNews] = useState(false);
+  const [openArkadyWelcome, setOpenArkadyWelcome] = useState(false);
+  const clearArkadyWelcome = useCallback(() => setOpenArkadyWelcome(false), []);
+  const arkadyNewsOpen = canSeeArkadyNews && (
+    reopenedArkadyNews || (dismissedArkadyNews !== arkadyNewsKey && !readStorage(arkadyNewsKey, false))
+  );
+  useEffect(() => {
+    const sync = (event: StorageEvent) => {
+      if (event.key === arkadyNewsKey && event.newValue === "true") setDismissedArkadyNews(arkadyNewsKey);
+    };
+    window.addEventListener("storage", sync);
+    return () => window.removeEventListener("storage", sync);
+  }, [arkadyNewsKey]);
   const [page, setPage] = useState<Page>(() => pageForRole(initialPage(), cloudAuth.role));
   const [date, setDate] = useState(() =>
     new Intl.DateTimeFormat("en-CA", {
@@ -306,6 +323,17 @@ function AppShell() {
     setPrinterProfileId(null);
     setQuery("");
     setSidebar(false);
+  };
+  const dismissArkadyNews = () => {
+    writeStorage(arkadyNewsKey, true);
+    setDismissedArkadyNews(arkadyNewsKey);
+    setReopenedArkadyNews(false);
+  };
+  const openArkadyFromNews = () => {
+    dismissArkadyNews();
+    setMode("imported");
+    go("supplies");
+    setOpenArkadyWelcome(true);
   };
   const update = (next: Dataset) => {
     if (mode === "demo") setDemo(next);
@@ -1105,7 +1133,14 @@ function AppShell() {
             </div>
           </div>
         )}
-        {(cloudAuth.role === "owner" || cloudAuth.role === "manager") && (
+        {arkadyNewsOpen && (
+          <PageErrorBoundary quiet>
+            <Suspense fallback={null}>
+              <ArkadyWhatsNew open={arkadyNewsOpen} onClose={dismissArkadyNews} onOpenArkady={openArkadyFromNews} />
+            </Suspense>
+          </PageErrorBoundary>
+        )}
+        {canSeeArkadyNews && !arkadyNewsOpen && dismissedArkadyNews !== arkadyNewsKey && (
           <PageErrorBoundary quiet>
             <Suspense fallback={null}>
               <FirstVisitWelcome key={firstVisitIdentity} identity={firstVisitIdentity} onOpen={() => go("help")} />
@@ -1120,6 +1155,7 @@ function AppShell() {
             identity={learningIdentity}
             isOwner={cloudAuth.role === "owner"}
             go={go}
+            onWhatsNew={canSeeArkadyNews ? () => setReopenedArkadyNews(true) : undefined}
           />
         </Suspense>}
         {page === "arkady" && <Suspense fallback={<section className="panel"><Busy label="Открываю настройки…" /></section>}><ArkadySettings /></Suspense>}
@@ -1738,6 +1774,8 @@ function AppShell() {
                   loading={live.loading}
                   error={live.error}
                   onRefresh={refreshLivePrinting}
+                  openArkadyWelcome={openArkadyWelcome}
+                  onArkadyWelcomeOpened={clearArkadyWelcome}
                 />
               </Suspense>
             ) : (

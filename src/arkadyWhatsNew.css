@@ -1,0 +1,183 @@
+.modal-overlay.arkady-whats-new__overlay {
+  background: rgb(23 47 86 / 38%);
+  backdrop-filter: blur(3px);
+}
+
+.modal-content.arkady-whats-new {
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: minmax(0, 57fr) minmax(0, 43fr);
+  width: min(1240px, 76vw);
+  max-height: calc(100dvh - 36px);
+  padding: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-radius: 26px;
+  background: #fff;
+  color: #112441;
+  box-shadow: 0 24px 68px rgb(13 41 77 / 26%);
+}
+
+.arkady-whats-new__copy {
+  position: relative;
+  z-index: 1;
+  grid-column: 1;
+  padding: clamp(24px, 3.3vw, 52px) clamp(22px, 3.1vw, 50px);
+}
+
+.arkady-whats-new__label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 clamp(16px, 2.2vw, 38px);
+  font-size: clamp(16px, 1.85vw, 30px);
+  font-weight: 800;
+}
+
+.arkady-whats-new__label svg,
+.arkady-whats-new__features svg {
+  flex: none;
+  color: #155dfa;
+}
+
+.arkady-whats-new__title {
+  margin: 0;
+  font-size: clamp(28px, 3.12vw, 52px);
+  font-weight: 850;
+  line-height: 1.1;
+  letter-spacing: -0.035em;
+  text-wrap: balance;
+}
+
+.arkady-whats-new__description {
+  margin: 12px 0 0;
+  color: #566f91;
+  font-size: clamp(16px, 1.8vw, 29px);
+  line-height: 1.36;
+}
+
+.arkady-whats-new__features {
+  display: grid;
+  gap: clamp(14px, 2.4vw, 38px);
+  margin: clamp(26px, 3.45vw, 56px) 0;
+  padding: 0;
+  list-style: none;
+}
+
+.arkady-whats-new__features li {
+  display: flex;
+  align-items: center;
+  gap: clamp(12px, 1.8vw, 28px);
+  font-size: clamp(16px, 1.78vw, 28px);
+  font-weight: 730;
+  line-height: 1.24;
+}
+
+.arkady-whats-new__features svg {
+  width: clamp(23px, 2.65vw, 43px);
+  height: auto;
+}
+
+.arkady-whats-new__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: clamp(10px, 1.3vw, 20px);
+}
+
+.arkady-whats-new__actions .button {
+  min-height: clamp(44px, 4.4vw, 70px);
+  padding-inline: clamp(14px, 2.35vw, 39px);
+  border-radius: clamp(10px, 1.05vw, 17px);
+  font-size: clamp(14px, 1.55vw, 26px);
+  font-weight: 770;
+  white-space: nowrap;
+}
+
+.arkady-whats-new__actions .button.primary {
+  border-color: #155dfa;
+  background: #155dfa;
+}
+
+.arkady-whats-new__actions .button.primary:hover {
+  border-color: #0b4ddc;
+  background: #0b4ddc;
+}
+
+.arkady-whats-new__actions .button.secondary {
+  border-color: #c8d6e9;
+  background: #fff;
+  color: #112441;
+}
+
+.arkady-whats-new__actions .button.secondary:hover {
+  background: #eef5ff;
+}
+
+.arkady-whats-new__art {
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: 50%;
+  background: #061d44 url("/images/arkady-whats-new.webp") center / cover no-repeat;
+  clip-path: polygon(15% 0, 100% 0, 100% 100%, 0 100%);
+}
+
+.arkady-whats-new__close {
+  position: absolute;
+  z-index: 2;
+  top: 18px;
+  right: 18px;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 28%);
+  border-radius: 50%;
+  background: rgb(255 255 255 / 18%);
+  color: #fff;
+  cursor: pointer;
+}
+
+.arkady-whats-new__close:hover {
+  background: rgb(255 255 255 / 32%);
+}
+
+.arkady-whats-new__close:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
+}
+
+@media (max-width: 780px) {
+  .modal-content.arkady-whats-new {
+    display: flex;
+    flex-direction: column;
+    width: min(560px, calc(100vw - 24px));
+    max-height: calc(100dvh - 24px);
+    border-radius: 20px;
+  }
+
+  .arkady-whats-new__art {
+    position: static;
+    order: -1;
+    flex: none;
+    width: 100%;
+    height: clamp(132px, 28dvh, 220px);
+    background-position: center 35%;
+    clip-path: none;
+  }
+
+  .arkady-whats-new__copy {
+    flex: none;
+    padding: 20px;
+  }
+
+  .arkady-whats-new__features {
+    margin: 22px 0;
+  }
+
+  .arkady-whats-new__close {
+    top: 12px;
+    right: 12px;
+  }
+}
