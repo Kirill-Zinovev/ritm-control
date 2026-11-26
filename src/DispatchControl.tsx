@@ -2,9 +2,9 @@ import { useMemo, useState } from "react";
 import {
   ArrowSquareOut,
   ArrowsClockwise,
+  Clock3,
   Cube,
   DownloadSimple,
-  FileText,
   MagnifyingGlass,
   Printer,
   Scissors,
@@ -20,7 +20,12 @@ import "./dispatchControl.css";
 const all = "";
 const pageSize = 40;
 const stages = {
-  planned: { label: "В плане", detail: "В плане", Icon: FileText, order: 0 },
+  planned: {
+    label: "Ожидает печати",
+    detail: "Ожидает печати",
+    Icon: Clock3,
+    order: 0,
+  },
   print: { label: "Печать", detail: "На печати", Icon: Printer, order: 1 },
   cut: { label: "Порезка", detail: "На порезке", Icon: Scissors, order: 2 },
   pack: { label: "Упаковка", detail: "На упаковке", Icon: Cube, order: 3 },
@@ -145,7 +150,7 @@ async function exportExcel(
     { header: "Где сейчас", key: "location", width: 40 },
     { header: "Короба и количество", key: "cartons", width: 43 },
     { header: "В работе, шт.", key: "work", width: 18 },
-    { header: "В плане, шт.", key: "planned", width: 18 },
+    { header: "Ожидает печати, шт.", key: "planned", width: 24 },
     { header: "На печати, шт.", key: "print", width: 18 },
     { header: "На порезке, шт.", key: "cut", width: 18 },
     { header: "На упаковке, шт.", key: "pack", width: 18 },

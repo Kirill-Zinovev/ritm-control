@@ -118,6 +118,7 @@ test("uses only lifecycle steps as production marks advance and removes a fully 
   );
   assert.equal(planned.stage, "planned");
   assert.equal(planned.plannedQty, 120);
+  assert.equal(planned.location, "Рулонная печать · очередь печати");
   const [printing] = buildDispatchRows(
     [{ ...position, printed: 20, cut: null }],
     [unsent],
@@ -170,6 +171,23 @@ test("keeps the remaining quantity visible even when no stage is recorded for it
   assert.equal(row.remaining, 70);
   assert.equal(row.stage, null);
   assert.equal(row.workQty + row.readyQty, 0);
+});
+
+test("shows the Box print queue for a newly scheduled article with no printed output", () => {
+  const box = {
+    ...position,
+    department: "box" as const,
+    plan: 40,
+    printed: 0,
+    cut: 0,
+  };
+  const [row] = buildDispatchRows(
+    [box],
+    [{ ...fact, plan: 40, sent: 0, packed: 0 }],
+  );
+  assert.equal(row.stage, "planned");
+  assert.equal(row.location, "Бокс · очередь печати");
+  assert.equal(row.plannedQty, 40);
 });
 
 test("groups duplicate SKU positions only within the exact supply and store", () => {

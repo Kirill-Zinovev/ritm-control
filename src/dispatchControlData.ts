@@ -145,8 +145,12 @@ export function buildDispatchPositions(live: LivePrinting | null) {
   return [...result.values()];
 }
 
-function productionLocation(position: DispatchPosition) {
-  return position.department === "box" ? "Бокс" : "Рулонная печать";
+function productionLocation(
+  position: DispatchPosition,
+  waitingForPrint = false,
+) {
+  const department = position.department === "box" ? "Бокс" : "Рулонная печать";
+  return waitingForPrint ? `${department} · очередь печати` : department;
 }
 
 function stageFromMarks(
@@ -231,6 +235,8 @@ function classify(
     result.remaining = null;
     result.stage = stageFromMarks(position, fact);
     if (result.cartons.length) result.location = cartonLabels(result.cartons);
+    else if (result.stage === "planned")
+      result.location = productionLocation(position, true);
     else if (result.stage === "print" || result.stage === "cut")
       result.location = productionLocation(position);
     else if (result.stage === "pack") result.location = assemblyLocation;
@@ -296,8 +302,8 @@ function classify(
               ? "ready"
               : null;
   const places: string[] = [];
-  if (result.printQty > 0 || toCut > 0)
-    places.push(productionLocation(position));
+  if (planned > 0 || result.printQty > 0 || toCut > 0)
+    places.push(productionLocation(position, planned > 0));
   if (toPack > 0) places.push(assemblyLocation);
   if (result.cartons.length) places.push(cartonLabels(result.cartons));
   if (available > 0) {
