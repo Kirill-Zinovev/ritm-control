@@ -133,6 +133,10 @@ export function ArkadyAttention({
   const [limit, setLimit] = useState(perPage);
   const ready = !loading && !error && report?.state === "ready";
   const unavailable = !loading && !ready;
+  const overdue =
+    report?.items.filter((item) => item.status === "overdue").length ?? 0;
+  const upcoming =
+    report?.items.filter((item) => item.status === "due-soon").length ?? 0;
   return (
     <section className="arkady-attention panel" aria-labelledby={headingId}>
       <header className="arkady-attention__heading">
@@ -142,7 +146,16 @@ export function ArkadyAttention({
         <div>
           <h2 id={headingId}>Требует внимания</h2>
           {ready && report && (
-            <p>Проверено поставок {quantity(report.checked)}</p>
+            <>
+              <p>Проверено поставок {quantity(report.checked)}</p>
+              {(overdue > 0 || upcoming > 0) && (
+                <p>
+                  {overdue > 0 && `Просрочено этапов ${quantity(overdue)}`}
+                  {overdue > 0 && upcoming > 0 && " · "}
+                  {upcoming > 0 && `В ближайшие сутки ${quantity(upcoming)}`}
+                </p>
+              )}
+            </>
           )}
         </div>
       </header>

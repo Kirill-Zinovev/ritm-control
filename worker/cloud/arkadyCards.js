@@ -8,6 +8,12 @@ const sheetUrl = value => /^https:\/\/docs\.google\.com\/spreadsheets\/d\/[A-Za-
 const validQuantity = value => Number.isSafeInteger(value) && value > 0;
 const labels = {roll: 'Рулонная печать', box: 'Бокс'};
 const banner = 'https://ritm-erp.zinovevkirill234.chatgpt.site/images/arkady-notification-v2.png';
+const suppliesUrl = 'https://ritm-erp.zinovevkirill234.chatgpt.site/?page=supplies';
+const taskCheckLabels = {
+  production: 'Печать и порезка ещё не завершены.',
+  packing: 'Упаковка ещё не завершена.',
+  'catalog-exists': 'Артикул ещё не найден в справочнике.',
+};
 const delimiter = () => ({DELIMITER: {COLOR: '#e3eaf2', SIZE: 1}});
 const grid = (name, value, display = 'ROW', extra = {}) => ({NAME: name, VALUE: value, DISPLAY: display, ...extra});
 
@@ -47,11 +53,30 @@ export function supplyWatchPresentation(event, joke = '') {
   };
 }
 
+export function taskReminderPresentation(schedule, controls) {
+  const task = controls[0];
+  const selected = [...new Set(controls.map(row => text(row.article, 80)).filter(Boolean))];
+  const shown = selected.slice(0, 5).join(', ');
+  return {
+    version: 1, type: 'task-reminder', urgent: task.priority === 'urgent',
+    title: text(task.shipmentName, 100), task: text(task.title, 90), note: text(task.note, 320),
+    selection: selected.length > 5 ? shown + ' · ещё ' + number(selected.length - 5) : shown,
+    result: schedule.checkStatus === 'unconfirmed'
+      ? 'Текущую готовность подтвердить не удалось.'
+      : taskCheckLabels[schedule.check] || '',
+  };
+}
+
 // Shared readable content for the PNG and its clickable source links.
 // The durable event owns readiness and membership; rendering never re-queries
 // production data or consumes another joke/praise sequence.
 export function arkadyCardContent(event) {
   const card=event.presentation;
+  if (card?.version === 1 && card.type === 'task-reminder') return {
+    type: card.type, urgent: card.urgent, heading: 'Напоминание о задаче',
+    subject: card.title, task: card.task, note: card.note, selection: card.selection,
+    subtitle: card.result, sections: [],
+  };
   if(card?.version!==1||!['assignment','completion','reminder'].includes(card.type))return null;
   const stock=card.kind==='stock',done=card.type==='completion',reminder=card.type==='reminder';
   const source=Array.isArray(card.sections)?card.sections:[{department:card.department,articles:card.articles,quantity:card.quantity,entries:card.entries,url:card.url}];
@@ -75,6 +100,7 @@ export function arkadyCardContent(event) {
 }
 
 export function arkadyCardCaption(model) {
+  if (model.type === 'task-reminder') return '[URL=' + suppliesUrl + ']Открыть поставки в RITM ↗[/URL]';
   // Every raster scenario has the same boundary: content in the card, only
   // verified source links below it. Large lists never become a text appendix.
   return model.sections
@@ -87,6 +113,15 @@ export function arkadyCardCaption(model) {
 // remain clickable on desktop and mobile. No HTML or embedded script is sent.
 export function arkadyMessageFields(event) {
   const card = event.presentation;
+  if (card?.version === 1 && card.type === 'task-reminder') {
+    const blocks = [{IMAGE: [{NAME: 'Аркадий · RITM', LINK: banner, PREVIEW: banner, WIDTH: 642, HEIGHT: 214}]}];
+    blocks.push({GRID: [grid('Напоминание о задаче', card.title, 'BLOCK', {WIDTH: 560}), grid('Задача', card.task)]});
+    if (card.note) blocks.push({MESSAGE: card.note});
+    if (card.selection) blocks.push({GRID: [grid('Артикулы', card.selection)]});
+    if (card.result) blocks.push({MESSAGE: card.result});
+    blocks.push({GRID: [grid('', 'Открыть поставки в RITM', 'BLOCK', {LINK: suppliesUrl, COLOR: '#2563eb'})]});
+    return {MESSAGE: '🦎 Аркадий', ATTACH: {ID: 1, COLOR: card.urgent ? '#c66b10' : '#2563eb', BLOCKS: blocks}};
+  }
   if (card?.version !== 1 || !['assignment', 'completion', 'reminder'].includes(card.type)) return {MESSAGE: event.message};
   // Keep the fallback as one bounded card too, even for long article names.
   // The complete membership remains in the presentation and linked source.

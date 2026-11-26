@@ -11,6 +11,7 @@ import { boxPositionKey, useBoxPositionRemoval } from "./BoxPositionRemoval";
 import { startWriterStatusPolling } from "./writerStatusPolling";
 import { recoverableSupply } from "./supplyAutoRecovery";
 import { ArkadyAssistant, type ArkadyOperationReport, type ArkadyStart } from "./ArkadyAssistant";
+import type { ArkadySupplyDraftInput } from "./ArkadySupplyDraft";
 import type { ArkadyAttentionItem } from "./arkadyAttentionData";
 import { checkArkadyDistribution, lookupArkadyCatalog, saveArkadyCatalog } from "./arkadyCatalogClient";
 import { buildProductionGroups, productionStoreName } from "./productionData";
@@ -34,7 +35,7 @@ import {
   UploadSimple,
   Warning,
 } from "./icons";
-import { num, validateSupply } from "./model";
+import { num } from "./model";
 import {
   ROLL_PRINTING_URL,
   type LiveOrder,
@@ -109,7 +110,9 @@ function PendingMoveRecovery({onDone}:{onDone:(moves:DepartmentMoveRequest[])=>P
 import {
   createSupplyWorkbook,
   createSupplyTemplate,
-  parseSupplyWorkbook,
+  formatSupplyLines,
+  parseSupplyText,
+  readSupplyFile,
   saveSupplyWorkbook,
   saveSupplyTemplate,
   type SupplyImportLine,
@@ -413,18 +416,6 @@ function SupplyOverviewStage({ label, value, plan, partial = false, tone }: {
   );
 }
 
-function editableLines(text: string): SupplyImportLine[] {
-  const parsed = validateSupply("Поставка", "2026-01-02", "2026-01-01", text);
-  if (parsed.errors.lines || !parsed.lines.length)
-    throw new Error(
-      parsed.errors.lines || "Добавьте хотя бы один артикул и количество.",
-    );
-  return parsed.lines.map((line) => ({
-    article: line.article,
-    quantity: line.plan,
-  }));
-}
-
 function supplyOperationStatus(operation: Operation) {
   if (operation.status === "partial")
     return "Загрузка не завершена — требуется сверка или продолжение";
@@ -638,7 +629,7 @@ export function LiveSuppliesWorkspace({
   const [supplyView, setSupplyView] = useState<'directions' | 'jobs'>('directions');
   const [arkadyStart, setArkadyStart] = useState<ArkadyStart | null>(null);
   const arkadyOpen = arkadyStart !== null;
-  const [arkadyTaskDraft, setArkadyTaskDraft] = useState<{ sheetKey: string; note: string } | null>(null);
+  const [arkadyTaskDraft, setArkadyTaskDraft] = useState<{ sheetKey: string; note: string; article?: string; title?: string } | null>(null);
   const [arkadyPosition, setArkadyPosition] = useState<LiveOrder | null>(null);
   const [writer, setWriter] = useState<WriterState | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(() => new URLSearchParams(location.search).get("supplySheet"));
@@ -1322,7 +1313,7 @@ export function LiveSuppliesWorkspace({
     return () => window.clearTimeout(timer);
   },[pendingProduction?.id,pendingProduction?.status,pendingProduction?.updatedAt,writer?.busy,busy,onRefresh,reloadWriter]);
 
-  const openDialog = (mode: "create" | "append") => {
+  const openDialog = (mode: "create" | "append", draft?: ArkadySupplyDraftInput) => {
     setDialog(mode);
     setAppendTarget(
       mode === "append" && selected
@@ -1340,8 +1331,8 @@ export function LiveSuppliesWorkspace({
     setShippingAt("");
     setLockAfterCreate(false);
     setSupplyPriority("normal");
-    setItemsText("");
-    setFileName("");
+    setItemsText(draft?.text ?? "");
+    setFileName(draft?.fileName ?? "");
     setFormError("");
     setNotice("");
     setOperation(null);
@@ -1354,12 +1345,8 @@ export function LiveSuppliesWorkspace({
     setImporting(true);
     setFormError("");
     try {
-      if (!file.name.toLocaleLowerCase("ru-RU").endsWith(".xlsx"))
-        throw new Error("Выберите файл Excel в формате .xlsx.");
-      const lines = await parseSupplyWorkbook(await file.arrayBuffer());
-      setItemsText(
-        lines.map((line) => `${line.article}; ${line.quantity}`).join("\n"),
-      );
+      const lines = await readSupplyFile(file);
+      setItemsText(formatSupplyLines(lines));
       setFileName(file.name);
     } catch (cause) {
       setFormError(
@@ -1386,7 +1373,7 @@ export function LiveSuppliesWorkspace({
     setExporting(true);
     setFormError("");
     try {
-      const lines = editableLines(itemsText);
+      const lines = parseSupplyText(itemsText);
       const bytes = await createSupplyWorkbook(lines);
       const filename =
         dialog === "append" ? appendTarget?.name || "Состав_поставки" : name;
@@ -1457,7 +1444,7 @@ export function LiveSuppliesWorkspace({
     }
     let lines: SupplyImportLine[];
     try {
-      lines = editableLines(itemsText);
+      lines = parseSupplyText(itemsText);
       if (dialog === "create") validateDeadlines({readyAt:inputInstant(productionReadyAt),packingAt:inputInstant(packingAt),shipAt:inputInstant(shippingAt)});
     } catch (cause) {
       setFormError(
@@ -2858,7 +2845,17 @@ export function LiveSuppliesWorkspace({
       ) : null}
 
       {arkadyStart && (() => {
-        const market = selected ? supplyMarketplace(selected.sheet.name)?.toUpperCase() : undefined;
+        const selectedMarket = selected ? supplyMarketplace(selected.sheet.name) : undefined;
+        const market = selectedMarket === "Ozon" ? "OZON" : selectedMarket === "WB" ? "WB" : undefined;
+        function catalogStore(article: string) {
+          const matches = selectedAssemblyOrders.filter(order => order.article.trim().toUpperCase() === article.trim().toUpperCase());
+          const stores = new Set(matches.map(order => productionStoreName(order)));
+          const [store] = stores;
+          if (stores.size !== 1) return undefined;
+          if (store === "Магазин 1") return "1";
+          if (store === "Магазин 2") return "2";
+          return undefined;
+        }
         const planningGroup = selected && buildProductionGroups(live).find(group =>
           group.sheetId === selected.sheet.sheetId && group.sourceId === selected.sheet.sourceId ||
           group.orders.some(order => order.sheetId === selected.sheet.sheetId && order.sourceId === selected.sheet.sourceId),
@@ -2883,7 +2880,7 @@ export function LiveSuppliesWorkspace({
           };
           const article = item.article;
           const canInspectCatalog = article && auth.mode === "cloud" && supplyMarketplace(summary.sheet.name);
-          const canDraftTask = item.stage === "packing" && canReviewAttention
+          const canDraftTask = (item.stage === "packing" || item.stage === "catalog") && canReviewAttention
             && controlIdsForSummary(summary, summaries, effectiveBoxLinks, live?.sheets || []).length > 0;
           return {
             shipment: () => navigate(null),
@@ -2891,7 +2888,12 @@ export function LiveSuppliesWorkspace({
             catalog: canInspectCatalog ? () => navigate({ panel: "catalog", article }) : undefined,
             task: canDraftTask ? () => {
               navigate(null);
-              setArkadyTaskDraft({ sheetKey, note: item.detail });
+              setArkadyTaskDraft({
+                sheetKey,
+                note: item.detail,
+                article: item.article,
+                title: item.stage === "catalog" ? "Проверить товар в справочнике" : undefined,
+              });
             } : undefined,
           };
         }
@@ -2924,6 +2926,21 @@ export function LiveSuppliesWorkspace({
             packingAvailable: live?.packing?.status !== "unavailable",
           }}
           onRevealOrder={revealArkadyOrder}
+          createCatalogDraft={canReviewAttention && auth.mode === "cloud"}
+          onPrepareCatalogTask={canReviewAttention && selected && selectedControlShipmentIds.length ? article => {
+            setSupplyView("jobs");
+            setArkadyStart(null);
+            setArkadyTaskDraft({
+              sheetKey: `${selected.sheet.sourceId}:${selected.sheet.sheetId}`,
+              title: "Добавить карточку в справочник",
+              article,
+              note: `В справочнике не нашлась карточка артикула ${article}. Проверьте маркетплейс и магазин.`,
+            });
+          } : undefined}
+          onPrepareSupply={canReviewAttention && !busy ? draft => {
+            setArkadyStart(null);
+            openDialog("create", draft);
+          } : undefined}
           previewRouting={selected && market && auth.mode === "cloud" ? async (order, quantity, signal) => {
             const knownStore = productionStoreName(order).match(/^Магазин ([12])$/)?.[1];
             const cards = await lookupArkadyCatalog(market, order.article, signal);
@@ -2933,12 +2950,11 @@ export function LiveSuppliesWorkspace({
             return checkArkadyDistribution(matches[0], selected.sheet.name, quantity, signal);
           } : undefined}
           catalog={selected && market && auth.mode === "cloud" ? {
+            market,
+            getStore: catalogStore,
             lookup: async (article, signal) => {
               const cards = await lookupArkadyCatalog(market, article, signal);
-              const matches = selectedAssemblyOrders.filter(order => order.article.trim().toUpperCase() === article.trim().toUpperCase());
-              const stores = new Set(matches.map(order => productionStoreName(order)));
-              const [store] = stores;
-              const knownStore = stores.size === 1 && store?.match(/^Магазин ([12])$/)?.[1];
+              const knownStore = catalogStore(article);
               return knownStore ? cards.filter(card => card.store === knownStore) : cards;
             },
             save: auth.role === "owner" ? saveArkadyCatalog : undefined,

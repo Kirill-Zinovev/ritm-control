@@ -9,9 +9,11 @@ import {
 import {
   Bell,
   BookOpen,
+  BookPlus,
   CalendarDays,
   ChartNoAxesColumn,
   ListChecks,
+  FileSpreadsheet,
   Monitor,
   Route,
   SendHorizontal,
@@ -28,9 +30,15 @@ import { ArkadyOperationAttention } from "./ArkadyAttention";
 import { ArkadyDeadlines } from "./ArkadyDeadlines";
 import { ArkadyRoutingCheck } from "./ArkadyRoutingCheck";
 import { ArkadySupplySummary } from "./ArkadySupplySummary";
+import { ArkadyCatalogDraft } from "./ArkadyCatalogDraft";
+import {
+  ArkadySupplyDraft,
+  type ArkadySupplyDraftInput,
+} from "./ArkadySupplyDraft";
 import {
   diagnoseArkadySupply,
   parseArkadyIntent,
+  type ArkadyCatalogDraftRequest,
   type ArkadyIntent,
 } from "./arkadyAssistantData";
 import "./arkadyAssistant.css";
@@ -101,7 +109,12 @@ type Props = {
     packingAvailable?: boolean;
   };
   onRevealOrder?: (order: LiveOrder) => void;
+  createCatalogDraft?: boolean;
+  onPrepareCatalogTask?: (article: string) => void;
+  onPrepareSupply?: (draft: ArkadySupplyDraftInput) => void;
   catalog?: {
+    market: "WB" | "OZON";
+    getStore: (article: string) => "1" | "2" | undefined;
     lookup: (
       article: string,
       signal: AbortSignal,
@@ -198,6 +211,9 @@ function AssistantDrawer({
   snapshotStale,
   diagnostics,
   onRevealOrder,
+  createCatalogDraft,
+  onPrepareCatalogTask,
+  onPrepareSupply,
   catalog,
   operation,
 }: Props) {
@@ -209,6 +225,8 @@ function AssistantDrawer({
     | "deadlines"
     | "routing"
     | "attention"
+    | "catalog-draft"
+    | "supply-draft"
   >(start?.panel ?? "summary");
   const [routingArticle, setRoutingArticle] = useState<string>();
   const [question, setQuestion] = useState("");
@@ -232,6 +250,10 @@ function AssistantDrawer({
   const [nextValue, setNextValue] = useState("");
   const [preview, setPreview] = useState<ArkadyCatalogChange | null>(null);
   const [catalogIntent, setCatalogIntent] = useState<ArkadyIntent | null>(null);
+  const [catalogDraft, setCatalogDraft] = useState<ArkadyCatalogDraftRequest>(
+    {},
+  );
+  const [missingArticle, setMissingArticle] = useState("");
   const request = useRef<AbortController | null>(null);
   const scroll = useRef<HTMLDivElement | null>(null);
   const writeInProgress = useRef(false);
@@ -353,6 +375,7 @@ function AssistantDrawer({
       (entry) => articleKey(entry) === articleKey(rawArticle),
     );
     setCards([]);
+    setMissingArticle("");
     setCatalogIntent(intent);
     chooseCard(undefined);
     if (!actualArticle) {
@@ -368,8 +391,14 @@ function AssistantDrawer({
       );
       setCards(matches);
       if (matches.length === 1) chooseCard(matches[0], intent);
-      if (matches.length === 0)
-        setMessage("Карточка артикула не найдена в справочнике РИТМ Сборки.");
+      if (matches.length === 0) {
+        setMissingArticle(actualArticle);
+        setMessage(
+          createCatalogDraft
+            ? "Карточка артикула не найдена. Пришлите штрихкод или откройте черновик."
+            : "Карточка артикула не найдена в справочнике РИТМ Сборки.",
+        );
+      }
     });
   }
 
@@ -490,6 +519,25 @@ function AssistantDrawer({
     );
   }
 
+  function prepareCatalogDraft(draft: ArkadyCatalogDraftRequest, text = "") {
+    const sourceArticle =
+      draft.article ??
+      (panel === "catalog" ? missingArticle || undefined : undefined);
+    const market = draft.market ?? catalog?.market;
+    const store =
+      draft.store ??
+      (sourceArticle && market === catalog?.market
+        ? catalog?.getStore(sourceArticle)
+        : undefined);
+    setCatalogDraft({
+      market,
+      store,
+      article: sourceArticle,
+      barcode: draft.barcode,
+    });
+    openPanel("catalog-draft", text);
+  }
+
   function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const text = prompt.trim();
@@ -499,6 +547,32 @@ function AssistantDrawer({
     if (intent.type === "attention" && attention) {
       openPanel("attention", text);
       return;
+    }
+    if (intent.type === "supply-draft" && onPrepareSupply) {
+      openPanel("supply-draft", text);
+      return;
+    }
+    if (createCatalogDraft) {
+      if (intent.type === "catalog-draft") {
+        prepareCatalogDraft(intent, text);
+        return;
+      }
+      const code = text.match(
+        /^(?:(?:вот\s+)?(?:штрихкод|баркод)\s*[: ]\s*)?(OZN[0-9]{9,10}|[0-9]{6,32})$/iu,
+      )?.[1];
+      if (
+        code &&
+        (panel === "catalog-draft" || (panel === "catalog" && missingArticle))
+      ) {
+        prepareCatalogDraft(
+          {
+            ...(panel === "catalog-draft" ? catalogDraft : {}),
+            barcode: code.toUpperCase(),
+          },
+          text,
+        );
+        return;
+      }
     }
     if (!supplyName) {
       openPanel("attention", text);
@@ -646,6 +720,26 @@ function AssistantDrawer({
               <Route size={16} /> Распределение
             </Button>
           )}
+          {createCatalogDraft && (
+            <Button
+              type="button"
+              disabled={Boolean(busy)}
+              aria-pressed={panel === "catalog-draft"}
+              onClick={() => prepareCatalogDraft({})}
+            >
+              <BookPlus size={16} /> Новый товар
+            </Button>
+          )}
+          {onPrepareSupply && (
+            <Button
+              type="button"
+              disabled={Boolean(busy)}
+              aria-pressed={panel === "supply-draft"}
+              onClick={() => openPanel("supply-draft")}
+            >
+              <FileSpreadsheet size={16} /> Черновик поставки
+            </Button>
+          )}
           {supplyName && (
             <Button
               type="button"
@@ -707,6 +801,20 @@ function AssistantDrawer({
               />
             ))}
           </>
+        )}
+        {panel === "catalog-draft" && createCatalogDraft && (
+          <ArkadyCatalogDraft
+            key={JSON.stringify(catalogDraft)}
+            initial={catalogDraft}
+            fromMissing={
+              !!missingArticle &&
+              catalogDraft.article === missingArticle &&
+              catalogDraft.market === catalog?.market
+            }
+          />
+        )}
+        {panel === "supply-draft" && onPrepareSupply && (
+          <ArkadySupplyDraft onPrepare={onPrepareSupply} />
         )}
 
         {panel === "summary" && (
@@ -848,6 +956,7 @@ function AssistantDrawer({
                   disabled={Boolean(busy)}
                   onChange={(event) => {
                     setArticle(event.target.value);
+                    setMissingArticle("");
                     setCards([]);
                     chooseCard(undefined);
                     setCatalogIntent(null);
@@ -865,6 +974,28 @@ function AssistantDrawer({
                 Найти
               </Button>
             </form>
+            {missingArticle && createCatalogDraft && (
+              <div className="arkady-assistant__actions">
+                <Button
+                  type="button"
+                  disabled={Boolean(busy)}
+                  onClick={() =>
+                    prepareCatalogDraft({ article: missingArticle })
+                  }
+                >
+                  <BookPlus size={16} /> Подготовить карточку
+                </Button>
+                {onPrepareCatalogTask && (
+                  <Button
+                    type="button"
+                    disabled={Boolean(busy)}
+                    onClick={() => onPrepareCatalogTask(missingArticle)}
+                  >
+                    Подготовить задачу
+                  </Button>
+                )}
+              </div>
+            )}
             {cards.length > 1 && (
               <Field label="Карточка товара">
                 <select

@@ -1,5 +1,13 @@
 import { CloudError } from "./access.js";
 import { shipmentLock } from "./shipmentLocks.js";
+import {
+  closeInactiveTaskReminder,
+  confirmProductionTaskReminder,
+  normalizeProductionTaskReminder,
+  productionTaskReminderStatus,
+  queueProductionTaskReminder,
+  sameProductionTaskReminder,
+} from "./productionTaskReminders.js";
 
 const UUID = /^[a-f0-9-]{36}$/i;
 const SHIPMENT_ID = /^[a-z0-9._:-]{1,120}$/i;
@@ -54,15 +62,17 @@ function normalizedInput(input) {
   const note = text(input?.note, 320);
   const shipmentName = text(input?.shipmentName, 100);
   if (!shipmentName) fail("control_shipment_name_invalid", "У поставки не найдено название.");
-  return { requestId, shipmentId, shipmentIds, shipmentName, scope, article, batchId: batchId || null, kind, priority, trigger, title, note };
+  const bitrixReminder = normalizeProductionTaskReminder(input?.bitrixReminder, scope);
+  return { requestId, shipmentId, shipmentIds, shipmentName, scope, article, batchId: batchId || null, kind, priority, trigger, title, note, bitrixReminder };
 }
 
 function sameControl(existing, clean) {
-  const same = ["shipmentId", "scope", "article", "kind", "priority", "trigger", "title", "note"]
+  const same = ["shipmentId", "scope", "kind", "priority", "trigger", "title", "note"]
     .every((key) => existing[key] === clean[key]);
+  const sameArticle = (existing.article || "") === clean.article;
   const sameBatch = (existing.batchId || null) === clean.batchId;
   const sameTargets = JSON.stringify(existing.shipmentIds || [existing.shipmentId]) === JSON.stringify(clean.shipmentIds);
-  return same && sameBatch && sameTargets;
+  return same && sameArticle && sameBatch && sameTargets && sameProductionTaskReminder(existing.bitrixReminder, clean.bitrixReminder);
 }
 
 function batchChildRequestId(batchId, index) {
@@ -79,20 +89,25 @@ export function listProductionControls(scope, shipmentIds = "") {
       : [];
   return records(scope)
     .filter((row) => !selectedIds.length || (row.shipmentIds || [row.shipmentId]).some((id) => selectedIds.includes(id)))
-    .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
+    .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))
+    .map(control => productionTaskReminderStatus(scope, control));
 }
 
-export function createProductionControl(scope, input, { now = Date.now, owner = "" } = {}) {
+export function createProductionControl(scope, input, { now = Date.now, owner = "", reminderRecipient, queueReminder = true } = {}) {
   if (!scope?.lease) fail("control_lock_required", "Не удалось подтвердить сохранение. Повторите попытку.", 409);
   const clean = normalizedInput(input);
+  if (queueReminder && clean.batchId && clean.bitrixReminder)
+    fail("control_batch_invalid", "Используйте форму групповой задачи для нескольких артикулов.");
   const list = records(scope);
   const existing = list.find((row) => row.requestId === clean.requestId);
   if (existing) {
     if (!sameControl(existing, clean)) fail("control_request_conflict", "Номер запроса уже использован. Обновите страницу и повторите.", 409);
-    return { control: structuredClone(existing), duplicate: true };
+    return { control: structuredClone(productionTaskReminderStatus(scope, existing)), duplicate: true };
   }
   if (list.length >= 5000) fail("control_limit_reached", "Достигнут лимит истории задач RITM. Обратитесь к владельцу.", 409);
-  const timestamp = new Date(now()).toISOString();
+  const at = now();
+  const timestamp = new Date(at).toISOString();
+  const bitrixReminder = confirmProductionTaskReminder(clean.bitrixReminder, reminderRecipient, at);
   const control = {
     id: clean.requestId,
     requestId: clean.requestId,
@@ -114,12 +129,14 @@ export function createProductionControl(scope, input, { now = Date.now, owner = 
     createdBy: text(owner, 120) || "RITM",
     completedAt: null,
     completedBy: null,
+    ...(bitrixReminder && { bitrixReminder }),
   };
   scope.putOperation("production-control", control);
-  return { control: structuredClone(control), duplicate: false };
+  if (queueReminder) queueProductionTaskReminder(scope, [control]);
+  return { control: structuredClone(queueReminder ? productionTaskReminderStatus(scope, control, at) : control), duplicate: false };
 }
 
-export function createProductionControlBatch(scope, input, { now = Date.now, owner = "" } = {}) {
+export function createProductionControlBatch(scope, input, { now = Date.now, owner = "", reminderRecipient } = {}) {
   if (!scope?.lease) fail("control_lock_required", "Не удалось подтвердить сохранение. Повторите попытку.", 409);
   const batchId = String(input?.requestId || "").trim();
   if (!UUID.test(batchId)) fail("control_request_invalid", "Не удалось подтвердить запрос. Обновите форму и повторите.");
@@ -143,18 +160,21 @@ export function createProductionControlBatch(scope, input, { now = Date.now, own
   if (existing.some(Boolean)) {
     if (!existing.every(Boolean) || existing.some((row, index) => !sameControl(row, prepared[index])))
       fail("control_batch_conflict", "Состав этой групповой задачи уже менялся. Обновите окно и проверьте список.", 409);
-    return { controls: existing.map((row) => structuredClone(row)), duplicate: true };
+    return { controls: existing.map(row => structuredClone(productionTaskReminderStatus(scope, row))), duplicate: true };
   }
   if (list.length + prepared.length > 5000) fail("control_limit_reached", "Достигнут лимит истории задач RITM. Обратитесь к владельцу.", 409);
 
+  const at = now();
+  confirmProductionTaskReminder(prepared[0].bitrixReminder, reminderRecipient, at);
   const controls = prepared.map((clean) => createProductionControl(scope, {
     ...input,
     requestId: clean.requestId,
     batchId,
     scope: "article",
     article: clean.article,
-  }, { now, owner }).control);
-  return { controls, duplicate: false };
+  }, { now: () => at, owner, reminderRecipient, queueReminder: false }).control);
+  queueProductionTaskReminder(scope, controls);
+  return { controls: controls.map(control => productionTaskReminderStatus(scope, control, at)), duplicate: false };
 }
 
 export function cancelProductionControl(scope, input, { now = Date.now } = {}) {
@@ -165,12 +185,13 @@ export function cancelProductionControl(scope, input, { now = Date.now } = {}) {
   const index = list.findIndex((row) => row.id === controlId);
   if (index < 0) fail("control_not_found", "Задача уже удалена или недоступна.", 404);
   const current = list[index];
-  if (current.status === "cancelled") return { control: structuredClone(current), duplicate: true };
+  if (current.status === "cancelled") return { control: structuredClone(productionTaskReminderStatus(scope, current)), duplicate: true };
   if (current.status !== "active") fail("control_already_finished", "Завершённую задачу нельзя отменить.", 409);
   const next = { ...current, status: "cancelled", updatedAt: new Date(now()).toISOString() };
   list[index] = next;
   scope.putOperation("production-control", next);
-  return { control: structuredClone(next), duplicate: false };
+  closeInactiveTaskReminder(scope, next);
+  return { control: structuredClone(productionTaskReminderStatus(scope, next)), duplicate: false };
 }
 
 export function cancelProductionControlBatch(scope, input, { now = Date.now } = {}) {
@@ -180,11 +201,12 @@ export function cancelProductionControlBatch(scope, input, { now = Date.now } = 
   const controls = records(scope).filter((row) => row.batchId === batchId);
   if (!controls.length) fail("control_not_found", "Групповая задача уже удалена или недоступна.", 404);
   const active = controls.filter((row) => row.status === "active");
-  if (!active.length) return { controls: controls.map((row) => structuredClone(row)), duplicate: true };
+  if (!active.length) return { controls: controls.map(row => structuredClone(productionTaskReminderStatus(scope, row))), duplicate: true };
   const timestamp = new Date(now()).toISOString();
   const cancelled = active.map((current) => ({ ...current, status: "cancelled", updatedAt: timestamp }));
   cancelled.forEach((control) => scope.putOperation("production-control", control));
-  return { controls: cancelled.map((row) => structuredClone(row)), duplicate: false };
+  closeInactiveTaskReminder(scope, cancelled[0]);
+  return { controls: cancelled.map(row => structuredClone(productionTaskReminderStatus(scope, row))), duplicate: false };
 }
 
 export function listAssemblyControls(scope, shipmentId) {
@@ -224,5 +246,6 @@ export function completeAssemblyControl(scope, input, { now = Date.now } = {}) {
   };
   list[index] = next;
   scope.putOperation("production-control", next);
+  closeInactiveTaskReminder(scope, next);
   return { control: structuredClone(next), duplicate: false };
 }

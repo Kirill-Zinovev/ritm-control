@@ -1,6 +1,48 @@
+import { validateSupply } from "./model";
+
 export type SupplyImportLine = { article: string; quantity: number };
 const MAX_SUPPLY_IMPORT_BYTES = 2 * 1024 * 1024;
 const MAX_SUPPLY_IMPORT_ROWS = 500;
+
+export function parseSupplyText(text: string): SupplyImportLine[] {
+  const { errors, lines } = validateSupply(
+    "Поставка",
+    "2026-01-02",
+    "2026-01-01",
+    text,
+  );
+  if (errors.lines || !lines.length) {
+    throw new Error(
+      errors.lines || "Добавьте хотя бы один артикул и количество.",
+    );
+  }
+  return lines.map(({ article, plan }) => ({ article, quantity: plan }));
+}
+
+export function formatSupplyLines(lines: readonly SupplyImportLine[]) {
+  return lines
+    .map(({ article, quantity }) => `${article}; ${quantity}`)
+    .join("\n");
+}
+
+export function readSupplyFile(file: File) {
+  if (!file.name.toLowerCase().endsWith(".xlsx"))
+    throw new Error("Выберите файл Excel в формате .xlsx.");
+  if (file.size > MAX_SUPPLY_IMPORT_BYTES)
+    throw new Error(
+      "Файл больше 2 МБ. Разделите список на несколько загрузок.",
+    );
+  return file.arrayBuffer().then(parseSupplyWorkbook);
+}
+
+export function prepareSupplyDraft(text: string) {
+  const lines = parseSupplyText(text);
+  if (lines.length > MAX_SUPPLY_IMPORT_ROWS)
+    throw new Error(
+      `В одной поставке можно загрузить не больше ${MAX_SUPPLY_IMPORT_ROWS} товаров.`,
+    );
+  return formatSupplyLines(lines);
+}
 const normalizedHeader = (value: unknown) =>
   String(value ?? "")
     .trim()

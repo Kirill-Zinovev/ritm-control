@@ -1,0 +1,107 @@
+.production-task-reminder {
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #f4f8fe;
+}
+
+.production-control-form .production-task-reminder__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  cursor: pointer;
+}
+
+.production-control-form .production-task-reminder__toggle > span {
+  align-items: center;
+  font-size: 13px;
+}
+
+.production-control-form .production-task-reminder__toggle input {
+  flex: 0 0 17px;
+  width: 17px;
+  height: 17px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--primary);
+}
+
+.production-task-reminder__toggle svg,
+.production-task-reminder__saved svg {
+  flex: 0 0 auto;
+  color: var(--primary);
+}
+
+.production-task-reminder__fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.production-task-reminder__fields select,
+.production-task-reminder__fields input {
+  min-width: 0;
+}
+
+.production-task-reminder__hint {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.production-task-reminder__state {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.production-task-reminder__state p {
+  margin: 0;
+}
+
+.production-task-reminder__saved {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-top: 7px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #f5f9ff;
+  color: var(--text);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.production-task-reminder__saved time {
+  font-variant-numeric: tabular-nums;
+}
+
+.production-task-reminder__status {
+  color: var(--muted);
+}
+
+.production-task-reminder__status.is-sent,
+.production-task-reminder__status.is-completed {
+  color: #0b7350;
+}
+
+.production-task-reminder__status.is-failed,
+.production-task-reminder__status.is-uncertain {
+  color: #8a510c;
+}
+
+@media (max-width: 490px) {
+  .production-task-reminder__fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -51,8 +51,11 @@ import { productionTabVisibility, reconcileProductionTabs } from "./productionTa
 import { syncProductionSheetCatalog } from "./productionSheetCatalog.js";
 import { importAssemblyProductionExtensions, readAssemblyItemCatalog, readWorkloadCatalog } from "./assemblyProductionCatalog.js";
 import { arkadyCatalog } from "./arkadyCatalog.js";
-import { ARKADY_COMPLETION_RECIPIENTS, bitrixConfigured, decryptBitrixConfig, drainBitrixNotifications, encryptBitrixConfig, sendBitrixNotification, completionPraise, retireObsoleteBitrixNotifications } from './bitrixNotifications.js';
+import { ARKADY_COMPLETION_RECIPIENTS, bitrixConfigured, decryptBitrixConfig, drainBitrixNotifications, encryptBitrixConfig, sendBitrixNotification, sendBitrixTaskReminder, completionPraise, retireObsoleteBitrixNotifications } from './bitrixNotifications.js';
 import { saveBitrixPreference, saveBitrixConfiguration } from './bitrixSettings.js';
+import { listBitrixRecipients, readBitrixRecipient } from './bitrixRecipients.js';
+import { drainProductionTaskReminders, normalizeProductionTaskReminder, TASK_REMINDER_KIND } from './productionTaskReminders.js';
+import { productionTaskReminderVerifier } from './productionTaskReminderChecks.js';
 
 const signIn = "/?page=supplies";
 
@@ -195,8 +198,19 @@ async function recoverPendingRollRemovals(bindings, store, fetcher, id = null) {
   });
 }
 
+async function taskBitrixConfig(bindings, store) {
+  const [enabled, saved] = await Promise.all([
+    store.readMeta('bitrixNotificationsEnabled'),
+    store.readMeta('bitrixNotificationConfig'),
+  ]);
+  if (enabled === false) throw new CloudError('bitrix_disabled', 'Уведомления Аркадия в Битрикс24 выключены.', 409);
+  try { return { ...bindings, ...await decryptBitrixConfig(bindings, saved) }; }
+  catch { throw new CloudError('bitrix_not_configured', 'Сначала настройте связь Аркадия с Битрикс24.', 409); }
+}
+
 export async function maintenance(bindings, store, { fetcher = fetch, refresh = true } = {}) {
   const result = { ok: true, assemblySync: null, deliverySkipped: !cloudConfig(bindings).writesEnabled };
+  let taskPrinting = refresh ? null : undefined;
   if (!result.deliverySkipped) {
     try { result.boxRemovalRecovery = boxRemovalStatus(await recoverPendingBoxRemoval(bindings,store,{fetcher})); }
     catch (error) { result.boxRemovalRecovery = { error: error.code || "recovery_failed" }; }
@@ -214,6 +228,7 @@ export async function maintenance(bindings, store, { fetcher = fetch, refresh = 
     result.refreshed = [];
     try {
       const value = await refreshSnapshot("printing", bindings, store, { fetcher });
+      taskPrinting = value.refreshFailed === true ? null : value;
       result.refreshed.push({ kind: "printing", ok: value.refreshFailed !== true, snapshotAt: value.snapshotAt, failure: value.refreshFailure });
       if (!result.deliverySkipped && value.refreshFailed !== true) {
         result.productionTabs = await reconcileProductionTabs(bindings, store, value, fetcher).catch(() => ({ pending: true }));
@@ -226,6 +241,17 @@ export async function maintenance(bindings, store, { fetcher = fetch, refresh = 
       result.refreshed.push({ kind: "printing", ok: false, error: error.code || "refresh_failed" });
     }
     result.ok = result.ok && result.refreshed.every(row => row.ok);
+  }
+  if (!result.deliverySkipped) {
+    try {
+      let taskBindings;
+      const bitrix = () => taskBindings ||= taskBitrixConfig(bindings, store);
+      result.taskReminders = await drainProductionTaskReminders(store, {
+        verify: productionTaskReminderVerifier(bindings, store, fetcher, taskPrinting),
+        readRecipient: async id => readBitrixRecipient(await bitrix(), id, fetcher),
+        send: async (schedule, controls) => sendBitrixTaskReminder(await bitrix(), schedule, controls, fetcher),
+      });
+    } catch (error) { result.taskReminders = { error: error.code || 'task_reminders_failed' }; }
   }
   // A delivery may refresh the same large printing report. Never overlap it
   // with the ordinary refresh or retain another full history scope meanwhile.
@@ -903,18 +929,29 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
       methods(request, ["GET", "POST"]);
       if (assemblyControlApp || bridgeId) throw new CloudError("control_manager_scope_required", "Это действие доступно только из RITM.", 403);
       if (request.method === "GET") {
+        if (url.searchParams.get('view') === 'bitrix-recipients')
+          return json({ ok: true, recipients: await listBitrixRecipients(await taskBitrixConfig(bindings, store), fetcher) });
         const scope = await store.scope();
         const shipmentIds = url.searchParams.getAll("shipmentId").concat((url.searchParams.get("shipmentIds") || "").split(",").filter(Boolean));
         return json({ ok: true, controls: listProductionControls(scope, shipmentIds) });
       }
       const input = await readJson(request);
+      let reminderRecipient;
+      if (['create', 'create-batch'].includes(input?.action) && input.bitrixReminder !== undefined) {
+        const reminder = normalizeProductionTaskReminder(input.bitrixReminder, input.action === 'create-batch' ? 'article' : input.scope);
+        const id = String(input.requestId || '').trim();
+        if (!/^[a-f0-9-]{36}$/i.test(id)) throw new CloudError('control_request_invalid', 'Обновите форму и повторите сохранение задачи.', 400);
+        const history = await store.operationReadScope(TASK_REMINDER_KIND, id);
+        if (!history.operations.has(TASK_REMINDER_KIND + ':' + id))
+          reminderRecipient = await readBitrixRecipient(await taskBitrixConfig(bindings, store), reminder.recipientId, fetcher);
+      }
       const result = await store.withScope(async (scope) => {
         if (scope.meta("migrationReady") !== true) throw new CloudError("migration_not_imported", "Реестр поставок ещё не готов. Задача не сохранена.", 503);
         let value;
         if (input?.action === "cancel") value = cancelProductionControl(scope, input);
         else if (input?.action === "cancel-batch") value = cancelProductionControlBatch(scope, input);
-        else if (input?.action === "create") value = createProductionControl(scope, input, { owner: principal?.displayName || principal?.id || "RITM" });
-        else if (input?.action === "create-batch") value = createProductionControlBatch(scope, input, { owner: principal?.displayName || principal?.id || "RITM" });
+        else if (input?.action === "create") value = createProductionControl(scope, input, { owner: principal?.displayName || principal?.id || "RITM", reminderRecipient });
+        else if (input?.action === "create-batch") value = createProductionControlBatch(scope, input, { owner: principal?.displayName || principal?.id || "RITM", reminderRecipient });
         else throw new CloudError("control_action_invalid", "Неизвестное действие с задачей.", 400);
         if (Array.isArray(value.controls)) value.controls.forEach((control) => appendAudit(scope, principal, path, control));
         else appendAudit(scope, principal, path, value.control);

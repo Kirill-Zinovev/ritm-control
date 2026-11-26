@@ -1,8 +1,9 @@
 // Notification records live in the existing operation journal. An ambiguous
 // delivery is never replayed automatically: the message may already exist.
 import { nextArkadyPhrase, nextAssignmentJoke } from './arkadyPhrases.js';
-import { assignmentPresentation, arkadyMessageFields } from './arkadyCards.js';
+import { assignmentPresentation, arkadyMessageFields, taskReminderPresentation } from './arkadyCards.js';
 import { renderArkadyCard, pngBase64 } from './arkadyCardImage.js';
+import { validBitrixRecipient } from './bitrixRecipients.js';
 const departments = new Set(['box', 'roll']);
 const clean = value => String(value || '').replace(/[\r\n\[\]]/g, ' ').trim().slice(0, 180);
 const jokes = {
@@ -250,6 +251,16 @@ export const ARKADY_COMPLETION_RECIPIENTS = Object.freeze(['1698', '2374']);
 export async function sendBitrixNotification(bindings, event, fetcher = fetch, dialogId = bindings.RITM_BITRIX_ROLL_CHAT) {
   if (!bitrixConfigured(bindings) || !departments.has(event.department) ||
       (dialogId !== bindings.RITM_BITRIX_ROLL_CHAT && !ARKADY_COMPLETION_RECIPIENTS.includes(dialogId))) return { status: 'not_configured' };
+  return deliverBitrixNotification(bindings, event, fetcher, dialogId);
+}
+
+export async function sendBitrixTaskReminder(bindings, schedule, controls, fetcher = fetch) {
+  if (!bitrixConfigured(bindings) || !validBitrixRecipient(schedule?.recipientId) || !controls?.length) return { status: 'failed' };
+  const event = {presentation: taskReminderPresentation(schedule, controls)};
+  return deliverBitrixNotification(bindings, event, fetcher, schedule.recipientId, true);
+}
+
+async function deliverBitrixNotification(bindings, event, fetcher, dialogId, requireReceipt = false) {
   let card=null;
   if(bindings.ASSETS&&event.presentation){
     // A preparation failure is safe to fall back from: no Bitrix request exists
@@ -276,7 +287,7 @@ export async function sendBitrixNotification(bindings, event, fetcher = fetch, d
         // File.upload has no urlPreview option. Update only the acknowledged
         // message to remove the large Sheets unfurl, preserving image + caption.
         // A cosmetic update failure must never turn an accepted send into a retry.
-        if(card.model.sections.some(section=>section.url))try {
+        if(card.model.type==='task-reminder'||card.model.sections.some(section=>section.url))try {
           const update=await fetcher(`${bindings.RITM_BITRIX_WEBHOOK_URL}imbot.v2.Chat.Message.update`,{
             method:'POST',redirect:'manual',signal:AbortSignal.timeout(3000),
             headers:{'content-type':'application/json'},
@@ -285,6 +296,11 @@ export async function sendBitrixNotification(bindings, event, fetcher = fetch, d
           await update.json();
         } catch { /* already delivered; never upload or send again */ }
         return {status:'sent',messageId:Number(result.messageId),fileId:Number(result.file.id),format:'card-image-v1'};
+      }
+      if (requireReceipt) {
+        const receipt = body.result?.id ?? body.result;
+        const messageId = typeof receipt === 'number' || typeof receipt === 'string' ? Number(receipt) : 0;
+        return Number.isSafeInteger(messageId) && messageId > 0 ? {status:'sent',messageId} : {status:'uncertain'};
       }
       return { status: 'sent' };
     }

@@ -128,6 +128,29 @@ test("catalog diagnostics preserve a real issue and cannot assume an ambiguous s
 });
 
 test("Arkady interprets known requests and only prepares exact supported catalog edits", () => {
+  assert.deepEqual(
+    parseArkadyIntent(
+      "Аркадий, создай карточку WB QA0001.A0277, магазин 2, штрихкод 0460123456789",
+    ),
+    {
+      type: "catalog-draft",
+      market: "WB",
+      article: "QA0001.A0277",
+      store: "2",
+      barcode: "0460123456789",
+    },
+  );
+  assert.deepEqual(
+    parseArkadyIntent("Аркадий, не создай карточку WB 0460123456789"),
+    { type: "unsupported" },
+  );
+  assert.deepEqual(
+    parseArkadyIntent("Создай карточку WB 0460123456789 или 0870123456789"),
+    { type: "unsupported" },
+  );
+  assert.deepEqual(parseArkadyIntent("Подготовь черновик поставки"), {
+    type: "supply-draft",
+  });
   assert.deepEqual(parseArkadyIntent("Аркадий, что срочно?"), {
     type: "attention",
   });

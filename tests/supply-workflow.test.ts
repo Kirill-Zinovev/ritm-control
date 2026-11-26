@@ -5,8 +5,20 @@ import {
   createSupplyWorkbook,
   createSupplyTemplate,
   parseSupplyWorkbook,
+  prepareSupplyDraft,
 } from "../src/supplySpreadsheet";
 import { validateSupply } from "../src/model";
+
+test("assistant draft preserves quantities and rejects duplicate articles before opening the create form", () => {
+  assert.equal(
+    prepareSupplyDraft("qa0001.a0277; 17\nQA0001.A7366\t40"),
+    "QA0001.A0277; 17\nQA0001.A7366; 40",
+  );
+  assert.throws(
+    () => prepareSupplyDraft("QA0001.A0277; 17\nqa0001.a0277; 19"),
+    /не должны повторяться/,
+  );
+});
 
 async function workbookBuffer(rows: unknown[][]) {
   const workbook = new ExcelJS.Workbook();

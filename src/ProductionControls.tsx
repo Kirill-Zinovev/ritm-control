@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bell, Check, CheckCircle2, ClipboardCheck, Clock3, Flag, LockKeyhole, Plus, RefreshCw, Search, TriangleAlert, UnlockKeyhole, X } from "lucide-react";
+import { useCloudAuth } from "./CloudAuth";
+import {
+  ProductionTaskReminder,
+  ProductionTaskReminderDetails,
+  taskReminderRequest,
+  type BitrixTaskRecipient,
+  type BitrixTaskReminder,
+  type BitrixTaskReminderDraft,
+} from "./ProductionTaskReminder";
 import { Button, Modal } from "./ui";
 
 type ControlKind = "quality_check" | "notification" | "instruction";
@@ -24,6 +33,7 @@ type Control = {
   updatedAt: string;
   completedAt: string | null;
   completedBy: { employeeId: string; employeeName: string; article: string } | null;
+  bitrixReminder?: BitrixTaskReminder | null;
 };
 type ShipmentLock = {
   shipmentId: string;
@@ -63,6 +73,20 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return result as T;
 }
 
+async function loadBitrixTaskRecipients(signal: AbortSignal) {
+  const data = await request<{ recipients?: BitrixTaskRecipient[] }>(
+    "/api/production-controls?view=bitrix-recipients",
+    { signal: AbortSignal.any([signal, AbortSignal.timeout(15000)]) },
+  );
+  if (!Array.isArray(data.recipients)) throw new Error("Список сотрудников Битрикса недоступен.");
+  const recipients = new Map<string, BitrixTaskRecipient>();
+  for (const person of data.recipients) {
+    if (typeof person?.id === "string" && person.id && typeof person.name === "string" && person.name.trim())
+      recipients.set(person.id, person);
+  }
+  return [...recipients.values()].sort((left, right) => left.name.localeCompare(right.name, "ru-RU"));
+}
+
 function dateLabel(value: string | null) {
   if (!value) return "";
   const date = new Date(value);
@@ -96,9 +120,11 @@ export function ProductionControls({
   shipmentName: string;
   articles: string[];
   onLocksChanged?: (locks: ShipmentLock[]) => void;
-  taskDraft?: { note: string } | null;
+  taskDraft?: { note: string; article?: string; title?: string } | null;
   onTaskDraftOpened?: () => void;
 }) {
+  const auth = useCloudAuth();
+  const canScheduleReminder = auth.mode === "cloud" && (auth.role === "owner" || auth.role === "manager");
   const shipmentIdsKey = Array.from(new Set(shipmentIds.filter(Boolean))).join(",");
   const activeShipmentIds = useMemo(() => shipmentIdsKey ? shipmentIdsKey.split(",") : [], [shipmentIdsKey]);
   const [controls, setControls] = useState<Control[]>([]);
@@ -120,6 +146,8 @@ export function ProductionControls({
   const [trigger, setTrigger] = useState<Trigger>("shipment_received");
   const [title, setTitle] = useState("");
   const [note, setNote] = useState("");
+  const [bitrixReminder, setBitrixReminder] = useState<BitrixTaskReminderDraft | null>(null);
+  const [taskFormError, setTaskFormError] = useState("");
   const batchRequest = useRef<{ fingerprint: string; id: string } | null>(null);
   const refreshSequence = useRef(0);
   const retryLockRef = useRef<() => Promise<void>>(async () => {});
@@ -129,20 +157,32 @@ export function ProductionControls({
   activeKeyRef.current = shipmentIdsKey;
   useEffect(() => {
     if (!taskDraft || !activeShipmentIds.length || saving || modalOpen) return;
+    const draftArticle = taskDraft.article?.trim();
+    const matchedArticle = draftArticle && articles.find((article) => articleKey(article) === articleKey(draftArticle));
     showingArkadyDraft.current = true;
     setKind("instruction");
-    setScope("shipment");
-    setSelectedArticles([]);
+    setScope(draftArticle ? "article" : "shipment");
+    setSelectedArticles(matchedArticle ? [matchedArticle.trim()] : []);
+    setArticleSearch(draftArticle || "");
+    setPasteWarning("");
     setPriority("urgent");
     setTrigger("shipment_received");
-    setTitle("Проверить остаток упаковки");
+    setTitle(taskDraft.title?.trim().slice(0, 90) || "Проверить остаток упаковки");
     setNote(taskDraft.note.slice(0, 320));
+    setBitrixReminder(null);
+    setTaskFormError("");
     setModalOpen(true);
     onTaskDraftOpened?.();
-  }, [taskDraft, activeShipmentIds.length, saving, modalOpen, onTaskDraftOpened]);
+  }, [taskDraft, activeShipmentIds.length, articles, saving, modalOpen, onTaskDraftOpened]);
+
+  useEffect(() => {
+    setBitrixReminder(null);
+    setTaskFormError("");
+  }, [shipmentIdsKey]);
 
   function closeTaskEditor() {
     setModalOpen(false);
+    setTaskFormError("");
     if (!showingArkadyDraft.current) return;
     showingArkadyDraft.current = false;
     setKind("quality_check");
@@ -151,6 +191,10 @@ export function ProductionControls({
     setTrigger("shipment_received");
     setTitle("");
     setNote("");
+    setSelectedArticles([]);
+    setArticleSearch("");
+    setPasteWarning("");
+    setBitrixReminder(null);
   }
   const uniqueArticles = useMemo(() => [...new Map(articles.map((value) => value.trim()).filter(Boolean).map((value) => [articleKey(value), value])).values()], [articles]);
   const articleLookup = useMemo(() => new Map(uniqueArticles.map((value) => [articleKey(value), value])), [uniqueArticles]);
@@ -289,8 +333,15 @@ export function ProductionControls({
       return;
     }
     setSaving(true);
-    setError("");
+    setTaskFormError("");
     try {
+      if (bitrixReminder && !canScheduleReminder) {
+        throw new Error("Вашей роли недоступны личные напоминания в Битриксе.");
+      }
+      if (bitrixReminder?.check === "catalog-exists" && scope !== "article") {
+        throw new Error("Для проверки справочника выберите артикулы задачи.");
+      }
+      const reminder = bitrixReminder ? taskReminderRequest(bitrixReminder) : undefined;
       const fingerprint = JSON.stringify({
         shipmentIds: activeShipmentIds,
         shipmentName,
@@ -301,8 +352,12 @@ export function ProductionControls({
         trigger,
         title: title.trim(),
         note: note.trim(),
+        ...(reminder ? { bitrixReminder: reminder } : {}),
       });
       if (batchRequest.current?.fingerprint !== fingerprint) {
+        if (reminder && Date.parse(reminder.remindAt) <= Date.now()) {
+          throw new Error("Первое напоминание должно быть запланировано на будущее время по Москве.");
+        }
         batchRequest.current = { fingerprint, id: crypto.randomUUID() };
       }
       const requestId = batchRequest.current.id;
@@ -321,6 +376,7 @@ export function ProductionControls({
           trigger,
           title,
           note,
+          ...(reminder ? { bitrixReminder: reminder } : {}),
         }),
       });
       closeTaskEditor();
@@ -329,10 +385,11 @@ export function ProductionControls({
       setSelectedArticles([]);
       setArticleSearch("");
       setPasteWarning("");
+      setBitrixReminder(null);
       batchRequest.current = null;
       await refresh();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Задача не сохранена.");
+      setTaskFormError(cause instanceof Error ? cause.message : "Задача не сохранена.");
     } finally {
       setSaving(false);
     }
@@ -411,6 +468,7 @@ export function ProductionControls({
                       ? `Выполнено ${completed} · отменено ${cancelled}`
                       : `Выполнено ${completed} из ${group.length}`;
               const articleList = group.map((item) => item.article).filter(Boolean);
+              const reminder = group.find((item) => item.bitrixReminder)?.bitrixReminder;
               return (
                 <article className={`production-control-row ${control.priority === "urgent" ? "is-urgent" : ""} ${groupStatus !== "active" ? "is-finished" : ""}`} key={id}>
                   <span className="production-control-kind-icon" aria-hidden="true">{control.kind === "notification" ? <Bell size={17} /> : control.priority === "urgent" ? <TriangleAlert size={17} /> : <Flag size={17} />}</span>
@@ -423,6 +481,7 @@ export function ProductionControls({
                     </div>
                     {articleList.length > 1 && <div className="production-control-article-list">{articleList.map((value) => <span key={value}>{value}</span>)}</div>}
                     {control.note && <p>{control.note}</p>}
+                    {reminder && <ProductionTaskReminderDetails reminder={reminder} />}
                     {completed > 0 && group.some((item) => item.completedBy) && <small className="production-control-proof">Отмечено: {completed} из {group.length}</small>}
                   </div>
                   <span className={`production-control-status ${groupStatus}`}>{groupStatus === "completed" ? <Check size={13} /> : groupStatus === "active" ? <Clock3 size={13} /> : null}{groupStatusLabel}</span>
@@ -439,7 +498,13 @@ export function ProductionControls({
           <div className="production-control-form-grid">
             <label><span>Задача</span><select value={kind} onChange={(event) => setKind(event.target.value as ControlKind)}><option value="quality_check">Проверка качества</option><option value="notification">Уведомление</option><option value="instruction">Инструкция</option></select></label>
             <label><span>Важность</span><select value={priority} onChange={(event) => setPriority(event.target.value as Priority)}><option value="attention">Особое внимание</option><option value="urgent">Срочно</option></select></label>
-            <label><span>Для кого</span><select value={scope} onChange={(event) => setScope(event.target.value as "shipment" | "article")}><option value="shipment">Вся поставка</option><option value="article">Выбранные артикулы</option></select></label>
+            <label><span>Область задачи</span><select value={scope} onChange={(event) => {
+              const next = event.target.value as "shipment" | "article";
+              setScope(next);
+              if (next === "shipment") {
+                setBitrixReminder((current) => current?.check === "catalog-exists" ? { ...current, check: "manual" } : current);
+              }
+            }}><option value="shipment">Вся поставка</option><option value="article">Выбранные артикулы</option></select></label>
             {scope === "article" && (
               <label className="wide"><span>Артикулы <small>найдите или вставьте список</small></span>
                 <div className="production-control-article-picker">
@@ -478,6 +543,16 @@ export function ProductionControls({
             <label className="wide"><span>Короткое название</span><input required minLength={3} maxLength={90} value={title} onChange={(event) => setTitle(event.target.value)} placeholder={kind === "quality_check" ? "Например, проверить комплектность" : kind === "notification" ? "Например, заказ срочный" : "Например, вложить вкладыш"} /></label>
             <label className="wide"><span>Комментарий для сборщиков <small>необязательно</small></span><textarea maxLength={320} rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Уточните, на что обратить внимание" /></label>
           </div>
+          {canScheduleReminder && (
+            <ProductionTaskReminder
+              draft={bitrixReminder}
+              loadRecipients={loadBitrixTaskRecipients}
+              onChange={(draft) => { setBitrixReminder(draft); setTaskFormError(""); }}
+              saving={saving}
+              scope={scope}
+            />
+          )}
+          {taskFormError && <div className="production-controls-error" role="alert">{taskFormError}</div>}
           <div className="production-control-form-footer"><span><ClipboardCheck size={15} /> Участок: Сборка · Упаковка</span><div><Button type="button" onClick={closeTaskEditor} disabled={saving}>Отмена</Button><Button type="submit" kind="primary" disabled={saving || !activeShipmentIds.length || (scope === "article" && !selectedArticles.length)}>{saving ? "Сохраняю…" : scope === "article" ? `Добавить задачу · ${selectedArticles.length || 0}` : "Добавить задачу"}</Button></div></div>
         </form>
       </Modal>

@@ -268,8 +268,16 @@ export function diagnoseArkadySupply(
 }
 
 export type ArkadyCatalogField = "machine" | "multiplicity" | "size";
+export type ArkadyCatalogDraftRequest = {
+  market?: "WB" | "OZON";
+  barcode?: string;
+  article?: string;
+  store?: "1" | "2";
+};
 export type ArkadyIntent =
   | { type: "attention" }
+  | { type: "supply-draft" }
+  | ({ type: "catalog-draft" } & ArkadyCatalogDraftRequest)
   | { type: "summary" }
   | { type: "deadlines" }
   | { type: "routing"; article?: string }
@@ -307,11 +315,12 @@ const articlePattern =
 
 export function parseArkadyIntent(text: string): ArkadyIntent {
   const query = text.trim().replace(/\s+/gu, " ");
+  const command = query.replace(/^аркадий[, ]+/iu, "");
   if (
     !query ||
     query.length > 500 ||
-    /^(?:не\s|отмени|удали|убери|спиши|отгрузи|сбрось|добавь|закрой|сними)/iu.test(
-      query,
+    /^(?:не\s|отмени|удали|убери|спиши|отгрузи|сбрось|закрой|сними)/iu.test(
+      command,
     )
   )
     return { type: "unsupported" };
@@ -320,6 +329,45 @@ export function parseArkadyIntent(text: string): ArkadyIntent {
   ];
   if (articles.length > 1) return { type: "unsupported" };
   const article = articles[0];
+  if (
+    /^(?:создай|подготовь|заведи|добавь)\s+(?:(?:новую\s+)?карточку|(?:новый\s+)?товар)(?!\p{L})|^новая карточка(?!\p{L})/iu.test(
+      command,
+    )
+  ) {
+    const wb = /(?<![\p{L}\p{N}])(?:wb|вб|wildberries)(?![\p{L}\p{N}])/iu.test(
+      command,
+    );
+    const ozon = /(?<![\p{L}\p{N}])(?:ozon|озон)(?![\p{L}\p{N}])/iu.test(
+      command,
+    );
+    if (wb && ozon) return { type: "unsupported" };
+    const codes =
+      command
+        .replace(articlePattern, "")
+        .match(
+          /(?<![\p{L}\p{N}.])(?:OZN\d{9,10}|\d{6,32})(?![\p{L}\p{N}.])/giu,
+        ) || [];
+    const store = command.match(/магазин(?:а)?\s*№?\s*([12])(?!\d)/iu)?.[1];
+    if (codes.length > 1) return { type: "unsupported" };
+    return {
+      type: "catalog-draft",
+      market: wb
+        ? "WB"
+        : ozon || /^OZN/iu.test(codes[0] ?? "")
+          ? "OZON"
+          : undefined,
+      barcode: codes[0]?.toUpperCase(),
+      article,
+      store: store === "1" || store === "2" ? store : undefined,
+    };
+  }
+  if (
+    /^(?:(?:подготовь|сделай|открой|создай)\s+)?(?:черновик\s+поставки|поставку\s+из\s+excel)[?!.]*$/iu.test(
+      command,
+    )
+  )
+    return { type: "supply-draft" };
+  if (/^добавь/iu.test(command)) return { type: "unsupported" };
   if (
     !article &&
     /^(?:аркадий[, ]+)?(?:покажи[, ]+)?(?:что\s+(?:срочно|требует\s+внимания)|требует\s+внимания|срочные\s+поставки|какие\s+поставки\s+(?:сегодня\s+)?(?:горят|просрочены|требуют\s+внимания))[?!.]*$/iu.test(

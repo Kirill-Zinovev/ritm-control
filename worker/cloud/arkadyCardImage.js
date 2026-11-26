@@ -200,6 +200,13 @@ export function layoutArkadyCard(model, assets) {
     ),
   );
   y += subjectHeight + 14;
+  if (model.type === "task-reminder") {
+    y += block(model.task, 38, y, WIDTH - 76, "section") + 8;
+    if (model.note) y += block(model.note, 38, y, WIDTH - 76) + 8;
+    if (model.selection) y += block(model.selection, 38, y, WIDTH - 76, "small") + 8;
+    if (model.subtitle) y += block(model.subtitle, 38, y, WIDTH - 76, "small", COLORS.muted) + 8;
+    return { width: WIDTH, height: y + 14, commands, lines, hiddenRows: 0, shownRows: [] };
+  }
   let rowsRemaining=MAX_ROWS, hiddenRows = 0;
   const shownRows=[];
   for (const [sectionIndex,section] of model.sections.entries()) {
