@@ -85,10 +85,6 @@ function stageAmounts(row: DispatchControlRow) {
   };
 }
 
-function stageMatches(row: DispatchControlRow, stage: DispatchStage | "") {
-  return stage === all || row.stage === stage || stageAmounts(row)[stage] > 0;
-}
-
 function StageCell({ row }: { row: DispatchControlRow }) {
   if (!row.stage) return <span aria-label="Нет данных об этапе">—</span>;
   const { Icon, label } = stages[row.stage];
@@ -251,7 +247,7 @@ export function DispatchControl({
         (row) =>
           row.remaining !== 0 &&
           (!store || row.store === store) &&
-          stageMatches(row, stage) &&
+          (!stage || row.stage === stage) &&
           (!search ||
             normalize(
               `${row.article} ${row.cartons.map((carton) => carton.label).join(" ")}`,

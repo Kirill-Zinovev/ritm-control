@@ -37,6 +37,16 @@
 }
 
 .dispatch-control {
+  --dispatch-planned-ink: #175e64;
+  --dispatch-planned-surface: #ddf5f6;
+  --dispatch-print-ink: #1e4da7;
+  --dispatch-print-surface: #e4efff;
+  --dispatch-cut-ink: #894006;
+  --dispatch-cut-surface: #fff0d8;
+  --dispatch-pack-ink: #63349a;
+  --dispatch-pack-surface: #f0e7ff;
+  --dispatch-ready-ink: #146541;
+  --dispatch-ready-surface: #e2f7e9;
   display: grid;
   gap: 16px;
   min-width: 0;
@@ -113,29 +123,42 @@
 .dispatch-control-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(125px, auto);
-  align-items: center;
-  gap: 14px;
+  align-items: stretch;
+  gap: 12px;
   margin: 0;
-  padding: 18px 20px;
-  background: color-mix(in srgb, var(--surface) 82%, var(--primary-soft));
+  padding: 12px;
 }
 
 .dispatch-control-metric {
+  --metric-ink: var(--dispatch-print-ink);
+  --metric-surface: var(--dispatch-print-surface);
   min-width: 0;
-  border-inline-end: 1px solid var(--border-strong);
-  padding-inline-end: 12px;
+  padding: 10px 12px;
+  border: 1px solid
+    color-mix(in srgb, var(--metric-ink) 16%, var(--metric-surface));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--metric-surface) 64%, var(--surface));
+  color: var(--metric-ink);
   font-variant-numeric: tabular-nums;
 }
 
+.dispatch-control-metric:nth-child(2) {
+  --metric-ink: var(--dispatch-pack-ink);
+  --metric-surface: var(--dispatch-pack-surface);
+}
+
+.dispatch-control-metric:nth-child(3) {
+  --metric-ink: var(--dispatch-ready-ink);
+  --metric-surface: var(--dispatch-ready-surface);
+}
+
 .dispatch-control-metric dt {
-  color: var(--muted);
   font-size: var(--font-size-sm);
   font-weight: 600;
 }
 
 .dispatch-control-metric dd {
   margin: 4px 0 0;
-  color: var(--text);
   font-size: clamp(1.35rem, 2.05vw, 2.1rem);
   font-weight: 800;
   line-height: 1.2;
@@ -145,6 +168,7 @@
 
 .dispatch-control-source {
   display: grid;
+  align-self: center;
   justify-items: end;
   gap: 4px;
   text-align: right;
@@ -318,13 +342,17 @@
 }
 
 .dispatch-control-stage {
+  --stage-ink: var(--dispatch-print-ink);
+  --stage-surface: var(--dispatch-print-surface);
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 4px 8px;
-  border-radius: 8px;
-  background: var(--info-bg);
-  color: var(--info);
+  border: 1px solid
+    color-mix(in srgb, var(--stage-ink) 18%, var(--stage-surface));
+  border-radius: 999px;
+  background: var(--stage-surface);
+  color: var(--stage-ink);
   font-size: var(--font-size-xs);
   font-weight: 650;
   line-height: 1.4;
@@ -332,13 +360,23 @@
 }
 
 .dispatch-control-stage.is-ready {
-  background: var(--success-bg);
-  color: var(--success);
+  --stage-ink: var(--dispatch-ready-ink);
+  --stage-surface: var(--dispatch-ready-surface);
 }
 
 .dispatch-control-stage.is-planned {
-  background: var(--surface-muted);
-  color: var(--muted);
+  --stage-ink: var(--dispatch-planned-ink);
+  --stage-surface: var(--dispatch-planned-surface);
+}
+
+.dispatch-control-stage.is-cut {
+  --stage-ink: var(--dispatch-cut-ink);
+  --stage-surface: var(--dispatch-cut-surface);
+}
+
+.dispatch-control-stage.is-pack {
+  --stage-ink: var(--dispatch-pack-ink);
+  --stage-surface: var(--dispatch-pack-surface);
 }
 
 .dispatch-control-empty {
@@ -375,10 +413,6 @@
 @container dispatch-control (max-width: 830px) {
   .dispatch-control-summary {
     grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .dispatch-control-metric:nth-child(3) {
-    border: 0;
   }
 
   .dispatch-control-source {
@@ -423,6 +457,10 @@
 
   .dispatch-control-summary {
     gap: 7px;
+  }
+
+  .dispatch-control-metric {
+    padding: 8px;
   }
 
   .dispatch-control-metric dt {
