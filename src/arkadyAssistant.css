@@ -1,0 +1,390 @@
+.modal-overlay:has(+ .arkady-assistant) {
+  background: rgb(16 33 58 / 17%);
+}
+
+.modal-content.arkady-assistant {
+  inset: 12px 12px 12px auto;
+  width: min(452px, calc(100% - 24px));
+  max-height: none;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  transform: none;
+  padding: 0;
+  overflow: hidden;
+  box-shadow: var(--shadow-overlay);
+}
+
+.arkady-assistant .modal-heading {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: 66px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  margin: 0;
+  padding: 20px 18px;
+  background: #f3f8fd;
+  border-bottom: 1px solid var(--border);
+}
+
+.arkady-assistant .modal-heading::before {
+  content: "";
+  position: relative;
+  z-index: 1;
+  width: 66px;
+  height: 66px;
+  border-radius: 50%;
+  background: #e5efff url("/help/arkady.webp") center / cover no-repeat;
+  box-shadow:
+    0 0 0 2px #fff,
+    0 4px 12px rgb(37 99 235 / 16%);
+}
+
+.arkady-assistant .modal-heading h2 {
+  margin: 0;
+  color: var(--text);
+}
+
+.arkady-assistant .modal-heading p {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.arkady-assistant .modal-heading .icon-button {
+  align-self: start;
+}
+
+.arkady-assistant__scroll {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 18px;
+}
+
+.arkady-assistant__prompts,
+.arkady-assistant__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.arkady-assistant__prompts .button {
+  min-height: 36px;
+  padding: 6px 10px;
+  font-size: var(--font-size-small, 13px);
+}
+
+.arkady-assistant__prompts .button[aria-pressed="true"] {
+  border-color: #cbdcf6;
+  background: #eaf2ff;
+  color: #174a9f;
+}
+
+.arkady-assistant__actions {
+  margin-top: 14px;
+}
+
+.arkady-assistant__question {
+  justify-self: end;
+  max-width: 90%;
+  margin: 0;
+  padding: 9px 13px;
+  background: #e6effd;
+  color: var(--text);
+  border-radius: 13px 13px 4px 13px;
+  overflow-wrap: anywhere;
+}
+
+.arkady-assistant__reasons {
+  display: grid;
+  gap: 10px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.arkady-assistant__card {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--panel-radius);
+  background: #f6faff;
+}
+
+.arkady-assistant__card h3 {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: 17px;
+  line-height: 1.35;
+}
+
+.arkady-assistant__card p {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
+.arkady-assistant__card p + .button {
+  margin-top: 12px;
+}
+
+.arkady-assistant__article {
+  display: inline-block;
+  max-width: 100%;
+  padding: 3px 8px;
+  border-radius: 7px;
+  background: #e6effd;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.arkady-assistant__lookup,
+.arkady-assistant__composer {
+  display: flex;
+  gap: 8px;
+  align-items: end;
+}
+
+.arkady-assistant__lookup > .field,
+.arkady-assistant__composer > input {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.arkady-assistant__lookup > .field {
+  margin: 0;
+}
+
+.arkady-assistant__lookup + .field {
+  margin: 12px 0 0;
+}
+
+.arkady-assistant__catalog-title {
+  display: grid;
+  gap: 2px;
+  margin-top: 14px;
+  overflow-wrap: anywhere;
+}
+
+.arkady-assistant__catalog-title span,
+.arkady-assistant__operation-id {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.arkady-assistant__operation-id {
+  display: block;
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+
+.arkady-assistant__operation-status {
+  font-weight: 650;
+}
+
+.arkady-assistant__catalog-values {
+  margin: 12px 0 6px;
+  font-size: 13px;
+}
+
+.arkady-assistant__catalog-values > div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+
+.arkady-assistant__catalog-values dt {
+  color: var(--muted);
+}
+
+.arkady-assistant__catalog-values dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.arkady-assistant__catalog-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 0;
+}
+
+.arkady-assistant__edit,
+.arkady-assistant__confirm {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.arkady-assistant__edit .field {
+  width: 100%;
+  margin: 0;
+}
+
+.arkady-assistant__confirm h4 {
+  margin: 0;
+}
+
+.arkady-assistant__comparison {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+}
+
+.arkady-assistant__comparison div {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+
+.arkady-assistant__comparison small {
+  color: var(--muted);
+}
+
+.arkady-assistant__confirm .arkady-assistant__actions {
+  margin-top: 0;
+}
+
+.arkady-assistant__composer {
+  padding: 12px 18px max(12px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.arkady-assistant__composer .button,
+.arkady-assistant__composer input {
+  min-height: 42px;
+}
+
+.arkady-assistant__deadline-fields .production-deadlines {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .modal-content.arkady-assistant[data-state="open"] {
+    animation: arkady-drawer-enter 260ms cubic-bezier(0.18, 0.76, 0.3, 1);
+  }
+
+  .arkady-assistant[data-state="open"] .modal-heading::before {
+    transform-origin: 50% 68%;
+    animation: arkady-portrait-enter 440ms cubic-bezier(0.19, 0.7, 0.26, 1);
+  }
+
+  .arkady-assistant[data-state="open"] .modal-heading::after {
+    content: "";
+    position: absolute;
+    z-index: 0;
+    inset-block-start: 50%;
+    inset-inline-start: 51px;
+    inline-size: 92px;
+    block-size: 92px;
+    border-radius: 50%;
+    background: conic-gradient(
+      from 126deg,
+      transparent 10%,
+      #84aefc 26%,
+      transparent 46%,
+      transparent 63%,
+      #55c9dc 82%,
+      transparent 97%
+    );
+    mask-image: radial-gradient(
+      circle,
+      transparent 47%,
+      #000 53%,
+      #000 62%,
+      transparent 71%
+    );
+    pointer-events: none;
+    opacity: 0;
+    animation: arkady-light-arc 440ms cubic-bezier(0.17, 0.61, 0.34, 1);
+  }
+
+  .arkady-assistant[data-state="open"] .modal-heading > div {
+    animation: arkady-title-enter 220ms ease-out 36ms backwards;
+  }
+}
+
+@keyframes arkady-drawer-enter {
+  from {
+    transform: translateX(26px);
+    opacity: 0.9;
+  }
+
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+@keyframes arkady-portrait-enter {
+  0% {
+    clip-path: circle(27% at 52% 58%);
+    transform: translateY(7px) rotate(-9deg) scale(0.76);
+  }
+
+  66% {
+    clip-path: circle(72% at 50% 50%);
+    transform: translateY(-2px) rotate(3deg) scale(1.08);
+  }
+
+  100% {
+    clip-path: circle(72% at 50% 50%);
+    transform: none;
+  }
+}
+
+@keyframes arkady-light-arc {
+  0% {
+    opacity: 0.25;
+    transform: translate(-50%, -50%) rotate(-35deg) scale(0.64);
+  }
+
+  36% {
+    opacity: 0.76;
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(64deg) scale(1.18);
+  }
+}
+
+@keyframes arkady-title-enter {
+  from {
+    opacity: 0.82;
+    transform: translateY(5px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .modal-content.arkady-assistant {
+    inset: 0;
+    width: 100%;
+    border-radius: 0;
+  }
+
+  .arkady-assistant .modal-heading {
+    padding-top: max(14px, env(safe-area-inset-top));
+  }
+}

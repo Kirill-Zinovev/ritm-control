@@ -27,6 +27,7 @@ type Props = {
   jobs: DirectionJob[];
   selectedJobId: string;
   onOpenJob: (id: string) => void;
+  onAskArkady?: (id: string) => void;
   onShowJobs: () => void;
 };
 const directionStages = [
@@ -89,6 +90,7 @@ export function SupplyDirections({
   jobs,
   selectedJobId,
   onOpenJob,
+  onAskArkady,
   onShowJobs,
 }: Props) {
   const groups = useMemo(() => buildSupplyDirections(jobs), [jobs]);
@@ -389,6 +391,7 @@ export function SupplyDirections({
                       <Button onClick={() => onOpenJob(job.id)}>
                         Открыть состав и управление
                       </Button>
+                      {onAskArkady && <Button onClick={() => onAskArkady(job.id)}>Спросить Аркадия</Button>}
                       {assemblyUrl && (
                         <a href={assemblyUrl} target="_blank" rel="noreferrer">
                           Открыть сборку <ExternalLink size={15} />

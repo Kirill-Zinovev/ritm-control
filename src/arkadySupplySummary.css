@@ -1,0 +1,135 @@
+.arkady-summary {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+}
+
+.arkady-summary__heading,
+.arkady-summary__stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.arkady-summary__heading h3,
+.arkady-summary__note {
+  margin: 0;
+}
+
+.arkady-summary__heading small,
+.arkady-summary__stage-amount span,
+.arkady-summary__stage-note,
+.arkady-summary__note,
+.arkady-summary__actions small {
+  color: var(--muted, #586987);
+}
+
+.arkady-summary__stages,
+.arkady-summary__actions {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.arkady-summary__stage {
+  padding: 8px 0;
+  --arkady-stage-ink: var(--primary);
+}
+
+.arkady-summary__stage + .arkady-summary__stage,
+.arkady-summary__actions {
+  border-top: 1px solid var(--border);
+}
+
+.arkady-summary__stage--cut {
+  --arkady-stage-ink: #158064;
+}
+.arkady-summary__stage--packing {
+  --arkady-stage-ink: #6e49b8;
+}
+
+.arkady-summary__stage-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.arkady-summary__stage-name svg {
+  flex: 0 0 auto;
+  color: var(--arkady-stage-ink);
+}
+
+.arkady-summary__stage-amount {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.arkady-summary__stage-amount span {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.arkady-summary__meter,
+.arkady-summary__stage-note {
+  grid-column: 1 / -1;
+}
+
+.arkady-summary__meter {
+  height: 4px;
+  border-radius: 4px;
+  background: #e4ebf5;
+  overflow: hidden;
+}
+
+.arkady-summary__meter span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--arkady-stage-ink);
+}
+
+.arkady-summary__stage-note,
+.arkady-summary__note,
+.arkady-summary__actions small {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.arkady-summary__note {
+  margin-top: 5px;
+}
+
+.arkady-summary__actions button {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  min-height: 36px;
+  gap: 8px;
+  padding: 4px 3px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--primary);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+}
+
+.arkady-summary__actions button:hover {
+  background: #edf4fd;
+}
+
+.arkady-summary__actions button b {
+  overflow-wrap: anywhere;
+}
+
+.arkady-summary__actions button svg {
+  flex: 0 0 auto;
+}

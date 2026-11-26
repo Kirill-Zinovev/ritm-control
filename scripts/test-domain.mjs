@@ -25,6 +25,9 @@ for (const file of [
   "src/supplyDirectionData",
   "src/productionData",
   "src/machineWorkloadData",
+  "src/arkadyAssistantData",
+  "src/arkadyAttentionData",
+  "src/arkadySupplySummaryData",
   "src/assemblyCoefficient",
   "tests/domain.test",
   "tests/supply-workflow.test",
@@ -35,6 +38,9 @@ for (const file of [
   "tests/assembly-coefficient.test",
   "tests/production-data.test",
   "tests/machine-workload-data.test",
+  "tests/arkady-assistant-data.test",
+  "tests/arkady-attention-data.test",
+  "tests/arkady-supply-summary.test",
 ]) {
   mkdirSync(".checks/" + file.slice(0, file.lastIndexOf("/")), {
     recursive: true,
@@ -72,6 +78,9 @@ const result = spawnSync(
     ".checks/tests/assembly-coefficient.test.mjs",
     ".checks/tests/production-data.test.mjs",
     ".checks/tests/machine-workload-data.test.mjs",
+    ".checks/tests/arkady-assistant-data.test.mjs",
+    ".checks/tests/arkady-attention-data.test.mjs",
+    ".checks/tests/arkady-supply-summary.test.mjs",
   ],
   {
     stdio: "inherit",

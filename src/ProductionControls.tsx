@@ -89,11 +89,15 @@ export function ProductionControls({
   shipmentName,
   articles,
   onLocksChanged,
+  taskDraft,
+  onTaskDraftOpened,
 }: {
   shipmentIds: string[];
   shipmentName: string;
   articles: string[];
   onLocksChanged?: (locks: ShipmentLock[]) => void;
+  taskDraft?: { note: string } | null;
+  onTaskDraftOpened?: () => void;
 }) {
   const shipmentIdsKey = Array.from(new Set(shipmentIds.filter(Boolean))).join(",");
   const activeShipmentIds = useMemo(() => shipmentIdsKey ? shipmentIdsKey.split(",") : [], [shipmentIdsKey]);
@@ -121,7 +125,33 @@ export function ProductionControls({
   const retryLockRef = useRef<() => Promise<void>>(async () => {});
   const automaticRetries = useRef<Record<string, number>>({});
   const activeKeyRef = useRef(shipmentIdsKey);
+  const showingArkadyDraft = useRef(false);
   activeKeyRef.current = shipmentIdsKey;
+  useEffect(() => {
+    if (!taskDraft || !activeShipmentIds.length || saving || modalOpen) return;
+    showingArkadyDraft.current = true;
+    setKind("instruction");
+    setScope("shipment");
+    setSelectedArticles([]);
+    setPriority("urgent");
+    setTrigger("shipment_received");
+    setTitle("Проверить остаток упаковки");
+    setNote(taskDraft.note.slice(0, 320));
+    setModalOpen(true);
+    onTaskDraftOpened?.();
+  }, [taskDraft, activeShipmentIds.length, saving, modalOpen, onTaskDraftOpened]);
+
+  function closeTaskEditor() {
+    setModalOpen(false);
+    if (!showingArkadyDraft.current) return;
+    showingArkadyDraft.current = false;
+    setKind("quality_check");
+    setPriority("attention");
+    setScope("shipment");
+    setTrigger("shipment_received");
+    setTitle("");
+    setNote("");
+  }
   const uniqueArticles = useMemo(() => [...new Map(articles.map((value) => value.trim()).filter(Boolean).map((value) => [articleKey(value), value])).values()], [articles]);
   const articleLookup = useMemo(() => new Map(uniqueArticles.map((value) => [articleKey(value), value])), [uniqueArticles]);
   const filteredArticles = useMemo(() => {
@@ -293,7 +323,7 @@ export function ProductionControls({
           note,
         }),
       });
-      setModalOpen(false);
+      closeTaskEditor();
       setTitle("");
       setNote("");
       setSelectedArticles([]);
@@ -404,7 +434,7 @@ export function ProductionControls({
         )}
       </section>
 
-      <Modal open={modalOpen} onClose={() => !saving && setModalOpen(false)} title="Добавить задачу для сборщиков" description="Задача появится в окне упаковки «RITM Сборка» для выбранной поставки или артикула.">
+      <Modal open={modalOpen} onClose={() => !saving && closeTaskEditor()} title="Добавить задачу для сборщиков" description="Задача появится в окне упаковки «RITM Сборка» для выбранной поставки или артикула.">
         <form className="production-control-form" onSubmit={(event) => void create(event)}>
           <div className="production-control-form-grid">
             <label><span>Задача</span><select value={kind} onChange={(event) => setKind(event.target.value as ControlKind)}><option value="quality_check">Проверка качества</option><option value="notification">Уведомление</option><option value="instruction">Инструкция</option></select></label>
@@ -448,7 +478,7 @@ export function ProductionControls({
             <label className="wide"><span>Короткое название</span><input required minLength={3} maxLength={90} value={title} onChange={(event) => setTitle(event.target.value)} placeholder={kind === "quality_check" ? "Например, проверить комплектность" : kind === "notification" ? "Например, заказ срочный" : "Например, вложить вкладыш"} /></label>
             <label className="wide"><span>Комментарий для сборщиков <small>необязательно</small></span><textarea maxLength={320} rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Уточните, на что обратить внимание" /></label>
           </div>
-          <div className="production-control-form-footer"><span><ClipboardCheck size={15} /> Участок: Сборка · Упаковка</span><div><Button type="button" onClick={() => setModalOpen(false)} disabled={saving}>Отмена</Button><Button type="submit" kind="primary" disabled={saving || !activeShipmentIds.length || (scope === "article" && !selectedArticles.length)}>{saving ? "Сохраняю…" : scope === "article" ? `Добавить задачу · ${selectedArticles.length || 0}` : "Добавить задачу"}</Button></div></div>
+          <div className="production-control-form-footer"><span><ClipboardCheck size={15} /> Участок: Сборка · Упаковка</span><div><Button type="button" onClick={closeTaskEditor} disabled={saving}>Отмена</Button><Button type="submit" kind="primary" disabled={saving || !activeShipmentIds.length || (scope === "article" && !selectedArticles.length)}>{saving ? "Сохраняю…" : scope === "article" ? `Добавить задачу · ${selectedArticles.length || 0}` : "Добавить задачу"}</Button></div></div>
         </form>
       </Modal>
     </>

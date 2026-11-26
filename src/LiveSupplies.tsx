@@ -10,8 +10,13 @@ import { AssemblyOnlyItems } from "./AssemblyOnlyItems";
 import { boxPositionKey, useBoxPositionRemoval } from "./BoxPositionRemoval";
 import { startWriterStatusPolling } from "./writerStatusPolling";
 import { recoverableSupply } from "./supplyAutoRecovery";
+import { ArkadyAssistant, type ArkadyOperationReport, type ArkadyStart } from "./ArkadyAssistant";
+import type { ArkadyAttentionItem } from "./arkadyAttentionData";
+import { checkArkadyDistribution, lookupArkadyCatalog, saveArkadyCatalog } from "./arkadyCatalogClient";
+import { buildProductionGroups, productionStoreName } from "./productionData";
+import { useCloudAuth } from "./CloudAuth";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FileSpreadsheet } from "lucide-react";
+import { Bell, FileSpreadsheet } from "lucide-react";
 import { SupplyRoutingReview, type RoutingPreview, type RoundingDirection } from "./SupplyRoutingReview";
 import "./supplyCreation.css";
 import {
@@ -39,7 +44,7 @@ import { supplyMarketplace } from "./liveSupplyMarketplace";
 import { ShipmentHero } from "./ShipmentHero";
 import { AssemblyTransfer } from "./AssemblyTransfer";
 import { ProductionControls } from "./ProductionControls";
-import { LockKeyhole, Clock3, Layers3, ChevronDown, Eye, EyeOff } from "lucide-react";
+import { LockKeyhole, Clock3, Layers3, ChevronDown, Eye, EyeOff, MessageCircle } from "lucide-react";
 import { supplyLockState, type SupplyLockRecord } from "./supplyLockState";
 import {
   assemblyAreaTotal,
@@ -111,6 +116,9 @@ import {
 } from "./supplySpreadsheet";
 
 type SupplySheet = LivePrinting["sheets"][number];
+const arkadyPositionId = (order: LiveOrder) =>
+  `arkady-position-${order.sourceId || "roll-printing"}-${order.sheetId}-${order.row}`;
+
 type SheetSummary = {
   sheet: SupplySheet;
   orders: LiveOrder[];
@@ -625,7 +633,13 @@ export function LiveSuppliesWorkspace({
   error,
   onRefresh,
 }: Props) {
+  const auth = useCloudAuth();
+  const canReviewAttention = auth.role === "owner" || auth.role === "manager";
   const [supplyView, setSupplyView] = useState<'directions' | 'jobs'>('directions');
+  const [arkadyStart, setArkadyStart] = useState<ArkadyStart | null>(null);
+  const arkadyOpen = arkadyStart !== null;
+  const [arkadyTaskDraft, setArkadyTaskDraft] = useState<{ sheetKey: string; note: string } | null>(null);
+  const [arkadyPosition, setArkadyPosition] = useState<LiveOrder | null>(null);
   const [writer, setWriter] = useState<WriterState | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(() => new URLSearchParams(location.search).get("supplySheet"));
   const [search, setSearch] = useState("");
@@ -913,6 +927,7 @@ export function LiveSuppliesWorkspace({
     setOnlyMissingArea(false);
     setArticleSearch("");
     setBoxSearch("");
+    setArkadyPosition(null);
   }, [selected?.sheet.sourceId, selected?.sheet.sheetId]);
   const activeBoxOrders = useMemo(() => selectedBox?.orders || [], [selectedBox]);
   const boxOrders = useMemo(() => activeBoxOrders.filter(
@@ -926,6 +941,27 @@ export function LiveSuppliesWorkspace({
   const visibleOrders = useMemo(() => selectedOrders.filter(
     order => order.article.toUpperCase().includes(articleSearch.trim().toUpperCase()),
   ), [selectedOrders, articleSearch]);
+  useEffect(() => {
+    if (arkadyOpen || !arkadyPosition || supplyView !== "jobs") return;
+    const frame = requestAnimationFrame(() => {
+      const target = document.getElementById(arkadyPositionId(arkadyPosition));
+      if (!target) return;
+      const details = target.closest("details");
+      if (details) details.open = true;
+      target.scrollIntoView({ block: "center", behavior: "instant" });
+      target.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [arkadyOpen, arkadyPosition, supplyView, visibleOrders.length, boxOrders.length]);
+
+  function revealArkadyOrder(order: LiveOrder) {
+    setOnlyMissingArea(false);
+    const inBoxSection = activeBoxOrders.some(line => arkadyPositionId(line) === arkadyPositionId(order));
+    if (inBoxSection) setBoxSearch(order.article);
+    else setArticleSearch(order.article);
+    setArkadyPosition(order);
+    setArkadyStart(null);
+  }
   const snapshotAtMs = live ? Date.parse(live.snapshotAt || live.updatedAt) : NaN;
   const hasFreshSnapshot =
     Number.isFinite(snapshotAtMs) &&
@@ -933,6 +969,61 @@ export function LiveSuppliesWorkspace({
   const pendingProduction = writer?.production?.operations?.find(
     item => !["verified", "cancelled"].includes(item.status),
   );
+  async function readArkadyOperation(id?: string) {
+    if (!id && !selected) return null;
+    const response = await fetch("/api/roll-supplies/status", {cache: "no-store", signal: AbortSignal.timeout(15000)});
+    const current: WriterState = await readRollSupplyResponse(response);
+    setWriter(current);
+    const names = new Set([selected?.sheet.name, ...selectedAssemblyOrders.map(order => order.sheetName)]);
+    const scoped = current.production?.operations || [];
+    const operations = [...(current.production?.operations || []), ...(current.operations || [])]
+      .filter(item => names.has(item.name) || item.steps?.some(step => names.has(step.name)))
+      .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+    const item = id ? scoped.find(entry => entry.id === id)
+      : operations.find(entry => !["verified", "verified_with_calculation_errors", "cancelled", "failed"].includes(entry.status)) || operations[0];
+    if (!item) return null;
+    return {
+      id: item.id,
+      title: item.name,
+      status: supplyOperationStatus(item),
+      detail: item.message || undefined,
+      canResume: !!current.production?.available && scoped.some(entry => entry.id === item.id) && !busy && !autoRecovering.current &&
+        recoverableSupply(item, current.busy, autoRecovery.current.get(item.id) || 0),
+    } satisfies ArkadyOperationReport;
+  }
+
+  async function resumeArkadyOperation(id: string): Promise<ArkadyOperationReport> {
+    const current = await readArkadyOperation(id);
+    if (current?.id !== id || !current.canResume)
+      throw new Error("Состояние операции изменилось. Проверьте его ещё раз.");
+    setBusy(true);
+    try {
+      const response = await fetch("/api/roll-supplies", {
+        method: "POST", credentials: "same-origin", headers: {"content-type": "application/json"},
+        body: JSON.stringify({action: "resume", operationId: id, explicitWriteApproval: true}),
+        signal: AbortSignal.timeout(240000),
+      });
+      const result: Operation = (await readRollSupplyResponse(response)).operation;
+      if (result?.id !== id) throw new Error("Сверьте сохранённый запрос через проверку состояния.");
+      if (result.status === "verified") void onRefresh();
+      return {id, title: result.name, status: supplyOperationStatus(result), detail: result.message || undefined};
+    } finally {
+      setBusy(false);
+      void reloadWriter();
+    }
+  }
+
+  async function checkArkadyAssemblySync(signal: AbortSignal) {
+    const response = await fetch("/api/roll-supplies/status", {
+      cache: "no-store", signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+    });
+    const current: WriterState = await readRollSupplyResponse(response);
+    if (!current.assemblyV2Sync) throw new Error("Состояние доставки в РИТМ Сборку не подтверждено.");
+    setWriter(current);
+    return current.assemblyV2Sync.pending
+      ? `Статус обновлён. В очереди: ${num(current.assemblyV2Sync.pending)}.`
+      : "Очередь доставки в РИТМ Сборку пуста.";
+  }
   const canWrite =
     // Allow writes against a recently verified snapshot while its background
     // refresh is running. Supply creation still performs its own fresh catalog,
@@ -1704,6 +1795,9 @@ export function LiveSuppliesWorkspace({
           </p>
         </div>
         <div className="live-supplies-actions">
+          {canReviewAttention && <Button onClick={() => setArkadyStart({ panel: "attention" })}>
+            <Bell size={16} /> Требует внимания
+          </Button>}
           <a className="button secondary" href="https://assembly-v2.zinovevkirill234.chatgpt.site" target="_blank" rel="noreferrer">RITM Сборка <ArrowSquareOut size={17}/></a>
           {writer && writer.mode !== "cloud" && <AssemblyTransfer onDelivered={() => void refreshSupplyData()} />}
           <Button onClick={() => void refreshSupplyData()} disabled={loading}>
@@ -1981,6 +2075,12 @@ export function LiveSuppliesWorkspace({
             setSelectedId(id);
             setSupplyView("jobs");
           }}
+          onAskArkady={(id) => {
+            setSearch("");
+            setSelectedId(id);
+            setSupplyView("jobs");
+            setArkadyStart({ panel: "summary" });
+          }}
         />
       )}
       {!live && loading ? (
@@ -2118,6 +2218,9 @@ export function LiveSuppliesWorkspace({
                 }
                 actions={
                   <>
+                    <Button onClick={() => setArkadyStart({ panel: "summary" })}>
+                      <MessageCircle size={16} /> Спросить Аркадия
+                    </Button>
                     {visibility?.available && <Button disabled={visibilityBusy || busy} onClick={() => {
                       setVisibilityError("");
                       setVisibilityDialog(true);
@@ -2328,6 +2431,8 @@ export function LiveSuppliesWorkspace({
                 shipmentName={selected.sheet.name}
                 articles={Array.from(new Set(selectedAssemblyOrders.map((order) => order.article).filter(Boolean)))}
                 onLocksChanged={updateListLocks}
+                taskDraft={arkadyTaskDraft?.sheetKey === `${selected.sheet.sourceId}:${selected.sheet.sheetId}` ? arkadyTaskDraft : null}
+                onTaskDraftOpened={() => setArkadyTaskDraft(null)}
               />
 
               <section className="panel">
@@ -2606,20 +2711,21 @@ export function LiveSuppliesWorkspace({
                   </div>
                 </div>
                 <div className="supply-composition-toolbar">
-                  <Search value={articleSearch} onChange={setArticleSearch} label="Найти артикул в составе" />
+                  <Search value={articleSearch} onChange={value => { setArticleSearch(value); setArkadyPosition(null); }} label="Найти артикул в составе" />
                   {articleSearch.trim() && <span role="status">Найдено {num(visibleOrders.length)} из {num(selectedOrders.length)}</span>}
                 </div>
                 {visibleOrders.length === 0 ? <p className="supply-composition-empty">Артикулы не найдены</p> : <DataTable
                   rows={visibleOrders}
                   rowKey={(order) => order.uid}
                   label={`Состав поставки ${selected.sheet.name}`}
+                  selected={arkadyPosition ? visibleOrders.find(order => arkadyPositionId(order) === arkadyPositionId(arkadyPosition))?.uid : undefined}
                   pageSize={20}
                   columns={[
                     {
                       id: "article",
                       label: "Артикул",
                       sort: (order) => order.article,
-                      render: (order) => <strong>{order.article}</strong>,
+                      render: (order) => <strong id={arkadyPositionId(order)} tabIndex={-1}>{order.article}</strong>,
                     },
                     {
                       id: "plan",
@@ -2722,15 +2828,16 @@ export function LiveSuppliesWorkspace({
                 <details className="supply-box-transfer">
                   <summary><span><strong>Товары бокса</strong><small>{num(activeBoxOrders.length)} поз.</small></span><span className="supply-box-transfer-toggle"><span className="when-closed">Раскрыть список</span><span className="when-open">Свернуть список</span><ChevronDown size={18}/></span></summary>
                   <div className="supply-composition-toolbar">
-                    <Search value={boxSearch} onChange={setBoxSearch} label="Найти артикул в боксе" />
+                    <Search value={boxSearch} onChange={value => { setBoxSearch(value); setArkadyPosition(null); }} label="Найти артикул в боксе" />
                     {boxSearch.trim() && <span role="status">Найдено {num(boxOrders.length)} из {num(activeBoxOrders.length)}</span>}
                     <div className="supply-composition-toolbar-end">
                       <DepartmentMoveBatch sourceDepartment="box" positions={activeBoxOrders.map(order => ({shipmentId:moveShipmentIdForBox(order.sheetId),uid:order.uid,article:order.article,quantity:order.quantity,printed:rollPrinted(order),cut:rollCut(order)}))} disabled={!canMove} disabledReason={moveBlockedReason} onDone={confirmMoves}/>
                     </div>
                   </div>
                   {boxOrders.length === 0 ? <p className="supply-composition-empty">{boxSearch ? "Артикулы не найдены" : "В боксе нет позиций"}</p> :
-                    <DataTable rows={boxOrders} rowKey={boxPositionKey} label="Состав бокса" pageSize={10} columns={[
-                      {id:'article',label:'Артикул',sort:order=>order.article,render:order=><strong>{order.article}</strong>},
+                    <DataTable rows={boxOrders} rowKey={boxPositionKey} label="Состав бокса" pageSize={10}
+                      selected={arkadyPosition ? boxOrders.find(order => arkadyPositionId(order) === arkadyPositionId(arkadyPosition)) && boxPositionKey(arkadyPosition) : undefined} columns={[
+                      {id:'article',label:'Артикул',sort:order=>order.article,render:order=><strong id={arkadyPositionId(order)} tabIndex={-1}>{order.article}</strong>},
                       {id:'quantity',label:'План, шт.',sort:order=>order.quantity,render:order=>num(order.quantity)},
                       {id:'printed',label:'Напечатано',render:order=>{
                         const printed = supplyPrinted(order);
@@ -2750,6 +2857,102 @@ export function LiveSuppliesWorkspace({
         </div>
       ) : null}
 
+      {arkadyStart && (() => {
+        const market = selected ? supplyMarketplace(selected.sheet.name)?.toUpperCase() : undefined;
+        const planningGroup = selected && buildProductionGroups(live).find(group =>
+          group.sheetId === selected.sheet.sheetId && group.sourceId === selected.sheet.sourceId ||
+          group.orders.some(order => order.sheetId === selected.sheet.sheetId && order.sourceId === selected.sheet.sourceId),
+        );
+        const attentionOperations = (writer?.production?.operations ?? [])
+          .filter(item => ["partial", "uncertain", "written_unverified", "verified_with_calculation_errors"].includes(item.status))
+          .map(item => ({ id: item.id, title: item.name, detail: supplyOperationStatus(item) }));
+        function getAttentionActions(item: ArkadyAttentionItem) {
+          const target = summaries.find(({ sheet }) => sheet.sourceId === item.sourceId && sheet.sheetId === item.sheetId);
+          if (!target) return {};
+          const linkedRollId = item.sourceId === "box-printing"
+            ? effectiveBoxLinks.find(link => link.boxSheetId === item.sheetId)?.targetRollSheetId : null;
+          const summary = linkedRollId == null ? target
+            : summaries.find(({ sheet }) => sheet.sourceId === "roll-printing" && sheet.sheetId === linkedRollId);
+          if (!summary) return {};
+          const sheetKey = `${summary.sheet.sourceId}:${summary.sheet.sheetId}`;
+          const navigate = (start: ArkadyStart | null) => {
+            setSearch("");
+            setSelectedId(sheetKey);
+            setSupplyView("jobs");
+            setArkadyStart(start);
+          };
+          const article = item.article;
+          const canInspectCatalog = article && auth.mode === "cloud" && supplyMarketplace(summary.sheet.name);
+          const canDraftTask = item.stage === "packing" && canReviewAttention
+            && controlIdsForSummary(summary, summaries, effectiveBoxLinks, live?.sheets || []).length > 0;
+          return {
+            shipment: () => navigate(null),
+            diagnosis: () => navigate({ panel: "diagnosis", article }),
+            catalog: canInspectCatalog ? () => navigate({ panel: "catalog", article }) : undefined,
+            task: canDraftTask ? () => {
+              navigate(null);
+              setArkadyTaskDraft({ sheetKey, note: item.detail });
+            } : undefined,
+          };
+        }
+        return <ArkadyAssistant
+          key={`${selected?.sheet.sourceId}:${selected?.sheet.sheetId}:${arkadyStart.panel}:${arkadyStart.article ?? ""}`}
+          open={arkadyOpen}
+          onClose={() => setArkadyStart(null)}
+          start={arkadyStart}
+          attention={canReviewAttention ? {
+            live,
+            stale: !!error,
+            loadingPrinting: loading,
+            refreshPrinting: onRefresh,
+            getActions: getAttentionActions,
+          } : undefined}
+          assemblySync={writer?.assemblyV2Sync?.pending ? {
+            title: "Доставка в РИТМ Сборку",
+            detail: `В очереди: ${num(writer.assemblyV2Sync.pending)}. РИТМ повторяет доставку в фоне.`,
+            check: checkArkadyAssemblySync,
+          } : undefined}
+          supplyName={selected?.sheet.name ?? ""}
+          orders={selectedAssemblyOrders}
+          summaryPlan={selectedAssemblyPlan}
+          planningKey={planningGroup?.key}
+          onDeadlinesSaved={() => { void onRefresh(); }}
+          snapshotStale={!!(live?.stale || live?.refreshFailed || error)}
+          diagnostics={{
+            lock: supplyLockState(selectedControlShipmentIds, listLocks),
+            missingPositions: selectedBox?.missingPositions,
+            packingAvailable: live?.packing?.status !== "unavailable",
+          }}
+          onRevealOrder={revealArkadyOrder}
+          previewRouting={selected && market && auth.mode === "cloud" ? async (order, quantity, signal) => {
+            const knownStore = productionStoreName(order).match(/^Магазин ([12])$/)?.[1];
+            const cards = await lookupArkadyCatalog(market, order.article, signal);
+            const matches = knownStore ? cards.filter(card => card.store === knownStore) : cards;
+            if (matches.length === 0) throw new Error("Карточка артикула для этого магазина не найдена.");
+            if (matches.length !== 1) throw new Error("Уточните магазин в справочнике перед проверкой распределения.");
+            return checkArkadyDistribution(matches[0], selected.sheet.name, quantity, signal);
+          } : undefined}
+          catalog={selected && market && auth.mode === "cloud" ? {
+            lookup: async (article, signal) => {
+              const cards = await lookupArkadyCatalog(market, article, signal);
+              const matches = selectedAssemblyOrders.filter(order => order.article.trim().toUpperCase() === article.trim().toUpperCase());
+              const stores = new Set(matches.map(order => productionStoreName(order)));
+              const [store] = stores;
+              const knownStore = stores.size === 1 && store?.match(/^Магазин ([12])$/)?.[1];
+              return knownStore ? cards.filter(card => card.store === knownStore) : cards;
+            },
+            save: auth.role === "owner" ? saveArkadyCatalog : undefined,
+            checkDistribution: (card) => {
+              const matches = selectedAssemblyOrders.filter(order =>
+                order.article.trim().toUpperCase() === card.article.trim().toUpperCase() &&
+                productionStoreName(order) === `Магазин ${card.store}`);
+              if (matches.length !== 1) return Promise.resolve("Для проверки распределения уточните магазин и позицию в составе.");
+              return checkArkadyDistribution(card, selected.sheet.name, matches[0].quantity);
+            },
+          } : undefined}
+          operation={{ read: readArkadyOperation, resume: resumeArkadyOperation, attention: attentionOperations }}
+        />;
+      })()}
       <Modal
         open={dialog !== null}
         onClose={() => !busy && setDialog(null)}

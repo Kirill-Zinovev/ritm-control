@@ -50,6 +50,7 @@ import { verifyArchivedStockClose } from './stockCloseRecovery.js';
 import { productionTabVisibility, reconcileProductionTabs } from "./productionTabs.js";
 import { syncProductionSheetCatalog } from "./productionSheetCatalog.js";
 import { importAssemblyProductionExtensions, readAssemblyItemCatalog, readWorkloadCatalog } from "./assemblyProductionCatalog.js";
+import { arkadyCatalog } from "./arkadyCatalog.js";
 import { ARKADY_COMPLETION_RECIPIENTS, bitrixConfigured, decryptBitrixConfig, drainBitrixNotifications, encryptBitrixConfig, sendBitrixNotification, completionPraise, retireObsoleteBitrixNotifications } from './bitrixNotifications.js';
 import { saveBitrixPreference, saveBitrixConfiguration } from './bitrixSettings.js';
 
@@ -100,6 +101,7 @@ function managerRouteAllowed(method, path) {
     "/api/shipment-locks",
     "/api/arkady-reminder",
     "/api/stocks/preview",
+    "/api/arkady/catalog",
     "/api/stocks/close",
     "/api/stocks/close/batch",
     "/api/stocks",
@@ -959,6 +961,12 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
       return json(url.searchParams.get("view") === "forecast"
         ? await forecastStocks(store,load,ctx?.waitUntil ? task=>ctx.waitUntil(task) : null,url.searchParams.get("refresh")==="1")
         : await load());
+    }
+    if (path === "/api/arkady/catalog") {
+      methods(request, ["POST"]);
+      return json(await arkadyCatalog(await readJson(request, 4096), {
+        bindings, principal, writesEnabled: config.writesEnabled, fetcher,
+      }));
     }
     if (path === "/api/assembly-only-catalog") {
       methods(request,["GET"]);

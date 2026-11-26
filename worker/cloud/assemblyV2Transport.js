@@ -21,7 +21,7 @@ export async function callAssemblyV2(
 ) {
   if (
     !assemblyV2Configured(bindings) ||
-    !/^\/api\/ritm\/(?:sync|deliver|remove-manual-item|retire-shipments|production-catalog|production-extensions|work-report|warehouse(?:\/dispatch)?)(?:\?|$)/.test(
+    !/^\/api\/ritm\/(?:sync|deliver|remove-manual-item|retire-shipments|production-catalog|production-extensions|work-report|arkady-catalog|warehouse(?:\/dispatch)?)(?:\?|$)/.test(
       path,
     )
   )
