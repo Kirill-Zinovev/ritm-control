@@ -18,6 +18,7 @@ import {
 import type { LivePrinting } from "./livePrinting";
 import { plannedAreaTotal, rollCut, rollPrinted } from "./liveSupplyProgress";
 import { num } from "./model";
+import { DispatchControl } from "./DispatchControl";
 import {
   buildProductionGroups as buildGroups,
   productionFact as fact,
@@ -261,17 +262,44 @@ function storeNumber(store: string) {
   return store.startsWith("Магазин ") ? store.slice("Магазин ".length) : store;
 }
 
-export function ProductionDashboard({
-  live,
-  loading,
-  error,
-  initialSupply = "all",
-}: {
+type ProductionDashboardProps = {
   live: LivePrinting | null;
   loading: boolean;
   error: string;
   initialSupply?: string;
-}) {
+};
+
+export function ProductionDashboard(props: ProductionDashboardProps) {
+  const initialSupply = props.initialSupply ?? "all";
+  const [view, setView] = useState<"dispatch" | "work">(
+    initialSupply === "all" ? "dispatch" : "work",
+  );
+  return (
+    <div className="production-dashboard">
+      <div className="production-view-switch" role="group" aria-label="Раздел производства">
+        <button type="button" aria-pressed={view === "dispatch"} onClick={() => setView("dispatch")}>
+          <Truck size={18} aria-hidden="true" /> Контроль отгрузки
+        </button>
+        <button type="button" aria-pressed={view === "work"} onClick={() => setView("work")}>
+          <Printer size={18} aria-hidden="true" /> Работа по поставкам
+        </button>
+      </div>
+      {view === "dispatch" ? (
+        <DispatchControl live={props.live} productionLoading={props.loading}
+          productionError={props.error} initialSupply={initialSupply} />
+      ) : (
+        <ProductionWork {...props} />
+      )}
+    </div>
+  );
+}
+
+function ProductionWork({
+  live,
+  loading,
+  error,
+  initialSupply = "all",
+}: ProductionDashboardProps) {
   const [market, setMarket] = useState("all");
   const [store, setStore] = useState("all");
   const [supply, setSupply] = useState(initialSupply);

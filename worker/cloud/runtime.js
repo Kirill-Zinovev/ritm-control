@@ -3,6 +3,7 @@ import { assemblyV2Feed } from './assemblyV2Feed.js';
 import { refreshAssemblyV2Source, verifyAssemblyV2EmptyCommand } from './assemblyV2Refresh.js';
 import {receiveAssemblyV2Events,readAssemblyV2Events,overlayPrintingV2} from './assemblyV2Events.js';
 import {readAssemblyV2Report} from './assemblyV2Report.js';
+import { readAssemblyDispatchReport } from './assemblyDispatchReport.js';
 import {drainAssemblyV2,queueSnapshotDelivery,supplyDeliveryStatus} from './assemblyV2Delivery.js';
 import {readAssemblyV2Warehouse,mergeAssemblyWarehouses,reconcileArchivedWarehouse,warehouseForSelection,dispatchAssemblyV2} from './assemblyV2Warehouse.js';
 import {prepareWarehouseExport,readWarehouseExports} from './warehouseExports.js';
@@ -93,7 +94,7 @@ function managerRouteAllowed(method, path) {
     "/api/arkady-reminder",
   ].includes(path);
   return method === "POST" && [
-    "/api/production-moves", "/api/production-moves/batch", "/api/production-planning", "/api/box-position-removal",
+    "/api/production-moves", "/api/production-moves/batch", "/api/production-planning", "/api/production-dispatch", "/api/box-position-removal",
     "/api/stocks/history",
     "/api/roll-supplies", "/api/roll-supplies/preview",
     "/api/production-tabs",
@@ -631,6 +632,12 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
     if (path === "/api/assembly") {
       methods(request, ["GET"]);
       return json(await readAssemblyV2Report(url, bindings, { fetcher }));
+    }
+    if (path === "/api/production-dispatch") {
+      methods(request, ["POST"]);
+      if (!principal || !["owner", "manager"].includes(principal.role))
+        throw new CloudError("production_dispatch_forbidden", "Войдите в РИТМ, чтобы увидеть отгрузки.", 403);
+      return json(await readAssemblyDispatchReport(await readJson(request, 8192), bindings, { fetcher }));
     }
     const config = cloudConfig(bindings);
     if (!config.configured) throw new CloudError("cloud_not_configured", "Облачное подключение источников и хранилища ещё не настроено.");

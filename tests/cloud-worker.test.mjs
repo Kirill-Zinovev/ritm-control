@@ -108,6 +108,12 @@ test("RITM manager PIN login grants business sections except AI and owner admini
     const changed = await mf.dispatchFetch("https://ritm.test/api/auth/change-pin", { method: "POST", headers: { cookie, origin: "https://ritm.test", "content-type": "application/json" }, body: JSON.stringify({ newPin: "87654321" }) });
     assert.equal(changed.status, 200);
     const forecast=await mf.dispatchFetch('https://ritm.test/api/production-planning',{headers:sessionHeaders});assert.equal(forecast.status,200);
+    const dispatch = await mf.dispatchFetch("https://ritm.test/api/production-dispatch", {
+      method: "POST", headers: { ...sessionHeaders, origin: "https://ritm.test", "content-type": "application/json" },
+      body: JSON.stringify({ supplyIds: ["RITM-ROLL-1"] }),
+    });
+    assert.equal(dispatch.status, 503);
+    assert.equal((await dispatch.json()).error, "production_dispatch_unavailable");
     const forbiddenRates=await mf.dispatchFetch('https://ritm.test/api/production-planning',{method:'POST',headers:{...sessionHeaders,origin:'https://ritm.test','content-type':'application/json'},body:JSON.stringify({action:'resources',revision:0,resources:[]})});assert.equal(forbiddenRates.status,403);assert.equal((await forbiddenRates.json()).error,'planning_owner_required');
 
     const runtime = await mf.dispatchFetch("https://ritm.test/api/runtime", { headers: { cookie } });

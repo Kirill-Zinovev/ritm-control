@@ -33,6 +33,7 @@ export function installManagerSessionFetch() {
       || path === "/api/assembly-stocks"
       || path === "/api/printing"
       || path === "/api/production-planning"
+      || path === "/api/production-dispatch"
       || path === "/api/warehouse"
       || path === "/api/warehouse/dispatch"
       || path === "/api/warehouse/dispatch/batch"
