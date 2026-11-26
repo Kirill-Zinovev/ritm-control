@@ -7,6 +7,7 @@ import { accessApi, assemblyOwnerAccount, authenticate, sameOrigin, type AccessE
 import { readRitmWarehousePage } from "./ritm-warehouse";
 import { labelsApi } from "./labels-api";
 import { databaseBackup, databaseBackupPath } from "./database-backup.mjs";
+import { r2Backup, r2BackupPath, type R2BackupBucket } from "./r2-backup";
 import { arkadyWbIntakePath } from "../shared/catalog-editor";
 import { arkadyWbIntakeApi } from "./arkady-wb-intake";
 interface Prepared {
@@ -23,11 +24,7 @@ interface D1 {
 export interface Env extends RitmEnv, AccessEnv {
   ASSETS?: { fetch(request: Request): Promise<Response> };
   DB?: D1;
-  BUCKET?: {
-    get(key: string): Promise<{
-      body: ReadableStream;
-      httpMetadata?: { contentType?: string };
-    } | null>;
+  BUCKET?: R2BackupBucket & {
     put(
       key: string,
       value: Uint8Array,
@@ -88,6 +85,9 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === databaseBackupPath) {
       return databaseBackup(request, env.DB, "assembly", Boolean(assemblyOwnerAccount(request, env)));
+    }
+    if (url.pathname === r2BackupPath) {
+      return r2Backup(request, env.BUCKET, Boolean(assemblyOwnerAccount(request, env)));
     }
     const store=env.DB ? accessStore(env.DB) : undefined;
     if (url.pathname.startsWith("/api/access")) return accessApi(request,env,store);
