@@ -178,6 +178,22 @@ function download(name: string, text: string, type = "text/csv;charset=utf-8") {
 }
 function AppShell() {
   const cloudAuth = useCloudAuth();
+  const [layoutPhotoRefresh, setLayoutPhotoRefresh] = useState<{ busy: boolean; message: string }>({ busy: false, message: "" });
+  async function refreshLayoutPhotos() {
+    setLayoutPhotoRefresh({ busy: true, message: "" });
+    try {
+      const response = await fetch("/api/machine-layout-photos/sync", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      const result = await response.json();
+      if (!response.ok || result.ok !== true) throw new Error(result.message || "Обновление фото не подтверждено.");
+      setLayoutPhotoRefresh({ busy: false, message: `Фото найдено для ${num(result.matched)} из ${num(result.rows)} строк.` });
+    } catch (error) {
+      setLayoutPhotoRefresh({ busy: false, message: error instanceof Error ? error.message : "Обновление фото не подтверждено." });
+    }
+  }
   const learningIdentity = [cloudAuth.role || "local", cloudAuth.username || cloudAuth.displayName || ""].join(":");
   const firstVisitIdentity = `${cloudAuth.role}:${cloudAuth.username || cloudAuth.displayName || "owner"}`;
   const canSeeArkadyNews = cloudAuth.role === "owner" || cloudAuth.role === "manager";
@@ -2117,6 +2133,18 @@ function AppShell() {
         {page === "sources" && (
           <>
             <div className="source-grid">
+              {cloudAuth.role === "owner" && (
+                <section className="panel source-card">
+                  <h2>Фото макетов</h2>
+                  <p>Лист «Все макеты» получает фото из справочника RITM Сборка.</p>
+                  <div className="source-actions">
+                    <Button disabled={layoutPhotoRefresh.busy} onClick={() => void refreshLayoutPhotos()}>
+                      {layoutPhotoRefresh.busy ? "Обновляем фото…" : "Обновить фото макетов"}
+                    </Button>
+                  </div>
+                  {layoutPhotoRefresh.message && <p role="status">{layoutPhotoRefresh.message}</p>}
+                </section>
+              )}
               {sources.map((s) => (
                 <section className="panel source-card" key={s.id}>
                   <div className="source-card-title">

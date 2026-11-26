@@ -1,6 +1,7 @@
 import { CloudError } from "./access.js";
 import { sourceIds, sourceId } from "./config.js";
 import { cloudFetch } from "./fetch.js";
+import { machineLayoutPhotoSheet, machineLayoutSheet } from "./machineLayouts.js";
 
 const tokenUrl = "https://oauth2.googleapis.com/token";
 const readScope = "https://www.googleapis.com/auth/spreadsheets.readonly";
@@ -87,11 +88,52 @@ export class CloudSheetsReader {
       if (!this.writer || typeof this.beforeWrite !== "function") throw new CloudError("cloud_write_disabled", "Запись в рабочие таблицы пока не включена.", 403);
       await this.beforeWrite(match[1]);
     }
+    return this.#send(parsed.href, { method, body, write, signal });
+  }
+  async #send(url, { method, body, write, signal }) {
     const token = await this.accessToken(signal);
-    const response = await this.fetcher(parsed.href, { method, redirect: "error", headers: { authorization: "Bearer " + token, ...(body ? { "content-type": "application/json" } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: signal || AbortSignal.timeout(25000) });
+    const response = await this.fetcher(url, { method, redirect: "error", headers: { authorization: "Bearer " + token, ...(body ? { "content-type": "application/json" } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: signal || AbortSignal.timeout(25000) });
     this.metrics[write ? "writeRequests" : "readRequests"]++;
     if (!response.ok) throw new CloudError("sheets_unavailable", "Google Sheets не подтвердил запрос.");
     return response;
+  }
+  // Layouts remain read-only through the generic API. This operation owns only
+  // the photo index and column C below the header in the configured workbook.
+  async updateMachineLayoutPhotos({ metadata, photoRows, formula, formulaRuns }) {
+    const id = sourceId(this.bindings, "machineLayoutsId");
+    const cache = machineLayoutPhotoSheet;
+    if (!id || id !== metadata.spreadsheetId || !this.writer || typeof this.beforeWrite !== "function")
+      throw new CloudError("layout_photos_write_forbidden", "Запись фотографий в таблицу макетов недоступна.", 403);
+    const previous = metadata.sheets.find(({ properties }) => properties.sheetId === cache.id)?.properties;
+    const requests = [];
+    if (photoRows) {
+      const rowCount = Math.max(2, photoRows.length);
+      if (!previous) requests.push({ addSheet: { properties: {
+        sheetId: cache.id, title: cache.title, hidden: true, gridProperties: { rowCount, columnCount: 2 },
+      } } });
+      else if (previous.gridProperties.rowCount < rowCount)
+        requests.push({ appendDimension: { sheetId: cache.id, dimension: "ROWS", length: rowCount - previous.gridProperties.rowCount } });
+      requests.push({ updateCells: {
+        range: { sheetId: cache.id, startRowIndex: 0, endRowIndex: Math.max(rowCount, previous?.gridProperties.rowCount || 0),
+          startColumnIndex: 0, endColumnIndex: 2 },
+        rows: photoRows.map(row => ({ values: row.map(text => ({ userEnteredValue: { stringValue: text } })) })),
+        fields: "userEnteredValue",
+      } });
+    }
+    for (const [startRowIndex, endRowIndex] of formulaRuns)
+      requests.push({ repeatCell: {
+        range: { sheetId: machineLayoutSheet.id, startRowIndex, endRowIndex, startColumnIndex: 2, endColumnIndex: 3 },
+        cell: { userEnteredValue: { formulaValue: formula } }, fields: "userEnteredValue",
+      } });
+    if (!requests.length) return false;
+    await this.beforeWrite(id);
+    const response = await this.#send("https://sheets.googleapis.com/v4/spreadsheets/" + id + ":batchUpdate", {
+      method: "POST", body: { requests }, write: true,
+    });
+    const receipt = await response.json();
+    if (receipt.spreadsheetId !== id || receipt.replies?.length !== requests.length)
+      throw new CloudError("layout_photos_unverified", "Google Sheets не подтвердил обновление фото.", 503);
+    return true;
   }
   async get(id, params, signal) {
     this.checkDocument(id);

@@ -1,12 +1,21 @@
 import { CloudError } from './access.js';
 
+export const machineLayoutSheet = { id: 0, title: 'Все макеты' };
+export const machineLayoutPhotoSheet = { id: 1713653407, title: '_RITM_ФОТО', header: ['Артикул|Магазин', 'Фото RITM Сборка'] };
+
+export function machineLayoutProperties(metadata) {
+  const sheet = metadata.sheets?.find(({properties}) =>
+    properties?.title === machineLayoutSheet.title && properties.sheetId === machineLayoutSheet.id && !properties.hidden);
+  const count = sheet?.properties?.gridProperties?.rowCount;
+  if (!Number.isSafeInteger(count) || count < 2 || count > 100000) throw new Error('sheet');
+  return sheet.properties;
+}
+
 // Read only the canonical list; technical sheets are deliberately excluded.
 export async function readMachineLayoutArticles(reader, documentId) {
   try {
     const metadata = await reader.metadata(documentId);
-    const sheet = metadata.sheets?.find(s => s.properties?.title === 'Все макеты' && s.properties?.sheetId === 0 && !s.properties?.hidden);
-    const count = sheet?.properties?.gridProperties?.rowCount;
-    if (!Number.isSafeInteger(count) || count < 2 || count > 100000) throw new Error('sheet');
+    const count = machineLayoutProperties(metadata).gridProperties.rowCount;
     const grid = await reader.grid(documentId, [`'Все макеты'!B1:B${count}`]);
     const block = grid.sheets?.find(s => s.properties?.sheetId === 0)?.data?.[0];
     if (!block || (block.startRow || 0) !== 0 || block.startColumn !== 1 || !Array.isArray(block.rowData)) throw new Error('range');

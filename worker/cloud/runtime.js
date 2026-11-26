@@ -51,6 +51,7 @@ import { closeStockTask } from '../../agent/stockCloseOperations.js';
 import { verifyArchivedStockClose } from './stockCloseRecovery.js';
 import { productionTabVisibility, reconcileProductionTabs } from "./productionTabs.js";
 import { syncProductionSheetCatalog } from "./productionSheetCatalog.js";
+import { syncMachineLayoutPhotos } from "./machineLayoutPhotos.js";
 import { importAssemblyProductionExtensions, readAssemblyItemCatalog, readWorkloadCatalog } from "./assemblyProductionCatalog.js";
 import { arkadyCatalog } from "./arkadyCatalog.js";
 import { arkadyWbIntake, arkadyWbIntakeMaxBytes } from "./arkadyWbIntake.js";
@@ -568,8 +569,15 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
       );
       if (ctx?.waitUntil) ctx.waitUntil(production);
       else await production;
+      if (ctx?.waitUntil) ctx.waitUntil(syncMachineLayoutPhotos(bindings, store, { fetcher, dryRun: false })
+        .catch(error => console.warn("machine_layout_photos", error.code || "layout_photos_sync_failed")));
       const result = await stock;
       return json({ ok: result.ok }, result.ok ? 200 : 503);
+    }
+    if (path === "/api/machine-layout-photos/sync") {
+      methods(request, ["POST"]);
+      await requireAccessOwner(request, bindings);
+      return json(await syncMachineLayoutPhotos(bindings, new CloudStore(bindings.DB), { fetcher, dryRun: false }));
     }
     if (path === "/api/auth/login") {
       methods(request, ["POST"]);
