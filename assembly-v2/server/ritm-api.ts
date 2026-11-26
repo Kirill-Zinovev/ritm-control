@@ -2,6 +2,7 @@ import { json, type Database } from "./api";
 import type { SqlStore, Statement } from "./database";
 import { catalogKey, digest, photoAllowed, type CatalogEntry } from "../shared/catalog";
 import { readRitmWorkReport } from "./work-history";
+import { readRitmDispatchReport } from "./ritm-dispatch-report";
 import {
   ritmShipmentId,
   signRitmFeed,
@@ -505,6 +506,20 @@ export async function ritmApi(
       return json({ error: "Требуется служебный запрос РИТМ." }, 403);
     const report = await readRitmWorkReport(store, url);
     return report ? json(report) : json({ error: "Проверьте период отчёта." }, 400);
+  }
+  if (url.pathname === "/api/ritm/dispatch-report") {
+    if (actor !== "ritm-service" || request.method !== "POST")
+      return json({ error: "Требуется служебный запрос РИТМ." }, 403);
+    const input: unknown = await request.json().catch(() => null);
+    const supplyIds = input && typeof input === "object" && "supplyIds" in input ? input.supplyIds : null;
+    if (!Array.isArray(supplyIds) || supplyIds.length < 1 || supplyIds.length > 100 ||
+        supplyIds.some((id) => typeof id !== "string" || !id.trim() || id !== id.trim() || id.length > 300) ||
+        new Set(supplyIds).size !== supplyIds.length)
+      return json({ error: "Проверьте список исходных ID поставок." }, 400);
+    const report = await readRitmDispatchReport(store, supplyIds);
+    return report
+      ? json(report)
+      : json({ error: "Слишком много позиций для одной сверки. Уменьшите список поставок." }, 413);
   }
   if (url.pathname === "/api/ritm/production-catalog") {
     if (actor !== "ritm-service" || request.method !== "POST")

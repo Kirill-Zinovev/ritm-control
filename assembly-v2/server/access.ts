@@ -29,6 +29,7 @@ const signedRoutes = new Map([
   ["/api/ritm/production-extensions", "POST"],
   ["/api/ritm/warehouse", "GET"],
   ["/api/ritm/work-report", "GET"],
+  ["/api/ritm/dispatch-report", "POST"],
   ["/api/ritm/warehouse/dispatch", "POST"],
 ]);
 function equal(a: string, b: string): boolean {
