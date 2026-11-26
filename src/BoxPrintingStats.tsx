@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useId, useMemo, useState } from "react";
 import { Package, CaretRight } from "./icons";
 import { inPeriod, num, type Period } from "./model";
 import type { BoxPrintingEvent, LivePrinting } from "./livePrinting";
@@ -80,6 +80,13 @@ export function BoxPrintingStats({
   >("all");
   const [query, setQuery] = useState("");
   const source = value?.boxPrinting;
+  const sheetReport = value?.boxSheetReport;
+  const [showSheetReport, setShowSheetReport] = useState(false);
+  const sheetReportId = useId();
+  const sheetRows = useMemo(
+    () => (sheetReport?.rows ?? []).slice().sort((a, b) => a.name.localeCompare(b.name, "ru")),
+    [sheetReport?.rows],
+  );
   const inScope = (e: {
     date: string;
     sheetId: number;
@@ -151,20 +158,54 @@ export function BoxPrintingStats({
               </p>
             </div>
           </div>
-          {source?.status === "available" && (
-            <div className="printing-kpis">
-              {[
-                ["Площадь печати", num(total.area, 2) + " м²"],
-                ["Площадь порезки", num(totalCut.area, 2) + " м²"],
-              ].map(([label, value]) => (
-                <div key={label}>
-                  <span>{label}</span>
-                  <strong>{value}</strong>
-                </div>
-              ))}
+          {(source?.status === "available" || sheetReport) && (
+            <div className={`printing-kpis${sheetReport ? " printing-kpis--box-sheets" : ""}`}>
+              {source?.status === "available" && (
+                <div><span>Площадь печати</span><strong>{num(total.area, 2)} м²</strong></div>
+              )}
+              {sheetReport && (
+                <button type="button" className="box-sheet-kpi" aria-expanded={showSheetReport}
+                  aria-controls={sheetReportId} onClick={() => setShowSheetReport(open => !open)}>
+                  <span>Фактически листов</span>
+                  <strong>{sheetReport.total === null ? "—" : num(sheetReport.total)}</strong>
+                  <small>{sheetReport.status === "available"
+                    ? `Внесено по ${sheetReport.entered} из ${sheetRows.length} поставок`
+                    : "Таблица недоступна"}</small>
+                  <CaretRight size={18} aria-hidden />
+                </button>
+              )}
+              {source?.status === "available" && (
+                <div><span>Площадь порезки</span><strong>{num(totalCut.area, 2)} м²</strong></div>
+              )}
             </div>
           )}
         </div>
+        {sheetReport && (
+          <div id={sheetReportId} hidden={!showSheetReport} className="box-sheet-report">
+            <h3>Листы по поставкам Бокса</h3>
+            <p>Введённые в шапке числа, включая сохранённые значения в архиве.</p>
+            {sheetReport.status === "unavailable" ? (
+              <p role="status">Google Sheets не подтвердил данные. Повторите обновление.</p>
+            ) : sheetRows.length ? (
+              <div className="table-wrap printing-employee-table box-sheet-report-table">
+                <table>
+                  <thead><tr><th scope="col">Поставка</th><th scope="col">Фактически листов</th></tr></thead>
+                  <tbody>{sheetRows.map(row => (
+                    <tr key={row.sheetId}>
+                      <td>
+                        <a href={row.url} target="_blank" rel="noreferrer">{row.name}</a>
+                        {row.archived && <span className="box-sheet-archived">Архив</span>}
+                      </td>
+                      <td>{row.count !== null ? <strong>{num(row.count)}</strong> :
+                        row.status === "invalid" ? "Проверьте число в таблице" :
+                        row.status === "missing" ? "Поле не настроено" : "Не внесено"}</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            ) : <p>Открытых поставок Бокса нет.</p>}
+          </div>
+        )}
         {source?.status !== "available" ? (
           <p role="status">
             {source?.reason || "Журнал бокса ещё не подключён к этому снимку."}

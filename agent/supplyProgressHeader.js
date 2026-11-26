@@ -1,4 +1,91 @@
+import { BOX_SHEET_REPORT_LABEL, isVisibleBoxSupply } from "./boxSheetReport.js";
+
 const column = n => {let s='';for(n++;n;n=Math.floor((n-1)/26))s=String.fromCharCode(65+(n-1)%26)+s;return s;};
+
+const boxCountRange = (sheetId, row, start, end) => ({
+  sheetId, startRowIndex: row, endRowIndex: row + 1, startColumnIndex: start, endColumnIndex: end,
+});
+const boxCountHeight = sheetId => ({
+  updateDimensionProperties: {
+    range: { sheetId, dimension: "ROWS", startIndex: 2, endIndex: 3 },
+    properties: { pixelSize: 30 },
+    fields: "pixelSize",
+  },
+});
+
+function boxCountRequests(sheetId, start, end) {
+  const labelRange = boxCountRange(sheetId, 1, start, end);
+  const inputRange = boxCountRange(sheetId, 2, start, end);
+  const anchor = "$" + column(start) + "$3";
+  const instruction = "Введите фактическое число листов для всей поставки. Допустимо целое число от 0.";
+  const format = (range, backgroundColor, fontSize, numberFormat) => ({
+    repeatCell: {
+      range,
+      cell: { userEnteredFormat: {
+        backgroundColor, backgroundColorStyle: { rgbColor: backgroundColor },
+        horizontalAlignment: "CENTER", verticalAlignment: "MIDDLE", wrapStrategy: "WRAP",
+        textFormat: { fontFamily: "Arial", fontSize, bold: true, foregroundColor: { red: .11, green: .23, blue: .39 } },
+        ...(numberFormat && { numberFormat }),
+      } },
+      fields: "userEnteredFormat",
+    },
+  });
+  return [
+    ...[labelRange, inputRange].map(range => ({ mergeCells: { range, mergeType: "MERGE_ALL" } })),
+    format(labelRange, { red: .94, green: .96, blue: .99 }, 13),
+    format(inputRange, { red: 1, green: .95, blue: .81 }, 14, { type: "NUMBER", pattern: "#,##0" }),
+    { updateCells: {
+      start: { sheetId, rowIndex: 1, columnIndex: start },
+      rows: [{ values: [{ userEnteredValue: { stringValue: BOX_SHEET_REPORT_LABEL } }] }],
+      fields: "userEnteredValue",
+    } },
+    { updateCells: {
+      start: { sheetId, rowIndex: 2, columnIndex: start },
+      rows: [{ values: [{ note: instruction }] }],
+      fields: "note",
+    } },
+    { setDataValidation: {
+      range: inputRange,
+      rule: {
+        condition: { type: "CUSTOM_FORMULA", values: [{
+          userEnteredValue: "=OR(ISBLANK(" + anchor + ");IFERROR(AND(ISNUMBER(" + anchor + ");" +
+            anchor + ">=0;" + anchor + "=INT(" + anchor + ");" + anchor + "<=9007199254740991);FALSE))",
+        }] },
+        strict: true,
+        inputMessage: instruction,
+      },
+    } },
+  ];
+}
+
+// Split only the existing print heading and progress bar merges.
+export function boxSheetCountHeaderRepairs(sheet) {
+  if (!isVisibleBoxSupply(sheet)) return [];
+  const { sheetId } = sheet.properties;
+  const grid = sheet.data?.[0], rows = grid?.rowData ?? [];
+  const labels = rows[1]?.values ?? [];
+  if (labels.some(cell => cell.userEnteredValue?.stringValue === BOX_SHEET_REPORT_LABEL)) return [];
+  const ranges = [1, 2].map(row => (sheet.merges ?? []).find(range =>
+    range.startRowIndex === row && range.endRowIndex === row + 1 && (range.startColumnIndex ?? 0) === 0,
+  ));
+  const end = ranges[0]?.endColumnIndex, start = end - 2;
+  const valid = (grid?.startRow ?? 0) === 0 && (grid?.startColumn ?? 0) === 0 &&
+    Number.isSafeInteger(end) && start >= 3 && ranges[1]?.endColumnIndex === end &&
+    labels[0]?.userEnteredValue?.formulaValue?.includes("ПЕЧАТЬ") &&
+    labels[end]?.userEnteredValue?.formulaValue?.includes("ПОРЕЗКА") &&
+    rows[2]?.values[0]?.userEnteredValue?.formulaValue?.includes("SPARKLINE") &&
+    [1, 2].every(row => !rows[row]?.values.slice(start, end).some(cell => cell.userEnteredValue || cell.dataValidation || cell.note));
+  if (!valid) throw new Error("Не подтверждено свободное место между печатью и порезкой.");
+  return [
+    ...ranges.flatMap(range => [
+      { unmergeCells: { range } },
+      { mergeCells: { range: { ...range, endColumnIndex: start }, mergeType: "MERGE_ALL" } },
+    ]),
+    ...boxCountRequests(sheetId, start, end),
+    ...((grid.rowMetadata?.[2]?.pixelSize ?? 0) < 30 ? [boxCountHeight(sheetId)] : []),
+  ];
+}
+
 export function supplyProgressHeaderRequests(sheet, {box=false,newSupply=false,uidColumn=null,name=sheet.properties.title}={}) {
   const id=sheet.properties.sheetId, cols=sheet.properties.gridProperties.columnCount;
   const rows=sheet.data?.[0]?.rowData||[];
@@ -17,19 +104,21 @@ export function supplyProgressHeaderRequests(sheet, {box=false,newSupply=false,u
     else amounts=[find(['готовность печати','завершил печать','завершили печать']),find(['готовность порезки','завершил порезку','завершили порезку'])].map(c=>`SUMPRODUCT(N(${range(c)}=TRUE);${q};N(${a}<>""))`);
   }else amounts=[find(['прогресс печати']),find(['прогресс порезки'])].map(c=>`SUM(ARRAYFORMULA(IF(${a}="";0;IFERROR(IF(REGEXMATCH(TO_TEXT(${range(c)});"%");VALUE(REGEXEXTRACT(TO_TEXT(${range(c)});"([0-9]+[.,]?[0-9]*)%"))/100*${q};IF(ISNUMBER(${range(c)});${range(c)};0));0))))`);
   const top={sheetId:id,startRowIndex:0,endRowIndex:3,startColumnIndex:0,endColumnIndex:end};
-  const requests=[{unmergeCells:{range:top}},{repeatCell:{range:top,cell:{},fields:'userEnteredValue'}},{mergeCells:{range:{...top,endRowIndex:1},mergeType:'MERGE_ALL'}}];
+  const fields=box&&newSupply?'userEnteredValue,note,dataValidation':'userEnteredValue';
+  const requests=[{unmergeCells:{range:top}},{repeatCell:{range:top,cell:{},fields}},{mergeCells:{range:{...top,endRowIndex:1},mergeType:'MERGE_ALL'}}];
   const write=(row,col,v)=>requests.push({updateCells:{start:{sheetId:id,rowIndex:row,columnIndex:col},rows:[{values:[{userEnteredValue:v}]}],fields:'userEnteredValue'}});
   write(0,0,{stringValue:name});
   requests.push({repeatCell:{range:top,cell:{userEnteredFormat:{backgroundColor:{red:1,green:1,blue:1},horizontalAlignment:'LEFT',verticalAlignment:'MIDDLE',textFormat:{fontFamily:'Arial',fontSize:14,foregroundColor:{red:.09,green:.18,blue:.3}},wrapStrategy:'WRAP'}},fields:'userEnteredFormat'}});
   const mid=Math.floor(end/2);
   for(const [i,label,color] of [[0,'ПЕЧАТЬ','#2688FF'],[1,'ПОРЕЗКА','#19AF9A']]){
-    const start=i?mid:0,finish=i?end:mid;
+    const start=i?mid:0,finish=i?end:box?mid-2:mid;
     for(const row of [1,2])requests.push({mergeCells:{range:{sheetId:id,startRowIndex:row,endRowIndex:row+1,startColumnIndex:start,endColumnIndex:finish},mergeType:'MERGE_ALL'}});
     write(1,start,{formulaValue:`=IFERROR(IF(${plan}>0;"${label}  "&TEXT(ROUNDDOWN(${amounts[i]}/${plan}*100;1)/100;"0.0%")&CHAR(10)&TO_TEXT(ROUND(${amounts[i]};2))&" из "&TO_TEXT(ROUND(${plan};2))&" шт.";"${label} · нет плана");"${label} · данные не подтверждены")`});
     write(2,start,{formulaValue:`=IFERROR(SPARKLINE(MIN(1;${amounts[i]}/${plan});{"charttype"\\"bar";"max"\\1;"color1"\\"${color}"});"")`});
     requests.push({repeatCell:{range:{sheetId:id,startRowIndex:1,endRowIndex:3,startColumnIndex:start,endColumnIndex:finish},cell:{userEnteredFormat:{backgroundColor:i?{red:.91,green:.98,blue:.96}:{red:.91,green:.95,blue:1},textFormat:{bold:true,fontSize:16}}},fields:'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat'}});
   }
-  for(const [row,pixelSize] of [[0,36],[1,64],[2,16]])requests.push({updateDimensionProperties:{range:{sheetId:id,dimension:'ROWS',startIndex:row,endIndex:row+1},properties:{pixelSize},fields:'pixelSize'}});
+  if (box) requests.push(...boxCountRequests(id, mid - 2, mid));
+  for(const [row,pixelSize] of [[0,36],[1,64],[2,box?30:16]])requests.push({updateDimensionProperties:{range:{sheetId:id,dimension:'ROWS',startIndex:row,endIndex:row+1},properties:{pixelSize},fields:'pixelSize'}});
   return requests;
 }
 

@@ -1,4 +1,5 @@
 import { loadBoxPrinting, loadStockBoxPrinting } from './boxPrintingJournal.js';
+import { readBoxSheetReport } from "./boxSheetReport.js";
 import { loadAssembly } from "../worker/assembly.js";
 import {
   loadPrinting,
@@ -196,6 +197,10 @@ export async function loadSource(
   if (source.adapter === "assembly")
     return loadAssembly(todayMoscow(now), "day", fetcher, { includeHistory: true });
   if (source.adapter === "printing") {
+    const boxSheetReport = !options.supplyTarget && BOX_PRINTING_SHEET_ID && typeof options.googleReader?.get === "function"
+      ? readBoxSheetReport(options.googleReader, BOX_PRINTING_SHEET_ID, options.signal)
+        .catch(() => ({ status: "unavailable", rows: [], entered: 0, total: null }))
+      : null;
     const authenticatedFetcher = options.googleReader
       ? async (url, init = {}) => {
           const parsed = new URL(url),
@@ -276,6 +281,7 @@ export async function loadSource(
       printing.shopCatalog = assignCatalogStores(printing.supplies, shopCatalogRows);
       assignWorkloadDetails(printing.supplies, shopCatalogRows, null, {preferCatalog: true});
     }
+    if (boxSheetReport) printing.boxSheetReport = await boxSheetReport;
     assignStockPlanningMachines(printing, shopCatalogRows, photoCatalogRows);
     const checkedAt = now instanceof Date ? now.toISOString() : new Date().toISOString();
     return options.googleReader
