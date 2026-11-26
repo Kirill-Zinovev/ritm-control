@@ -103,8 +103,14 @@ function collectJournalOperation(index, journal, options, operation) {
       employee = ritmBridgeEmployee_(r[2], operation, options.sourceId || order?.sourceId || options.orderFallback?.sourceId),
       date = ritmBridgeDay_(r[1]),
       quantity = ritmBridgeNumber_(r[9]),
-      area = ritmBridgeNumber_(r[11]),
       errors = [];
+    let area = ritmBridgeNumber_(r[11]);
+    if (!String(r[11] ?? "").trim() && resolvedOrder?.sourceId === "roll-printing" &&
+        journalSheetName && String(r[6] ?? "").trim() === resolvedOrder.article &&
+        resolvedOrder.areaKnown && resolvedOrder.widthM > 0 && resolvedOrder.heightM > 0 &&
+        resolvedOrder.sheetsInProduct > 0 && resolvedOrder.quantity > 0 && resolvedOrder.plannedArea > 0) {
+      area = quantity * resolvedOrder.plannedArea / resolvedOrder.quantity;
+    }
     if (!id || eventCounts[id] > 1) errors.push("Нет уникального ID записи");
     if (!order) errors.push("Заказ не найден");
     if (!employee) errors.push("Неизвестный сотрудник");
@@ -561,6 +567,8 @@ export function indexOrders(sheets) {
         ...(sourceId === 'box-printing' && planningPrintColumn >= 0 ? {planningPrinted:optionalNonnegative(r[planningPrintColumn]),planningCut:optionalNonnegative(r[planningCutColumn]),planningPhysicalUnits:true} : {}),
         ...(unstartedRitmRoll ? {planningPrinted:0,planningCut:0,planningPhysicalUnits:false} : {}),
         sheetsInProduct: optionalNonnegative(r[sheetsColumn]),
+        widthM: optionalNonnegative(r[widthColumn]),
+        heightM: optionalNonnegative(r[heightColumn]),
         multiplicity: optionalNonnegative(r[multiplicityColumn]),
         areaKnown,
         areaIssue,

@@ -14,6 +14,18 @@ test('rate metadata uses active journal rows and unambiguous machine; cancellati
 test('cancelled records excluded, other employees and events retained',()=>{const a=row('a','Печать'),b=row('b','Печать'),cancel=row('c','Отмена','a');b[9]='Другой';const result=parseBoxJournal([header,a,b,cancel]);assert.equal(result.length,1);assert.equal(result[0].id,'b');assert.equal(result[0].employee,'Другой');});
 test('duplicate IDs and unverified cancellations fail closed',()=>{const a=row('a','Печать');assert.throws(()=>parseBoxJournal([header,a,a]),/Повторный/);assert.throws(()=>parseBoxJournal([header,a,row('c','Отмена','missing')]),/Отмена/);});
 import {boxPrintingEvents,boxCuttingEvents,loadBoxPrinting,loadStockBoxPrinting} from '../agent/boxPrintingJournal.js';
+test('late supply dimensions restore blank box area for print and cut',()=>{
+ const order={sourceId:'box-printing',spreadsheetId:'s',sheetId:7,article:'A1',machine:'XEROX',
+  quantity:20,areaKnown:true,plannedArea:2.52,sheetsInProduct:2,widthM:.21,heightM:.3};
+ for(const [action,parse] of [['Печать',boxPrintingEvents],['Порезка',boxCuttingEvents]]){
+  const event=row('late',action);event[15]=event[19]=event[20]='';
+  assert.equal(parse([header,event],[])[0].area,null);
+  assert.equal(parse([header,event],[order,order])[0].area,null);
+  assert.ok(Math.abs(parse([header,event],[order])[0].area-2.52)<1e-9);
+  event[15]=.63;
+  assert.equal(parse([header,event],[order])[0].area,.63);
+ }
+});
 test('an archived Xerox position keeps its sheets when the same article is reused on another machine',()=>{const event=row('old','Печать');const orders=[{sourceId:'box-printing',spreadsheetId:'s',sheetId:7,article:'A1',machine:'XEROX',archived:true,boxPositionId:'p1'},{sourceId:'box-printing',spreadsheetId:'s',sheetId:7,article:'A1',machine:'УФ планшет'}];assert.equal(boxPrintingEvents([header,event],orders)[0].sheets,10);const next=row('new','Печать');next[3]='p2';assert.equal(boxPrintingEvents([header,next],orders)[0].sheets,null)});
 test('stock box journal merges active events without requiring historical area snapshots',async()=>{
  const print=row('stock-event','Печать');print[4]='stock-source';

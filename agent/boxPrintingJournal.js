@@ -96,6 +96,21 @@ function boxOperationEvents(rows, orders, action, history = null, corrections = 
         area = correctedArea;
       }
     }
+    // Use the recorded kit count and sheet count for this operation. A fresh
+    // size may fill a gap, but must agree with any dimension already recorded.
+    const current = matches.length === 1 ? matches[0] : null;
+    if (area === null && e.area === null && current && !current.archived && e.spreadsheetId &&
+        current.spreadsheetId === e.spreadsheetId && current.areaKnown && current.plannedArea > 0 &&
+        sheetsPerKit > 0 && sheetsPerKit === current.sheetsInProduct &&
+        current.widthM > 0 && current.heightM > 0 &&
+        (width === null || width === current.widthM) && (height === null || height === current.heightM)) {
+      const recovered = e.quantity * sheetsPerKit * current.widthM * current.heightM;
+      if (Number.isFinite(recovered) && recovered > 0) {
+        width = current.widthM;
+        height = current.heightM;
+        area = recovered;
+      }
+    }
     if(area!==null&&(!Number.isFinite(area)||area<0))throw new Error('Некорректная площадь бокса');
     const areaSource = {};
     if (area === null) {

@@ -1,4 +1,17 @@
 import test from "node:test";
+test("late roll dimensions recover blank area for the journal's exact article and position", () => {
+  const order = { uid: "pos", sheetName: "WB Test", article: "A1", sourceId: "roll-printing",
+    quantity: 40, plannedArea: 8.448, areaKnown: true, widthM: .22, heightM: .16, sheetsInProduct: 6 };
+  const index = { byUid: { pos: order }, byRaw: {}, issues: [] };
+  for (const [action, collect] of [["Печать", collectJournalPrinting], ["Резка", collectJournalCutting]]) {
+    const row = ["event", "26.11.2026", action === "Печать" ? "Паша" : "Лукман", action, "WB Test", "", "A1", "pos", "1", "20", "", ""];
+    assert.equal(collect(index, [row]).events[0]?.area, 4.224);
+    row[11] = "1.5";
+    assert.equal(collect(index, [row]).events[0]?.area, 1.5);
+    row[11] = ""; row[6] = "OTHER";
+    assert.equal(collect(index, [row]).events.some(event => event.area > 0), false);
+  }
+});
 import assert from "node:assert/strict";
 import {
   parseCsv,
