@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { planCatalogBook, sheetCatalogRow } from "../worker/cloud/productionSheetCatalog.js";
+import { sheetCatalogFormula } from "../agent/productionCatalogSheet.js";
 
 const headers = ["Фото", "Наличие макета", "Станок", "Артикул", "расширения", "Кол-во листов", "Размер", "Ширина", "Высота", "м²", "Осталось", "Папка печати", "Кратность", "", "Кол-во"];
 const cacheHeaders = ["Ключ", "Фото", "Кол-во листов", "Размер", "Папка печати", "Кратность"];
@@ -27,6 +28,34 @@ test("a position missing from Assembly is wired once and fills from the next cac
   assert.equal(second.patches.length, 0);
   assert.deepEqual(second.changedRows[0].data, ["OZON|2|WI0009.A0143", correct.photoUrl, 3, "22х16", "Порезка", 10]);
   assert.equal(planCatalogBook(book(linked, "roll", [cacheHeaders, ...second.cacheRows]), catalogs(correct)).changedRows.length, 0);
+});
+
+test("background refresh fills a WB size in both caches without rewriting working rows", () => {
+  const wbArticle = "WB0001.A9090";
+  const wbCard = { ...correct, article: wbArticle, size: "15×11" };
+  const currentCatalogs = new Map([["WB", new Map([[wbArticle, [wbCard]]])]]);
+
+  for (const [department, machine, multiple] of [["box", "XEROX", 4], ["roll", "2-GO", 10]]) {
+    const cacheRow = [`WB||${wbArticle}`, correct.photoUrl, 3, "", correct.printFolder, multiple];
+    const row = [...data];
+    row[2] = `=IFERROR(${legacy.slice(1)};"${machine}")`;
+    row[3] = wbArticle;
+    row[6] = sheetCatalogFormula({ market: "WB", shop: "", department }, 5, 3);
+    const source = { ...book(Object.freeze(row), department, [cacheHeaders, cacheRow]), cacheOnly: true };
+    Object.assign(source.sheets[0], {
+      market: "WB", shop: "", entries: [{ row: 5, article: wbArticle }], machines: [[machine, wbArticle]],
+    });
+
+    const first = planCatalogBook(source, currentCatalogs);
+    const expected = [...cacheRow];
+    expected[3] = wbCard.size;
+    assert.deepEqual(first.changedRows, [{ row: 1, data: expected }], department);
+    assert.deepEqual(first.patches, [], department);
+
+    const second = planCatalogBook({ ...source, stored: [cacheHeaders, ...first.cacheRows] }, currentCatalogs);
+    assert.deepEqual(second.changedRows, [], department);
+    assert.deepEqual(second.patches, [], department);
+  }
 });
 
 test("synchronization respects marketplace, store, conflicting product fields and print department", () => {

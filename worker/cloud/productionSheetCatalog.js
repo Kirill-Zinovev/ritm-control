@@ -68,11 +68,11 @@ async function sheetValues(reader, id, ranges, render = "FORMULA") {
   return results;
 }
 
-async function readBook(reader, id, department, supplyName, stock, initializeStock) {
+async function readBook(reader, id, department, { supplyName, stockOnly: stock, initializeStock, cacheOnly }) {
   const metadata = await reader.metadata(id);
   const tabs = metadata.sheets.map(sheet => sheet.properties);
   const cache = tabs.find(tab => tab.title === title);
-  if (stock && !cache && !initializeStock) return null;
+  if (!cache && (cacheOnly || (stock && !initializeStock))) return null;
   if (cache && (!cache.hidden || cache.gridProperties?.columnCount !== (stock ? stockHeaders : headers).length))
     throw new CloudError("print_catalog_cache_mismatch", "Служебный лист справочника имеет неожиданную структуру.", 409);
   const candidates = tabs.flatMap(tab => {
@@ -94,7 +94,7 @@ async function readBook(reader, id, department, supplyName, stock, initializeSto
     const entries = rows.flatMap(([article], index) => hasArticle(article) ? [{ row: index + 5, article }] : []);
     return entries.length ? [{ ...tab, entries, lastRow: entries.at(-1).row }] : [];
   });
-  return readBookValues(reader, { id, department, cache, tabs, sheets });
+  return readBookValues(reader, { id, department, cache, tabs, sheets, cacheOnly });
 }
 
 async function readBookValues(reader, book) {
@@ -108,7 +108,8 @@ async function readBookValues(reader, book) {
     stored.slice(1).some(row => !/^(?:OZON|WB)\|[12]?\|[^|]+$/.test(row[0]) || row.some(cell => typeof cell === "string" && cell.startsWith("=")))))
     throw new CloudError("print_catalog_cache_mismatch", "Не удалось подтвердить ключи служебного справочника.", 409);
   const sheets = book.sheets.map((sheet, index) => ({ ...sheet, values: values[index] }));
-  const machineLookups = sheets.filter(sheet => sheet.entries.some(({ row }) => legacyLookup(sheet.values[row - 4]?.[2])));
+  const machineLookups = book.cacheOnly ? [] :
+    sheets.filter(sheet => sheet.entries.some(({ row }) => legacyLookup(sheet.values[row - 4]?.[2])));
   const machines = await sheetValues(reader, book.id,
     machineLookups.map(sheet => `${quote(sheet.title)}!D5:E${sheet.lastRow}`), "UNFORMATTED_VALUE");
   for (const [index, sheet] of machineLookups.entries()) sheet.machines = machines[index];
@@ -244,6 +245,7 @@ export function planCatalogBook(book, catalogs) {
       const entry = sheetCatalogRow(sheet, article, entries);
       if (entry.slice(1).some(Boolean) || next.has(entry[0])) next.set(entry[0], entry);
       if (entry.slice(1).some(Boolean)) matched.add(entry[0]);
+      if (book.cacheOnly) continue;
       fields.forEach((column, index) => {
         const field = index + 1;
         const before = values[column] || "";
@@ -351,7 +353,8 @@ async function readCatalogs(bindings, books, fetcher) {
   return new Map(results);
 }
 
-async function syncBooks(bindings, store, { fetcher, dryRun, supplyName, stockOnly, initializeStock }) {
+async function syncBooks(bindings, store, options) {
+  const { fetcher, dryRun, stockOnly } = options;
   const config = cloudConfig(bindings);
   if (!assemblyV2Configured(bindings) || !config.configured) return { ok: false, error: "print_catalog_not_configured" };
   if (!dryRun && (!config.writesEnabled || !bindings.RITM_GOOGLE_WRITER_JSON))
@@ -361,7 +364,7 @@ async function syncBooks(bindings, store, { fetcher, dryRun, supplyName, stockOn
   const before = dryRun ? null : await revisions();
   const books = (await Promise.all(departments.map(department => {
     const key = stockOnly ? (department === "box" ? "stockBoxPrintingId" : "stockRollPrintingId") : department + "PrintingId";
-    return readBook(reader, sourceId(bindings, key), department, supplyName, stockOnly, initializeStock);
+    return readBook(reader, sourceId(bindings, key), department, options);
   }))).filter(Boolean);
   const catalogs = await readCatalogs(bindings, books, fetcher);
   const marketsUnavailable = [...catalogs].flatMap(([market, catalog]) => catalog ? [] : [market]);
@@ -403,9 +406,9 @@ async function syncBooks(bindings, store, { fetcher, dryRun, supplyName, stockOn
 }
 
 export async function syncProductionSheetCatalog(bindings, store, {
-  fetcher = fetch, dryRun = true, supplyName = "", stockOnly = false, initializeStock = false,
+  fetcher = fetch, dryRun = true, supplyName = "", stockOnly = false, initializeStock = false, cacheOnly = false,
 } = {}) {
-  const options = { fetcher, dryRun, supplyName, stockOnly, initializeStock };
+  const options = { fetcher, dryRun, supplyName, stockOnly, initializeStock, cacheOnly };
   if (dryRun) return syncBooks(bindings, store, options);
   const lease = await store.acquire(stockOnly ? "production-stock-catalog" : "production-print-catalog", 120000);
   try { return await syncBooks(bindings, store, options); }

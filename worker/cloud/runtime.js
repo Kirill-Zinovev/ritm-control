@@ -213,6 +213,11 @@ async function taskBitrixConfig(bindings, store) {
   catch { throw new CloudError('bitrix_not_configured', 'Сначала настройте связь Аркадия с Битрикс24.', 409); }
 }
 
+function refreshProductionCatalog(bindings, store, fetcher) {
+  return syncProductionSheetCatalog(bindings, store, { fetcher, dryRun: false, cacheOnly: true })
+    .catch(error => ({ ok: false, error: error.code || "production_catalog_sync_failed" }));
+}
+
 export async function maintenance(bindings, store, { fetcher = fetch, refresh = true } = {}) {
   const result = { ok: true, assemblySync: null, deliverySkipped: !cloudConfig(bindings).writesEnabled };
   let taskPrinting = refresh ? null : undefined;
@@ -245,6 +250,7 @@ export async function maintenance(bindings, store, { fetcher = fetch, refresh = 
     } catch (error) {
       result.refreshed.push({ kind: "printing", ok: false, error: error.code || "refresh_failed" });
     }
+    if (!result.deliverySkipped) result.productionCatalog = await refreshProductionCatalog(bindings, store, fetcher);
     result.ok = result.ok && result.refreshed.every(row => row.ok);
   }
   if (!result.deliverySkipped) {
@@ -553,7 +559,16 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
     if (path === '/api/assembly-v2/stock-catalog-sync') {
       const store = new CloudStore(bindings.DB);
       await verifyAssemblyV2EmptyCommand(request, bindings, store, 'stock-catalog-sync');
-      const result = await syncProductionSheetCatalog(bindings, store, { fetcher, dryRun: false, stockOnly: true });
+      const stock = syncProductionSheetCatalog(bindings, store, { fetcher, dryRun: false, stockOnly: true });
+      // The signed command already fires after a save in RITM СБОРКА.
+      // Reuse it for supplies while keeping the existing stock response.
+      const production = stock.then(
+        () => refreshProductionCatalog(bindings, store, fetcher),
+        () => refreshProductionCatalog(bindings, store, fetcher),
+      );
+      if (ctx?.waitUntil) ctx.waitUntil(production);
+      else await production;
+      const result = await stock;
       return json({ ok: result.ok }, result.ok ? 200 : 503);
     }
     if (path === "/api/auth/login") {
