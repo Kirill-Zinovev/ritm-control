@@ -18,6 +18,7 @@ type Change = SupplyImportLine & {
   photoUrl?: string;
   machine?: string;
   stockDetails?: { name: string; kind: string; size: string; printFolder: string };
+  quantityRule?: {kind:'roll'|'xerox';multiplicity:number;step:number;sheets?:number|null};
   rounding?: {kind:'roll'|'xerox';multiplicity:number;choices:RoundingChoice[]};
 };
 type Preview = { fingerprint: string; changes: Change[] };
@@ -111,7 +112,8 @@ export default function StockWorkspace(){
         <thead><tr><th>Товар</th><th>Участок</th><th>Добавить</th><th>Новый план</th><th>Результат</th><th><span className="stock-sr-only">Действие</span></th></tr></thead>
         <tbody>{preview.changes.map((row,index) => {
           const chosen = choiceFor(row);
-          const planned = row.rounding ? chosen?.newQuantity : row.newQuantity;
+          const planned = chosen?.newQuantity ?? row.newQuantity;
+          const rule = row.quantityRule;
           return <tr key={`${row.article}-${index}`}>
             <td><div className="stock-product"><div className="stock-photo">{row.photoUrl?<img src={row.photoUrl} alt="" referrerPolicy="no-referrer"/>:<ImageOff size={18} aria-label="Нет фото"/>}</div>
               <div><strong>{row.article}</strong>{row.stockDetails?.name&&<small className="stock-catalog-detail">{row.stockDetails.name}</small>}</div>
@@ -120,27 +122,46 @@ export default function StockWorkspace(){
               {row.machine&&<small className="stock-catalog-detail">{row.machine}</small>}
             </td>
             <td>
-              {chosen ? <><s>{row.quantity}</s> <strong>{chosen.quantity} шт.</strong></> : `${row.quantity} шт.`}
+              {chosen && chosen.quantity !== row.quantity
+                ? <><s>{row.quantity.toLocaleString('ru-RU')}</s> <strong>{chosen.quantity.toLocaleString('ru-RU')} шт.</strong></>
+                : `${row.quantity.toLocaleString('ru-RU')} шт.`}
             </td>
-            <td>{planned==null?'—':`${planned} шт.`}</td>
-            <td>{row.rounding ? <><small className="stock-catalog-detail">Кратность {row.rounding.kind==='xerox'?'Xerox ':''}{row.rounding.multiplicity} шт.</small>
-            <select className="stock-rounding-select"
-              aria-label={`Округление ${row.article}`}
-              value={chosen?.direction || ''} disabled={busy||!!pending}
-              onChange={event => {
-                const direction = event.target.value;
-                setRounding(previous => {
-                  const next = new Map(previous);
-                  if (direction === 'down' || direction === 'up') next.set(row.article,direction);
-                  else next.delete(row.article);
-                  return next;
-                });
-              }}>
-              <option value="">{row.rounding.choices.length?'Выбрать округление':'Укажите другое количество'}</option>
-              {row.rounding.choices.map(choice => <option key={choice.direction} value={choice.direction}>
-                {choice.direction==='down'?'Вниз':'Вверх'} · {choice.quantity===0?'не добавлять':`добавить ${choice.quantity} шт.`}{choice.sheets!==undefined&&` · ${choice.sheets.toLocaleString('ru-RU')} лист.`}
-              </option>)}
-            </select></> : displayStockMessage(row.issue || (row.action==='increase'?'Прибавить к плану':'Новый артикул'))}</td>
+            <td>
+              {planned==null?'—':`${planned.toLocaleString('ru-RU')} шт.`}
+              {row.rounding&&!chosen&&<small className="stock-plan-warning">К округлению</small>}
+            </td>
+            <td>
+              {rule&&<small className="stock-quantity-rule">
+                {rule.kind==='xerox'
+                  ? `Кратность Xerox ${rule.multiplicity.toLocaleString('ru-RU')} · шаг плана ${rule.step.toLocaleString('ru-RU')} шт.`
+                  : `Кратность ${rule.step.toLocaleString('ru-RU')} шт.`}
+              </small>}
+              {row.rounding ? (row.rounding.choices.length ? (
+                <div className="stock-rounding-options" role="group" aria-label={`Округление ${row.article}`}>
+                  {row.rounding.choices.map(choice => (
+                    <button type="button" className="stock-rounding-choice" key={choice.direction}
+                      aria-pressed={chosen?.direction===choice.direction} disabled={busy||!!pending}
+                      onClick={() => setRounding(previous => {
+                        const next = new Map(previous);
+                        if (next.get(row.article) === choice.direction) next.delete(row.article);
+                        else next.set(row.article, choice.direction);
+                        return next;
+                      })}>
+                      <strong>{choice.direction==='down'?'Вниз':'Вверх'} до {choice.newQuantity.toLocaleString('ru-RU')} шт.</strong>
+                      <small>
+                        {choice.quantity===0?'Без добавления':`Добавить ${choice.quantity.toLocaleString('ru-RU')} шт.`}
+                        {choice.sheets!==undefined&&` · ${choice.sheets.toLocaleString('ru-RU')} лист.`}
+                      </small>
+                    </button>
+                  ))}
+                </div>
+              ) : <small className="stock-plan-warning">Укажите другое количество</small>) : <>
+                {displayStockMessage(row.issue || (row.action==='increase'?'Прибавить к плану':'Новый артикул'))}
+                {rule&&<small className="stock-plan-aligned">
+                  План по кратности{rule.sheets!=null&&` · ${rule.sheets.toLocaleString('ru-RU')} лист.`}
+                </small>}
+              </>}
+            </td>
             <td><button type="button" className="stock-remove" disabled={busy||!!pending} aria-label={`Убрать ${row.article} из списка`} title="Убрать из списка" onClick={()=>removeDraft(row.article)}><Trash2 size={17}/></button></td>
           </tr>;
         })}</tbody>

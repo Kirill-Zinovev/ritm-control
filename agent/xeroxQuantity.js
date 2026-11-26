@@ -1,6 +1,6 @@
 import { quantityRounding } from "./quantityRounding.js";
 
-function xeroxUnits(factor, multiplicity) {
+export function xeroxUnits(factor, multiplicity) {
   if (![factor, multiplicity].every(value => Number.isSafeInteger(value) && value > 0)) return null;
   let divisor = factor, remainder = multiplicity;
   while (remainder) [divisor, remainder] = [remainder, divisor % remainder];

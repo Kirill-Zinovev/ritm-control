@@ -28,6 +28,32 @@ test('new Xerox stock is rounded from the Assembly catalog and images do not inv
  assert.match(conflict.changes[0].issue,/отличаются/);
 });
 
+test('Xerox previews describe the sheet multiple and finished-piece step even for an aligned plan', () => {
+ const article = 'KS0013.A7986';
+ const catalog = [{article, machine:'XEROX', printExtension:'X', sheetsPerUnit:'20', xeroxMultiplicity:'8'}];
+ const existing = {roll:[], box:[{row:5, article, quantity:200, xerox:{factor:20, multiplicity:8}}]};
+ const preview = quantity => planStockAddition({destination:'urgent', lines:[{article, quantity}], catalog, existing}).changes;
+
+ const aligned = preview(60);
+ assert.equal(aligned[0].newQuantity, 260);
+ assert.equal(aligned[0].rounding, undefined);
+ assert.deepEqual(aligned[0].quantityRule, {kind:'xerox', multiplicity:8, step:2, sheets:650});
+ assert.equal(applyStockRounding(aligned)[0].quantityRule, undefined);
+
+ const unaligned = preview(61);
+ assert.equal(unaligned[0].newQuantity, 261);
+ assert.deepEqual(unaligned[0].quantityRule, {kind:'xerox', multiplicity:8, step:2, sheets:null});
+ assert.deepEqual(unaligned[0].rounding.choices, [
+   {direction:'down', quantity:60, newQuantity:260, sheets:650},
+   {direction:'up', quantity:62, newQuantity:262, sheets:655},
+ ]);
+ assert.throws(() => applyStockRounding(unaligned), /Выберите округление/);
+ const [confirmed] = applyStockRounding(unaligned, [{article, direction:'up'}]);
+ assert.equal(confirmed.newQuantity, 262);
+ assert.equal(confirmed.quantityRule, undefined);
+ assert.deepEqual(confirmed.xeroxRoundingProof, {factor:20, multiplicity:8, sheets:655});
+});
+
 test('roll rounding respects the prior plan and non-Xerox box machines accept the requested quantity',()=>{
  const catalog=[
    {article:'ROLL',machine:'2-GO',printExtension:'CBI',rollMultiplicity:'5',name:'Наклейки',size:'22x16',printFolder:'Порезка'},
@@ -38,6 +64,7 @@ test('roll rounding respects the prior plan and non-Xerox box machines accept th
  const existing={roll:[{row:5,article:'ROLL',quantity:17}],box:[]};
  const lines=catalog.map(({article})=>({article,quantity:4}));
  const {changes}=planStockAddition({destination:'warehouse',lines,catalog,existing});
+ assert.deepEqual(changes[0].quantityRule,{kind:'roll',multiplicity:5,step:5});
  assert.deepEqual(changes[0].rounding.choices.map(choice=>[choice.quantity,choice.newQuantity]),[[3,20],[8,25]]);
  assert.equal(changes[0].stockDetails.printFolder,'Порезка');
  assert.equal(changes[0].stockDetails.name,'Наклейки');
@@ -45,6 +72,7 @@ test('roll rounding respects the prior plan and non-Xerox box machines accept th
    assert.equal(item.action,'insert');
    assert.equal(item.newQuantity,4);
    assert.equal(item.rounding,undefined);
+   assert.equal(item.quantityRule,undefined);
  }
  assert.equal(changes[3].action,'skip');
  assert.match(changes[3].issue,/Укажите кратность/);

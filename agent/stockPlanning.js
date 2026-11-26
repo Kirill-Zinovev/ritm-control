@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { routeAssemblyCatalogLines, routeSupplyLines } from './productionSupplies.js';
 import { quantityRounding } from './quantityRounding.js';
-import { xeroxPlanRounding, xeroxSheetCount } from './xeroxQuantity.js';
+import { xeroxPlanRounding, xeroxSheetCount, xeroxUnits } from './xeroxQuantity.js';
 
 const keyOf = value => String(value || '').trim().toUpperCase().replace(/\(OZ\)$/u, '').trim();
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -24,7 +24,7 @@ export function applyStockRounding(changes, decisions = []) {
       throw roundingError('Проверьте выбранное округление ещё раз.');
     byArticle.set(article, decision.direction);
   }
-  const result = changes.map(change => {
+  const result = changes.map(({quantityRule, ...change}) => {
     if (!change.rounding) return change;
     const {rounding, ...item} = change;
     const key = keyOf(item.article);
@@ -102,11 +102,12 @@ export function planStockAddition({ destination, lines, catalog, existing }) {
     const newQuantity = previousQuantity + line.quantity;
     if (!Number.isSafeInteger(newQuantity)) throw new Error(`Сумма количества «${line.article}» слишком велика.`);
     const bounds={minimum:previousQuantity,maximum:Number.MAX_SAFE_INTEGER};
-    let format=current?.xerox, rounding;
+    let format=current?.xerox, rounding, quantityRule;
     if(line.assemblyCatalog && line.department==='roll') {
       const multiplicity=line.stockMultiplicity;
       if(!multiplicity)
         return {...line,action:'skip',issue:'Укажите кратность рулонной печати в справочнике Assembly и проверьте список заново.'};
+      quantityRule = {kind:'roll',multiplicity,step:multiplicity};
       const choices=quantityRounding(newQuantity,multiplicity,bounds);
       if(choices)rounding={kind:'roll',multiplicity,choices};
     } else if(line.assemblyCatalog && /^XEROX$/i.test(line.machine)) {
@@ -120,10 +121,14 @@ export function planStockAddition({ destination, lines, catalog, existing }) {
       return {...line,action:'skip',issue:'Станок в рабочей строке отличается от справочника Assembly. Нужна сверка.'};
     }
     if(format) {
-      const xerox=xeroxPlanRounding(newQuantity,format.factor,format.multiplicity,bounds);
+      const {factor, multiplicity} = format;
+      const units = xeroxUnits(factor, multiplicity);
+      if (units) quantityRule = {kind:'xerox',multiplicity,step:units.pieceStep,sheets:xeroxSheetCount(newQuantity,factor,multiplicity)};
+      const xerox=xeroxPlanRounding(newQuantity,factor,multiplicity,bounds);
       if(xerox)rounding={...xerox,kind:'xerox'};
     }
     return {...line, action:current?'increase':'insert', ...(current && {row:current.row}), previousQuantity, newQuantity,
+      ...(quantityRule && {quantityRule}),
       ...(rounding && {rounding:stockRounding(rounding,previousQuantity)})};
   });
   // Worksheet norms enter the fingerprint through the shown choices. Keep
@@ -131,6 +136,6 @@ export function planStockAddition({ destination, lines, catalog, existing }) {
   const sourcePlans = Object.fromEntries(Object.entries(existing).map(([department, rows]) =>
     [department, rows.map(({row, article, quantity}) => ({row, article, quantity}))]));
   return { destination, marketplace:'OZON', changes, fingerprint:digest({
-    destination, existing:sourcePlans, changes:changes.map(({photoUrl,...change})=>change),
+    destination, existing:sourcePlans, changes:changes.map(({photoUrl,quantityRule,...change})=>change),
   }) };
 }
