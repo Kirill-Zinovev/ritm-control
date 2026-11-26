@@ -1,0 +1,120 @@
+.arkady-wb-intake,
+.arkady-wb-intake__fields {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+}
+
+.arkady-wb-intake .field {
+  min-width: 0;
+  margin: 0;
+}
+
+.arkady-wb-intake__identity,
+.arkady-wb-intake__medias {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.arkady-wb-intake__fields > .button {
+  justify-self: start;
+}
+
+.arkady-wb-intake__product {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+
+.arkady-wb-intake__product small,
+.arkady-wb-intake__hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.arkady-wb-intake__product p,
+.arkady-wb-intake__product dl {
+  margin: 0;
+}
+
+.arkady-wb-intake__product dl {
+  display: grid;
+  gap: 3px;
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.arkady-wb-intake__product dl > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+  gap: 8px;
+}
+
+.arkady-wb-intake__product dt {
+  color: var(--muted);
+}
+
+.arkady-wb-intake__product dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.arkady-wb-intake__medias figure {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #eef4fd;
+}
+
+.arkady-wb-intake__medias img,
+.arkady-wb-intake__medias p {
+  display: block;
+  width: 100%;
+  aspect-ratio: 58 / 40;
+}
+
+.arkady-wb-intake__medias img {
+  object-fit: contain;
+}
+
+.arkady-wb-intake__medias img.is-label {
+  background: #fff;
+}
+
+.arkady-wb-intake__medias p {
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 8px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.arkady-wb-intake__medias figcaption {
+  padding: 5px 8px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.arkady-wb-intake .arkady-assistant__actions,
+.arkady-wb-intake .notice {
+  margin: 0;
+}
+
+@media (max-width: 360px) {
+  .arkady-wb-intake__identity {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
