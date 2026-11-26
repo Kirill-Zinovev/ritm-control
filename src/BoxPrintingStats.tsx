@@ -4,6 +4,7 @@ import { inPeriod, num, type Period } from "./model";
 import type { BoxPrintingEvent, LivePrinting } from "./livePrinting";
 import { useBoxSheetReport } from "./useBoxSheetReport";
 import { printingSnapshotTime } from "./printingSnapshotRefresh";
+import { BoxAreaDiagnostics } from "./BoxAreaDiagnostics";
 
 const goodsNumber = (value: number) => num(value);
 const boxDate = (value: string) =>
@@ -227,12 +228,11 @@ export function BoxPrintingStats({
           </p>
         ) : (
           <>
-            {(total.missing > 0 || totalCut.missing > 0) && (
-              <p className="printing-area-warning">
-                Площадь не подтверждена: печать — {total.missing} записей,
-                порезка — {totalCut.missing}. Показаны подтверждённые значения.
-              </p>
-            )}
+            <BoxAreaDiagnostics
+              print={events}
+              cut={cutEvents}
+              orders={[...(value?.supplies || []), ...(value?.stockBox?.orders || [])]}
+            />
             <div
               className="box-view-tabs"
               role="tablist"
@@ -395,6 +395,7 @@ export function BoxPrintingStats({
                                                 <th>Артикул</th>
                                                 <th>Порезано, шт.</th>
                                                 <th>Листы Xerox</th>
+                                                <th>м²</th>
                                                 <th>Комментарий</th>
                                               </tr>
                                             </thead>
@@ -411,6 +412,11 @@ export function BoxPrintingStats({
                                                     {e.sheets === null
                                                       ? "—"
                                                       : num(e.sheets)}
+                                                  </td>
+                                                  <td>
+                                                    {e.area === null
+                                                      ? "Не определена"
+                                                      : num(e.area, 2)}
                                                   </td>
                                                   <td className="box-exception-comment">
                                                     {e.comment?.trim() || "—"}

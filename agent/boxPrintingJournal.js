@@ -58,7 +58,16 @@ function parseBoxActionJournal(rows, action) {
 export function parseBoxJournal(rows) { return parseBoxActionJournal(rows, 'Печать'); }
 export function parseBoxCutJournal(rows) { return parseBoxActionJournal(rows, 'Порезка'); }
 
-function boxOperationEvents(rows, orders, action, history = null, corrections = null) {
+function boxJournalSource(rows, journalId, sheetId) {
+  if (typeof journalId !== 'string' || !/^[\w-]{10,128}$/.test(journalId) ||
+      !Number.isSafeInteger(sheetId) || sheetId < 0) return null;
+  return {
+    url: `https://docs.google.com/spreadsheets/d/${journalId}/edit#gid=${sheetId}`,
+    rowById: new Map(rows.slice(1).map((row, index) => [String(row[0] ?? '').trim(), index + 2])),
+  };
+}
+
+function boxOperationEvents(rows, orders, action, history = null, corrections = null, journal = null) {
   const operationName=action==='Порезка'?'порезки':'печати';
   return parseBoxActionJournal(rows, action).map(({ sheetsPerKit, ...e })=>{
     if(!e.employee.trim()||!Number.isFinite(Date.parse(e.date))||!Number.isFinite(e.quantity)||e.quantity<=0||e.sheets!==null&&(!Number.isFinite(e.sheets)||e.sheets<=0)) throw new Error('Некорректная запись '+operationName+' бокса');
@@ -71,8 +80,9 @@ function boxOperationEvents(rows, orders, action, history = null, corrections = 
     const physicalSheets=xerox?e.sheets:null;
     // Older records used a different area formula. Their separately preserved
     // snapshot takes precedence; later records use the area saved at creation.
+    const historical = history && Date.parse(e.date)<=history.cutoff;
     let area=history?.areas.has(e.id)?history.areas.get(e.id)
-      : history && Date.parse(e.date)<=history.cutoff ? null : e.area;
+      : historical ? null : e.area;
     let { width, height } = e;
     const correction = corrections?.get(e.id);
     // Physical sheets are recorded only for Xerox. The journal's saved kit
@@ -87,11 +97,17 @@ function boxOperationEvents(rows, orders, action, history = null, corrections = 
       }
     }
     if(area!==null&&(!Number.isFinite(area)||area<0))throw new Error('Некорректная площадь бокса');
-    return {...e,area,width,height,machine,sheets:physicalSheets,operation:action==='Порезка'?'cut':'print',sourceId:'box-printing',date:new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(e.date))};
+    const areaSource = {};
+    if (area === null) {
+      areaSource.areaOrigin = historical ? 'historical' : 'journal';
+      const sourceRow = journal?.rowById.get(e.id);
+      if (sourceRow) areaSource.journalUrl = `${journal.url}&range=P${sourceRow}`;
+    }
+    return {...e,...areaSource,area,width,height,machine,sheets:physicalSheets,operation:action==='Порезка'?'cut':'print',sourceId:'box-printing',date:new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(e.date))};
   });
 }
-export function boxPrintingEvents(rows, orders = [], history = null, corrections = null) { return boxOperationEvents(rows, orders, 'Печать', history, corrections); }
-export function boxCuttingEvents(rows, orders = [], history = null) { return boxOperationEvents(rows, orders, 'Порезка', history); }
+export function boxPrintingEvents(rows, orders = [], history = null, corrections = null, journal = null) { return boxOperationEvents(rows, orders, 'Печать', history, corrections, journal); }
+export function boxCuttingEvents(rows, orders = [], history = null, journal = null) { return boxOperationEvents(rows, orders, 'Порезка', history, null, journal); }
 export function boxJournalExceptions(rows) {
   return activeBoxJournalRows(rows).filter(row=>['Брак','Излишек'].includes(String(row[10]).trim())).map(row=>{
     const timestamp=String(row[2]??'').trim(), quantity=Number(row[12]);
@@ -133,7 +149,8 @@ export async function loadBoxPrinting(reader, printing, {journalId,signal}={}) {
     if(dated.length!==areas.size||dated.some(t=>!Number.isFinite(t)))throw new Error('Исторические записи не подтверждены');
     const history={areas,cutoff:Math.max(...dated)};
     const corrections = await readBoxAreaCorrections(reader, journalId, metadata, values, signal);
-    return {...printing,boxPrinting:{status:'available',events:boxPrintingEvents(rows,printing.supplies||[],history,corrections),cutEvents:boxCuttingEvents(rows,printing.supplies||[],history),exceptions:boxJournalExceptions(rows),reason:null}};
+    const journal = boxJournalSource(rows, journalId, sheet.properties.sheetId);
+    return {...printing,boxPrinting:{status:'available',events:boxPrintingEvents(rows,printing.supplies||[],history,corrections,journal),cutEvents:boxCuttingEvents(rows,printing.supplies||[],history,journal),exceptions:boxJournalExceptions(rows),reason:null}};
   } catch(error) {if(signal?.aborted)throw error;return unavailable('Журнал бокса недоступен или содержит неподтверждённые записи.');}
 }
 
@@ -156,7 +173,8 @@ export async function loadStockBoxPrinting(reader, printing, {journalId,sourceId
     if(rows.slice(1).some(row=>row[0]&&String(row[4])!==sourceId))throw new Error('source');
     if(printing.stockBox?.status!=='available')throw new Error('stock orders unavailable');
     const orders=printing.stockBox.orders;
-    const events=boxPrintingEvents(rows,orders),cutEvents=boxCuttingEvents(rows,orders),exceptions=boxJournalExceptions(rows);
+    const journal = boxJournalSource(rows, journalId, sheet.properties.sheetId);
+    const events=boxPrintingEvents(rows,orders,null,null,journal),cutEvents=boxCuttingEvents(rows,orders,null,journal),exceptions=boxJournalExceptions(rows);
     const known=new Set([...(previous.events||[]),...(previous.cutEvents||[]),...(previous.exceptions||[])].map(e=>e.id));
     if([...events,...cutEvents,...exceptions].some(e=>known.has(e.id)))throw new Error('duplicate');
     return {...printing,boxPrinting:{...previous,events:[...previous.events,...events],cutEvents:[...previous.cutEvents,...cutEvents],exceptions:[...previous.exceptions,...exceptions],stockStatus:'available',stockReason:null}};

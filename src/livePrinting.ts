@@ -34,6 +34,7 @@ export type LiveOrder = {
   sheetsInProduct?: number | null;
   multiplicity?: number | null;
   archived?: boolean;
+  boxPositionId?: string | null;
   planningMachine?: string|null;
   planningPrinted?: number|null;
   planningCut?: number|null;
@@ -159,6 +160,8 @@ export type BoxPrintingEvent = {
   quantity: number;
   sheets: number | null;
   area: number | null;
+  areaOrigin?: "historical" | "journal";
+  journalUrl?: string;
 };
 
 type D1PrintingWork = {

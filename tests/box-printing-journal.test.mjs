@@ -17,11 +17,16 @@ import {boxPrintingEvents,boxCuttingEvents,loadBoxPrinting,loadStockBoxPrinting}
 test('an archived Xerox position keeps its sheets when the same article is reused on another machine',()=>{const event=row('old','Печать');const orders=[{sourceId:'box-printing',spreadsheetId:'s',sheetId:7,article:'A1',machine:'XEROX',archived:true,boxPositionId:'p1'},{sourceId:'box-printing',spreadsheetId:'s',sheetId:7,article:'A1',machine:'УФ планшет'}];assert.equal(boxPrintingEvents([header,event],orders)[0].sheets,10);const next=row('new','Печать');next[3]='p2';assert.equal(boxPrintingEvents([header,next],orders)[0].sheets,null)});
 test('stock box journal merges active events without requiring historical area snapshots',async()=>{
  const print=row('stock-event','Печать');print[4]='stock-source';
- const values=[header,print].map(r=>({values:r.map(value=>({effectiveValue:typeof value==='number'?{numberValue:value}:{stringValue:value}}))}));
- const reader={metadata:async()=>({spreadsheetId:'stock-journal',sheets:[{properties:{title:'Журнал',sheetId:8,gridProperties:{rowCount:2}}}]}),grid:async()=>({spreadsheetId:'stock-journal',sheets:[{properties:{sheetId:8},data:[{rowData:values}]}]})};
+ const cut=row('stock-cut','Порезка');cut[4]='stock-source';cut[15]='';
+ const values=[header,print,[],cut].map(r=>({values:r.map(value=>({effectiveValue:typeof value==='number'?{numberValue:value}:{stringValue:value}}))}));
+ const reader={metadata:async()=>({spreadsheetId:'stock-journal',sheets:[{properties:{title:'Журнал',sheetId:8,gridProperties:{rowCount:4}}}]}),grid:async()=>({spreadsheetId:'stock-journal',sheets:[{properties:{sheetId:8},data:[{rowData:values}]}]})};
  const original={supplies:[],stockBox:{status:'available',orders:[]},boxPrinting:{status:'available',events:[],cutEvents:[],exceptions:[]}};
  const result=await loadStockBoxPrinting(reader,original,{journalId:'stock-journal',sourceId:'stock-source'});
  assert.equal(result.boxPrinting.stockStatus,'available');assert.equal(result.boxPrinting.events.length,1);
+ assert.equal(result.boxPrinting.events[0].journalUrl,undefined);
+ assert.equal(result.boxPrinting.cutEvents[0].area,null);
+ assert.equal(result.boxPrinting.cutEvents[0].areaOrigin,'journal');
+ assert.equal(result.boxPrinting.cutEvents[0].journalUrl,'https://docs.google.com/spreadsheets/d/stock-journal/edit#gid=8&range=P4');
  const wrong=await loadStockBoxPrinting(reader,original,{journalId:'stock-journal',sourceId:'different'});
  assert.equal(wrong.boxPrinting.stockStatus,'unavailable');assert.equal(wrong.boxPrinting.events.length,0);
 });
@@ -38,6 +43,7 @@ test('legacy sheet entries are never labelled Xerox without confirmed equipment'
 test('invalid active quantities and wrong-position cancellations rejected',()=>{const a=row('a','Печать');a[14]='bad';assert.throws(()=>boxPrintingEvents([header,a]),/Некорректная/);const b=row('b','Отмена','a');b[3]='other';assert.throws(()=>parseBoxJournal([header,row('a','Печать'),b]),/Отмена/);});
 test('loader reads history and journal without writes',async()=>{const rows=[header,row('a','Печать'),row('b','Порезка')];const gridRows=rs=>rs.map(r=>({values:r.map(value=>({effectiveValue:typeof value==='number'?{numberValue:value}:{stringValue:value}}))}));const reader={metadata:async()=>({spreadsheetId:'TEST',sheets:[{properties:{title:'Журнал',sheetId:8,gridProperties:{rowCount:3}}},{properties:{title:'По дням',sheetId:9,gridProperties:{rowCount:3,columnCount:22}}}]}),grid:async(id,ranges)=>ranges[0].includes('По дням')?({spreadsheetId:id,sheets:[{properties:{sheetId:9},data:[{startRow:1,startColumn:20,rowData:gridRows([['a',4.2],['b',5.2]])}]}]}):({spreadsheetId:id,sheets:[{properties:{sheetId:8},data:[{rowData:gridRows(rows)}]}]})};const result=await loadBoxPrinting(reader,{supplies:[]},{journalId:'TEST'});assert.equal(result.boxPrinting.status,'available');assert.equal(result.boxPrinting.events[0].area,4.2);assert.equal(result.boxPrinting.cutEvents[0].area,5.2);assert.equal((await loadBoxPrinting(reader,{},{})).boxPrinting.status,'unavailable');});
 test('verified Xerox dimensions fill only their original print records', async () => {
+  const journalId = 'test-box-journal';
   const missing = (id, action = 'Печать') => {
     const event = row(id, action);
     event[15] = event[19] = event[20] = '';
@@ -62,7 +68,7 @@ test('verified Xerox dimensions fill only their original print records', async (
     {title:'Уточнения площади', sheetId:10, rows:corrections},
   ];
   const reader = {
-    metadata: async () => ({spreadsheetId:'TEST', sheets:tabs.map(tab => ({
+    metadata: async () => ({spreadsheetId:journalId, sheets:tabs.map(tab => ({
       properties:{title:tab.title, sheetId:tab.sheetId, gridProperties:{rowCount:20,columnCount:22}},
     }))}),
     grid: async (id, ranges) => {
@@ -75,18 +81,22 @@ test('verified Xerox dimensions fill only their original print records', async (
     },
   };
   const supplies = [{sourceId:'box-printing', spreadsheetId:'s', sheetId:7, article:'A1', machine:'XEROX'}];
-  const report = (await loadBoxPrinting(reader, {supplies}, {journalId:'TEST'})).boxPrinting;
+  const report = (await loadBoxPrinting(reader, {supplies}, {journalId})).boxPrinting;
   assert.equal(report.status, 'available');
   const events = new Map(report.events.map(event => [event.id, event]));
   assert.ok(Math.abs(events.get('fixed').area - .66) < 1e-9);
   assert.equal(events.get('fixed').quantity, 20);
   assert.equal(events.get('fixed').sheets, 10);
   assert.equal(events.get('fixed').width, .15);
+  assert.equal(events.get('fixed').areaOrigin, undefined);
+  assert.equal(events.get('fixed').journalUrl, undefined);
   assert.equal(events.get('different-sheet').area, null);
   assert.equal(events.get('duplicate').area, null);
   assert.equal(events.get('known').area, 4.2);
   assert.equal(events.has('cancelled'), false);
   assert.equal(report.cutEvents[0].area, null);
+  assert.equal(report.cutEvents[0].areaOrigin, 'historical');
+  assert.equal(report.cutEvents[0].journalUrl, 'https://docs.google.com/spreadsheets/d/test-box-journal/edit#gid=8&range=P5');
   assert.equal(rows[1][15], '');
 });
 import {boxJournalExceptions} from '../agent/boxPrintingJournal.js';
