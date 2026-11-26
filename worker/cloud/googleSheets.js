@@ -120,10 +120,13 @@ export class CloudSheetsReader {
         fields: "userEnteredValue",
       } });
     }
+    // RepeatCell skips rows hidden by a sheet filter. Write explicit cells so
+    // a filtered view cannot keep old links in the working photo column.
     for (const [startRowIndex, endRowIndex] of formulaRuns)
-      requests.push({ repeatCell: {
-        range: { sheetId: machineLayoutSheet.id, startRowIndex, endRowIndex, startColumnIndex: 2, endColumnIndex: 3 },
-        cell: { userEnteredValue: { formulaValue: formula } }, fields: "userEnteredValue",
+      requests.push({ updateCells: {
+        start: { sheetId: machineLayoutSheet.id, rowIndex: startRowIndex, columnIndex: 2 },
+        rows: Array.from({ length: endRowIndex - startRowIndex }, () => ({ values: [{ userEnteredValue: { formulaValue: formula } }] })),
+        fields: "userEnteredValue",
       } });
     if (!requests.length) return false;
     await this.beforeWrite(id);

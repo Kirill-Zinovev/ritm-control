@@ -189,7 +189,8 @@ function AppShell() {
       });
       const result = await response.json();
       if (!response.ok || result.ok !== true) throw new Error(result.message || "Обновление фото не подтверждено.");
-      setLayoutPhotoRefresh({ busy: false, message: `Фото найдено для ${num(result.matched)} из ${num(result.rows)} строк.` });
+      const missing = result.missing ? ` Нет карточки для ${num(result.noCard)} строк, нет доступного фото для ${num(result.withoutPhoto)}.` : "";
+      setLayoutPhotoRefresh({ busy: false, message: `Фото найдено для ${num(result.matched)} из ${num(result.rows)} строк.${missing}` });
     } catch (error) {
       setLayoutPhotoRefresh({ busy: false, message: error instanceof Error ? error.message : "Обновление фото не подтверждено." });
     }

@@ -62,12 +62,13 @@ test("the live sync replaces the old import while preserving manual photos and a
   const outcome = await syncMachineLayoutPhotos(bindings, store, { fetcher, dryRun: false });
   assert.equal(outcome.formulas, 2);
   assert.equal(writes.length, 1);
-  assert.deepEqual(writes[0].map(request => Object.keys(request)[0]), ["addSheet", "updateCells", "repeatCell"]);
+  assert.deepEqual(writes[0].map(request => Object.keys(request)[0]), ["addSheet", "updateCells", "updateCells"]);
   assert.equal(writes[0][0].addSheet.properties.hidden, true);
   assert.equal(writes[0][1].updateCells.range.sheetId, cache.id);
-  const { range, cell } = writes[0][2].repeatCell;
-  assert.deepEqual(range, { sheetId: 0, startRowIndex: 1, endRowIndex: 3, startColumnIndex: 2, endColumnIndex: 3 });
-  assert.equal(cell.userEnteredValue.formulaValue, machineLayoutPhotoFormula);
+  const { start, rows } = writes[0][2].updateCells;
+  assert.deepEqual(start, { sheetId: 0, rowIndex: 1, columnIndex: 2 });
+  assert.deepEqual(rows.map(row => row.values[0].userEnteredValue.formulaValue),
+    [machineLayoutPhotoFormula, machineLayoutPhotoFormula]);
   assert.doesNotMatch(machineLayoutPhotoFormula, /IMPORTRANGE/);
   const writer = new CloudSheetsReader(bindings, { writer: true, fetcher, beforeWrite: async () => {} });
   await assert.rejects(writer.request("https://sheets.googleapis.com/v4/spreadsheets/" + id, { write: true }),

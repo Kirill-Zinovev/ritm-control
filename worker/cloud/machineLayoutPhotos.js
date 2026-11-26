@@ -67,7 +67,9 @@ async function readPhotoIndex(bindings, articles, fetcher) {
   const index = layoutPhotoIndex(base, results);
   if (base.length && ![...index.values()].some(Boolean))
     throw new CloudError("layout_catalog_photos_empty", "Справочник RITM не вернул фото для макетов. Предыдущее содержимое сохранено.", 503);
-  return index;
+  const registered = new Set(results.flatMap(([market, entries]) => entries.map(entry =>
+    normalizeCatalogArticle(entry.article) + (market === "OZON" ? "(OZ)" : ""))));
+  return { index, registered };
 }
 
 function gridRows(book, sheetId, startColumn) {
@@ -114,14 +116,18 @@ export async function syncMachineLayoutPhotos(bindings, store, { dryRun = true, 
       store: cellKey(stores[index]?.values?.[0]?.effectiveValue),
     }));
     const entered = positions.slice(1).filter(row => row.article);
-    const index = await readPhotoIndex(bindings, entered.map(row => row.article), fetcher);
-    const matched = entered.filter(row => index.get(row.article + "|" + row.store) ?? index.get(row.article + "|")).length;
+    const { index, registered } = await readPhotoIndex(bindings, entered.map(row => row.article), fetcher);
+    const unmatched = entered.filter(row => !(index.get(row.article + "|" + row.store) ?? index.get(row.article + "|")));
+    const noCard = unmatched.filter(({ article }) =>
+      !registered.has(article) && !registered.has(article + "(OZ)")).length;
+    const matched = entered.length - unmatched.length;
     const photoRows = [cache.header, ...[...index].sort(([left], [right]) => left.localeCompare(right))];
     const previous = existing ? gridRows(book, cache.id, 0).map(row => [text(row.values?.[0]), text(row.values?.[1])]) : [];
     if (existing && cache.header.some((cell, idx) => previous[0]?.[idx] !== cell))
       throw new CloudError("layout_photos_sheet_conflict", "Содержимое служебного листа фото изменилось.", 409);
     const photoRowsChanged = JSON.stringify(photoRows) !== JSON.stringify(previous);
-    const stats = { ok: true, dryRun, rows: entered.length, matched, missing: entered.length - matched, photoRowsChanged, formulas: 0 };
+    const stats = { ok: true, dryRun, rows: entered.length, matched, missing: unmatched.length,
+      noCard, withoutPhoto: unmatched.length - noCard, photoRowsChanged, formulas: 0 };
     if (dryRun) return stats;
     // Read C again after the network lookup to preserve any manual photo added
     // while the catalog was being read.
