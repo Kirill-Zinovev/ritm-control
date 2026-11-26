@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Plus, Save, ImagePlus } from 'lucide-react';
 import { catalogKey, spreadsheetError } from '../shared/catalog';
-import { catalogArticleForMarket, catalogFamilyKey, catalogMachineSection, productFields, type ManagedDetail, type ManagedProduct } from '../shared/catalog-editor';
+import { catalogArticleForMarket, catalogFamilyKey, catalogMachineSection, emptyCatalogProduct, productFields, type ManagedDetail, type ManagedProduct } from '../shared/catalog-editor';
 import type { PrintableLabel } from '../shared/labels';
 import { effectiveWorkNorms, type ShiftNorm } from '../shared/work-norm';
 import { dateTime, operationLabels, type Operation } from '../shared/model';
@@ -44,10 +44,6 @@ async function uploadMedia(file: Blob) {
   return data;
 }
 
-export const emptyCatalogProduct = (): ManagedProduct => ({
-  id:'',market:'OZON',store:'1',sku:'',aliases:[],name:'',barcode:'',kind:'',category:'',machine:'',packaging:'',size:'',sheetsPerUnit:'',
-  printFolder:'',printExtension:'',catalogDepartment:'',boxType:'',unitsPerBox:null,rollMultiplicity:'',xeroxMultiplicity:'',capacitySource:'review',photoId:null,issues:[],rows:[],
-});
 export function CatalogEditor({ item, initialDraft, importId, workspace:w, onClose, onSaved, onOpenExisting, normRequest, normFocus, barcodeHandoff=false, inline=false }: {
   item:ManagedDetail | null; initialDraft?:ManagedProduct; importId:string; workspace:Workspace;
   onClose():void; onSaved(nextDraft?:ManagedProduct, workNotice?:{ text:string; pending:boolean }):void; inline?:boolean;

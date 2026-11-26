@@ -7,6 +7,8 @@ import { accessApi, assemblyOwnerAccount, authenticate, sameOrigin, type AccessE
 import { readRitmWarehousePage } from "./ritm-warehouse";
 import { labelsApi } from "./labels-api";
 import { databaseBackup, databaseBackupPath } from "./database-backup.mjs";
+import { arkadyWbIntakePath } from "../shared/catalog-editor";
+import { arkadyWbIntakeApi } from "./arkady-wb-intake";
 interface Prepared {
   bind(...values: (string | number | null)[]): Prepared;
   all(): Promise<{ results: Record<string, unknown>[] }>;
@@ -31,6 +33,21 @@ export interface Env extends RitmEnv, AccessEnv {
       value: Uint8Array,
       options: { httpMetadata: { contentType: string } },
     ): Promise<unknown>;
+  };
+}
+function catalogFiles(bucket: Env["BUCKET"]): FileStore | undefined {
+  if (!bucket) return undefined;
+  return {
+    async get(key) {
+      const object = await bucket.get(key);
+      return object ? {
+        body: object.body,
+        contentType: object.httpMetadata?.contentType ?? "application/octet-stream",
+      } : null;
+    },
+    async put(key, body, contentType) {
+      await bucket.put(key, body, { httpMetadata: { contentType } });
+    },
   };
 }
 function accessStore(binding:D1) {
@@ -147,6 +164,8 @@ export default {
       }
       if (url.pathname.startsWith("/api/ritm/")) {
         if (["collector","manager"].includes(principal.role) && !["/api/ritm/status","/api/ritm/sync"].includes(url.pathname)) return json({error:"Операция доступна руководителю."},403);
+        if (url.pathname === arkadyWbIntakePath)
+          return arkadyWbIntakeApi(request, store, db, actor, catalogFiles(env.BUCKET));
         if (url.pathname==="/api/ritm/warehouse" && request.method==="GET") {
           try { return json(await readRitmWarehousePage(store,url)); }
           catch(e){return json({error:e instanceof Error?e.message:"Не удалось прочитать короба."},409);}
@@ -170,25 +189,7 @@ export default {
           ["/api/catalog", "/api/catalog/entry", "/api/catalog/photo", "/api/catalog/media"].includes(url.pathname);
         if (!isLabels && !["owner", "manager"].includes(principal.role) && !collectorRead)
           return json({ error: "Управление справочником доступно владельцу и менеджеру." }, 403);
-        const bucket = env.BUCKET;
-        const files: FileStore | undefined = bucket
-          ? {
-              async get(key) {
-                const object = await bucket.get(key);
-                return object
-                  ? {
-                      body: object.body,
-                      contentType:
-                        object.httpMetadata?.contentType ??
-                        "application/octet-stream",
-                    }
-                  : null;
-              },
-              async put(key, body, contentType) {
-                await bucket.put(key, body, { httpMetadata: { contentType } });
-              },
-            }
-          : undefined;
+        const files = catalogFiles(env.BUCKET);
         return isLabels
           ? labelsApi(request, store, files, principal.role, actor)
           : catalogApi(request, store, db, actor, files);

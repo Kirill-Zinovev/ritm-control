@@ -25,6 +25,7 @@ const signedRoutes = new Map([
   ["/api/ritm/retire-shipments", "POST"],
   ["/api/ritm/production-catalog", "POST"],
   ["/api/ritm/arkady-catalog", "POST"],
+  ["/api/ritm/arkady/catalog/wb-intake", "POST"],
   ["/api/ritm/production-extensions", "POST"],
   ["/api/ritm/warehouse", "GET"],
   ["/api/ritm/work-report", "GET"],

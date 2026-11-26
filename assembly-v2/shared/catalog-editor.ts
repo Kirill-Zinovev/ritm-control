@@ -11,6 +11,13 @@ export type ManagedProduct = CatalogEntry & {
   sheetCountSourceError?: true;
 };
 export type ManagedDetail = CatalogDetail & ManagedProduct;
+export const arkadyWbIntakePath = "/api/ritm/arkady/catalog/wb-intake";
+export const emptyCatalogProduct = (): ManagedProduct => ({
+  id: '', market: 'OZON', store: '1', sku: '', aliases: [], name: '', barcode: '', kind: '', category: '',
+  machine: '', packaging: '', size: '', sheetsPerUnit: '', printFolder: '', printExtension: '',
+  catalogDepartment: '', boxType: '', unitsPerBox: null, rollMultiplicity: '', xeroxMultiplicity: '',
+  capacitySource: 'review', photoId: null, issues: [], rows: [],
+});
 export type CatalogHandoffLookup =
   | { status: 'found'; entry: ManagedDetail }
   | { status: 'missing'; importId: string };

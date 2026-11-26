@@ -1,13 +1,15 @@
 import { validateLabelPrint } from "../src/label-print";
 import { catalogDetail, resolveCatalogPositions } from "../server/catalog-store";
 import { labelsApi } from "../server/labels-api";
+import { arkadyWbIntakeApi } from "../server/arkady-wb-intake";
 import { hmac } from "../server/access";
 import worker, { type Env } from "../server/worker";
-import { catalogArticleForMarket, type ManagedProduct } from "../shared/catalog-editor";
+import { arkadyWbIntakePath, catalogArticleForMarket, type ManagedProduct } from "../shared/catalog-editor";
 import { prepareRitmImport } from "../server/ritm-import";
 import { bootstrap } from "./fixtures";
 import test from "node:test";
 import assert from "node:assert/strict";
+import { deflateSync } from "node:zlib";
 import ExcelJS from "exceljs";
 import { openDatabase } from "../server/local-db";
 import { createDatabase } from "../server/database";
@@ -168,6 +170,88 @@ async function context() {
   };
   return { db, call, files, upload };
 }
+
+function intakePng() {
+  const chunk = (name: string, data: Buffer = Buffer.alloc(0)) => {
+    const body = Buffer.concat([Buffer.from(name, "ascii"), data]);
+    const result = Buffer.alloc(body.length + 8);
+    result.writeUInt32BE(data.length);
+    result.set(body, 4);
+    let crc = 0xffffffff;
+    for (const byte of body) {
+      crc ^= byte;
+      for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (-(crc & 1) & 0xedb88320);
+    }
+    result.writeUInt32BE((crc ^ 0xffffffff) >>> 0, 4 + body.length);
+    return result;
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(696);
+  ihdr.writeUInt32BE(480, 4);
+  ihdr[8] = 8;
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", ihdr),
+    chunk("IDAT", deflateSync(Buffer.alloc(697 * 480))), chunk("IEND"),
+  ]);
+}
+
+test("Аркадий готовит карточку WB по точному артикулу и подтверждает её с файлами одной записью", async (t) => {
+  const c = await context();
+  t.after(() => c.db.sqlite.close());
+  await c.upload(await bundle([
+    { ...entry("WB", "1"), packaging: "20 × 20", name: "Проверенный товар" },
+    { ...entry("OZON", "2"), name: "Чужой маркетплейс" },
+  ]));
+  const revision = await c.db.revision();
+  const invoke = (body: unknown, actor = "ritm-service", files: FileStore | undefined = c.files) =>
+    arkadyWbIntakeApi(new Request("https://assembly.test" + arkadyWbIntakePath, {
+      method: "POST", body: JSON.stringify(body),
+    }), c.db.store, c.db, actor, files);
+  const draft = { store: "2", barcode: "0098765432100", article: "sku-a" };
+  assert.equal((await invoke({ action: "prepare", draft }, "owner")).status, 403);
+  const prepared = await invoke({ action: "prepare", draft });
+  assert.equal(prepared.status, 200);
+  const preview = await prepared.json();
+  assert.equal(preview.mode, "create");
+  assert.equal(preview.source, "same-article");
+  assert.deepEqual(preview.draft, { article: "SKU-A", name: "Проверенный товар", packaging: "20 × 20",
+    store: "2", barcode: "0098765432100" });
+  assert.deepEqual(preview.missing, []);
+  assert.equal(await c.db.revision(), revision);
+  assert.equal(c.db.sqlite.prepare("select count(*) n from av2_catalog_media").get()?.n, 0);
+  const image = intakePng();
+  const photo = { filename: "photo.png", mimeType: "image/png", content: image.toString("base64") };
+  const label = { ...photo, filename: "wb-label.png" };
+  const confirm = { action: "confirm", draft: { ...draft, photo, label }, approvedBy: "owner-1",
+    approvalId: crypto.randomUUID(), fingerprint: preview.fingerprint };
+  assert.equal((await invoke({ ...confirm, draft: { ...draft, photo: { ...photo, mimeType: "image/jpeg" } } })).status, 400);
+  assert.equal((await invoke({ ...confirm, draft: { ...draft, name: "Новое название" } })).status, 409);
+  assert.equal(c.db.sqlite.prepare("select count(*) n from av2_catalog_media").get()?.n, 0);
+  const [first, replay] = await Promise.all([invoke(confirm), invoke(confirm)]);
+  assert.equal(first.status, 200, await first.clone().text());
+  assert.equal(replay.status, 200, await replay.clone().text());
+  const saved = await first.json();
+  assert.deepEqual(await replay.json(), saved);
+  assert.equal(saved.entryId, JSON.stringify(["WB", "2", "SKU-A"]));
+  assert.equal(c.db.sqlite.prepare("select count(*) n from av2_quality_repairs where kind='catalog.edit'").get()?.n, 1);
+  assert.equal(c.db.sqlite.prepare("select count(*) n from av2_catalog_media").get()?.n, 1);
+  assert.equal((await invoke({ ...confirm, approvedBy: "owner-2" })).status, 409);
+  assert.equal((await invoke({ ...confirm, draft: { ...draft, label } })).status, 409);
+  const checked = await (await invoke({ action: "prepare", draft: { store: draft.store, barcode: draft.barcode } })).json();
+  assert.equal(checked.mode, "update");
+  assert.equal(checked.hasPhoto, true);
+  assert.equal(checked.hasLabel, true);
+  const media = await catalogApi(new Request(`https://assembly.test/api/catalog/media?sha256=${await digest(image)}`),
+    c.db.store, c.db, "owner", c.files);
+  assert.equal(media.status, 200);
+  assert.equal(media.headers.get("content-type"), "image/png");
+  assert.deepEqual(Buffer.from(await media.arrayBuffer()), image);
+  assert.equal((await invoke({ action: "prepare", draft: { ...draft, article: "SKU-X" } })).status, 409);
+  const packagingDraft = { ...draft, packaging: "30 × 20" };
+  const packaging = await (await invoke({ action: "prepare", draft: packagingDraft })).json();
+  assert.equal((await invoke({ action: "confirm", draft: packagingDraft, approvedBy: "owner-1",
+    approvalId: crypto.randomUUID(), fingerprint: packaging.fingerprint })).status, 409);
+});
 
 test("переход Аркадия по штрихкоду открывает ровно одну карточку в заданном магазине", async (t) => {
   const c = await context();

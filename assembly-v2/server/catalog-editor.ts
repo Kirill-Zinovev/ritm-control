@@ -1,4 +1,4 @@
-import { labelArticle } from "../shared/labels";
+import { labelArticle, type LabelMime } from "../shared/labels";
 import { catalogBarcodeMatches, catalogDetail, catalogEntryWithStore, catalogLabelTargets, requireCatalog as check, selectableCatalog } from './catalog-store';
 import { catalogKey, digest, photoAllowed } from '../shared/catalog';
 import { catalogHandoffBarcode, catalogHandoffStore, isCatalogMedia, productFields, type ManagedProduct } from '../shared/catalog-editor';
@@ -82,7 +82,10 @@ export async function catalogAttachLabelsPlan(store: SqlStore, payload: Record<s
   }
   return { statements, result: { attached, skipped } };
 }
-export async function catalogSavePlan(store: SqlStore, payload: Record<string, unknown>, actor: string, now: string) {
+export interface PendingCatalogMedia { sha256: string; mimeType: LabelMime; bytes: number }
+
+export async function catalogSavePlan(store: SqlStore, payload: Record<string, unknown>, actor: string, now: string,
+  options: { media?: PendingCatalogMedia[]; auditReason?: string } = {}) {
   const [meta] = await store.all<{ activeCatalogId: string | null }>('select active_catalog_id from av2_meta where id=1');
   check(meta?.activeCatalogId && payload.importId === meta.activeCatalogId, 'Версия справочника изменилась. Обновите страницу.');
   const input = payload.product as ManagedProduct;
@@ -146,9 +149,11 @@ export async function catalogSavePlan(store: SqlStore, payload: Record<string, u
   const labelSha = identityChanged && input.labelSha === before?.labelSha ? null : input.labelSha ?? null;
   check(labelSha === null || typeof labelSha === 'string' && /^[a-f0-9]{64}$/.test(labelSha), 'Проверьте файл этикетки.');
   const hashes = [...new Set([isCatalogMedia(photoUrl || '') ? photoUrl!.split('=')[1] : null, labelSha].filter((s): s is string => !!s))];
-  if (hashes.length) {
-    const media = await store.all<{ sha256: string }>('select sha256 from av2_catalog_media where sha256 in(select value from json_each(?))', [JSON.stringify(hashes)]);
-    check(media.length === hashes.length, 'Сначала дождитесь загрузки фото и этикетки.');
+  const pendingMedia = (options.media ?? []).filter(media => hashes.includes(media.sha256));
+  const storedHashes = hashes.filter(hash => !pendingMedia.some(media => media.sha256 === hash));
+  if (storedHashes.length) {
+    const media = await store.all<{ sha256: string }>('select sha256 from av2_catalog_media where sha256 in(select value from json_each(?))', [JSON.stringify(storedHashes)]);
+    check(media.length === storedHashes.length, 'Сначала дождитесь загрузки фото и этикетки.');
   }
   const assigned = assigningStore && before ? catalogEntryWithStore(before, shop) : null;
   const assignment = assigned && before ? await qualityPlan(store, 'quality.assignCatalogStore', {
@@ -169,12 +174,14 @@ export async function catalogSavePlan(store: SqlStore, payload: Record<string, u
   const matchArgs = [input.market, shop, entryId, sameScope || assigningStore ? sourceId : entryId, JSON.stringify(aliases)];
   const [count] = await store.all<{ n: number }>(`select count(*) n from av2_positions where id in(${matches})`, matchArgs);
   const statements: Statement[] = [
+    ...pendingMedia.map(media => q(`insert into av2_catalog_media(sha256,mime_type,bytes,created_at)
+      values(?,?,?,?) on conflict(sha256) do nothing`, media.sha256, media.mimeType, media.bytes, now)),
     ...(assignment?.statements ?? []),
     ...(identityChanged && before && !assigningStore
       ? [saveCard({ ...before, aliases: [], retiredIdentity: true }, actor, now)]
       : []),
     saveCard(product, actor, now),
-    catalogEditAudit(before, product, actor, now, 'Редактор справочника'),
+    catalogEditAudit(before, product, actor, now, options.auditReason ?? 'Редактор справочника'),
     q(`update av2_positions set name=?,barcode=?,units_per_box=?,catalog_import_id=?,catalog_entry_id=? where id in(${matches})`,
       product.name, product.barcode, units, meta.activeCatalogId, entryId, ...matchArgs),
   ];

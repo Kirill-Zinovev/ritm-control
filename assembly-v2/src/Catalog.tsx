@@ -1,7 +1,7 @@
-import { CatalogEditor, emptyCatalogProduct } from "./CatalogEditor";
+import { CatalogEditor } from "./CatalogEditor";
 import { catalogKey } from "../shared/catalog";
 import {
-  catalogHandoffBarcode, catalogHandoffStore,
+  catalogHandoffBarcode, catalogHandoffStore, emptyCatalogProduct,
   type CatalogHandoffLookup, type ManagedDetail, type ManagedProduct,
 } from "../shared/catalog-editor";
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
