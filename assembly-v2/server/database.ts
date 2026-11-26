@@ -4,6 +4,7 @@ import { sameCartonScope } from "../shared/carton-scope";
 import { cartonMergeFingerprint, checkCartonMerge, type CartonMergeReceipt } from "../shared/carton-merge";
 import { planCartonTransfers, type MergeAllocation } from "./carton-merge";
 import { catalogAttachLabelsPlan, catalogSavePlan } from "./catalog-editor";
+import { arkadyCatalogAction, arkadyCatalogPlan } from "./arkady-catalog";
 import { searchPositions } from "./position-search";
 import type {
   Carton,
@@ -267,6 +268,7 @@ export function createDatabase(store: SqlStore, onCatalogCommit?: () => void): D
       return box;
     };
     if (action === "catalog.save") return catalogSavePlan(store,payload,actor,now);
+    if (action === arkadyCatalogAction) return arkadyCatalogPlan(store,payload,actor,now);
     if (action === "catalog.attachLabels") return catalogAttachLabelsPlan(store,payload,actor,now);
     if (action.startsWith("quality.") || action === "catalog.applyWorkNorms")
       return qualityPlan(store, action, payload, actor, now);
@@ -1218,7 +1220,7 @@ export function createDatabase(store: SqlStore, onCatalogCommit?: () => void): D
               "insert into av2_meta(id,revision) values(1,1) on conflict(id) do update set revision=revision+1",
             ),
           ]);
-          if (action === "catalog.save" || action === "catalog.activate" || action === "photo.assign")
+          if (action === "catalog.save" || action === arkadyCatalogAction || action === "catalog.activate" || action === "photo.assign")
             onCatalogCommit?.();
           return prepared.result;
         } catch (error) {

@@ -22,12 +22,20 @@ type LabelAttachment = {
 const cardSearch = (product: ManagedProduct) => catalogKey(
   [product.sku, ...product.aliases, product.name, product.barcode, product.kind, product.machine].join(' '),
 );
-function saveCard(product: ManagedProduct, actor: string, now: string) {
+export function saveCard(product: ManagedProduct, actor: string, now: string) {
   return q(`insert into av2_catalog_products(entry_id,market,store,sku,search,machine,review,data,revision,actor,updated_at)
     values(?,?,?,?,?,?,?,?,?,?,?) on conflict(entry_id) do update set search=excluded.search,machine=excluded.machine,
     review=excluded.review,data=excluded.data,revision=excluded.revision,actor=excluded.actor,updated_at=excluded.updated_at`,
     product.id, product.market, product.store, product.sku, cardSearch(product), product.machine, product.issues.length ? 1 : 0,
     JSON.stringify(product), product.editRevision ?? 0, actor, now);
+}
+
+export function catalogEditAudit(
+  before: ManagedProduct | null, product: ManagedProduct, actor: string, now: string, evidence: string,
+) {
+  return q('insert into av2_quality_repairs(id,kind,entity_id,"before","after",evidence,actor,created_at) values(?,?,?,?,?,?,?,?)',
+    crypto.randomUUID(), 'catalog.edit', product.id + ':' + product.editRevision,
+    JSON.stringify(before), JSON.stringify(product), evidence, actor, now);
 }
 
 export async function catalogAttachLabelsPlan(store: SqlStore, payload: Record<string, unknown>, actor: string, now: string) {
@@ -146,7 +154,8 @@ export async function catalogSavePlan(store: SqlStore, payload: Record<string, u
     unitsPerBox: units, capacitySource: assigned && units === assigned.unitsPerBox ? assigned.capacitySource : units === null ? 'review' : 'user',
     photoId: before?.photoId || null, photoUrl, labelSha, workNorms,
     issues: assigned?.issues ?? (units === null ? ['Вместимость короба не задана'] : []),
-    rows: before?.rows || [], editRevision: Math.max(before?.editRevision ?? 0, previousTarget?.revision ?? 0) + 1, updatedAt: now,
+    rows: before?.rows || [], sheetCountSourceError: undefined,
+    editRevision: Math.max(before?.editRevision ?? 0, previousTarget?.revision ?? 0) + 1, updatedAt: now,
   } as ManagedProduct;
   const search = cardSearch(product);
   const matches = `select p.id from av2_positions p join av2_supplies s on s.id=p.supply_id
@@ -159,8 +168,7 @@ export async function catalogSavePlan(store: SqlStore, payload: Record<string, u
       ? [saveCard({ ...before, aliases: [], retiredIdentity: true }, actor, now)]
       : []),
     saveCard(product, actor, now),
-    q(`insert into av2_quality_repairs(id,kind,entity_id,before,after,evidence,actor,created_at) values(?,'catalog.edit',?,?,?,?,?,?)`,
-      crypto.randomUUID(), entryId + ':' + product.editRevision, JSON.stringify(before), JSON.stringify(product), 'Редактор справочника', actor, now),
+    catalogEditAudit(before, product, actor, now, 'Редактор справочника'),
     q(`update av2_positions set name=?,barcode=?,units_per_box=?,catalog_import_id=?,catalog_entry_id=? where id in(${matches})`,
       product.name, product.barcode, units, meta.activeCatalogId, entryId, ...matchArgs),
   ];

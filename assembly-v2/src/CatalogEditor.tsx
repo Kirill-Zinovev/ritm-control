@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Plus, Save, ImagePlus } from 'lucide-react';
 import { catalogKey, spreadsheetError } from '../shared/catalog';
-import { catalogArticleForMarket, catalogFamilyKey, productFields, type ManagedDetail, type ManagedProduct } from '../shared/catalog-editor';
+import { catalogArticleForMarket, catalogFamilyKey, catalogMachineSection, productFields, type ManagedDetail, type ManagedProduct } from '../shared/catalog-editor';
 import type { PrintableLabel } from '../shared/labels';
 import { effectiveWorkNorms, type ShiftNorm } from '../shared/work-norm';
 import { dateTime, operationLabels, type Operation } from '../shared/model';
@@ -31,11 +31,6 @@ function templateValues(source: ManagedProduct) {
 const shopLabel = (card: ReferenceCard) => `${card.market} · ${card.store ? 'магазин '+card.store : 'магазин не указан'}`;
 const editableAliases = (card: ManagedProduct) => card.aliases.filter(a=>a!==card.sku).join(', ');
 const operations = ['cut','assembly','packing'] as const;
-function machineSection(machine: string) {
-  const value = catalogKey(machine).replace(/[-‑–\s]+/g, ' ');
-  if (['2 GO','УФ','УФ БЕЛ.','УФ. БЕЛ','УФ БЕЛЫЙ','УФ ДВУСТОРОННИЙ'].includes(value)) return 'Рулонная печать';
-  return ['УФ ПЛАНШЕТ','DTF','XEROX'].includes(value) ? 'Бокс' : '';
-}
 function historyValue(product: ManagedProduct | null, key: keyof ManagedProduct) {
   if (key === 'workNorms') return Object.fromEntries(Object.entries(product?.workNorms ?? {}).filter(([, value]) => value != null));
   return product?.[key] ?? null;
@@ -299,7 +294,7 @@ export function CatalogEditor({ item, initialDraft, importId, workspace:w, onClo
       inputTag={field==='packaging'?'упаковка':undefined}
       options={choiceLists[field] ?? []} onChange={value=>set(field,value)}/>;
   }
-  const section = machineSection(product.machine);
+  const section = catalogMachineSection(product.machine);
   const storeField = <NativeSelect label="Магазин" required data-label-input="номер магазина" value={product.store} disabled={busy}
     onChange={e=>{setBase(undefined);set('store',e.target.value);}}>
     {storeMissing && <option value="" disabled>Выберите магазин</option>}

@@ -31,7 +31,8 @@ export function effectiveWorkNorms(
   const rows = catalog.rows as
     | { raw?: { sheetsPerUnit?: string } }[]
     | undefined;
-  const error = !catalog.editRevision && rows?.some((r) => spreadsheetError(String(r.raw?.sheetsPerUnit || "")));
+  const error = (!catalog.editRevision || catalog.sheetCountSourceError === true)
+    && rows?.some((r) => spreadsheetError(String(r.raw?.sheetsPerUnit || "")));
   const multiplier =
     error || raw === undefined
       ? null

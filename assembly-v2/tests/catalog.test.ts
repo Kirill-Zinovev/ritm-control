@@ -1,6 +1,8 @@
 import { validateLabelPrint } from "../src/label-print";
 import { catalogDetail, resolveCatalogPositions } from "../server/catalog-store";
 import { labelsApi } from "../server/labels-api";
+import { hmac } from "../server/access";
+import worker, { type Env } from "../server/worker";
 import { catalogArticleForMarket, type ManagedProduct } from "../shared/catalog-editor";
 import { prepareRitmImport } from "../server/ritm-import";
 import { bootstrap } from "./fixtures";
@@ -27,6 +29,7 @@ import type {
 import { cellText, parseCatalog } from "../shared/catalog-excel";
 import type { Snapshot, SupplyImport } from "../shared/model";
 import { fixture } from "./fixtures";
+import { effectiveWorkNorms } from "../shared/work-norm";
 
 const fakeFiles = (): FileStore => {
   const files = new Map<
@@ -746,6 +749,99 @@ test("предыдущую версию каталога можно восста
   assert.equal(((await c.call("")).value.active as { id: string }).id, b.id);
 });
 
+
+test("Аркадий редактирует точную карточку по подписи, версии и одному ID подтверждения", async (t) => {
+  const c = await context();
+  t.after(() => c.db.sqlite.close());
+  const first = entry("OZON", "1");
+  first.sheetsPerUnit = "";
+  first.rows[0].raw.sheetsPerUnit = "#N/A";
+  const second = { ...entry("OZON", "2"), machine: "XEROX" };
+  const imported = await bundle([first, second, entry("WB", "1")]);
+  await c.upload(imported);
+  const path = "/api/ritm/arkady-catalog";
+  const origin = "https://assembly.test";
+  const signingKey = "a7".repeat(32);
+  type Result = { results: Record<string, unknown>[] };
+  type Prepared = {
+    bind(...args: (string | number | null)[]): Prepared;
+    all(): Promise<Result>;
+    execute(): Result;
+  };
+  const prepare = (sql: string, args: (string | number | null)[] = []): Prepared => {
+    const execute = () => ({ results: c.db.sqlite.prepare(sql).all(...args) });
+    return { bind: (...next) => prepare(sql, next), all: async () => execute(), execute };
+  };
+  const env: Env = {
+    AV2_OWNER_USER_ID: "test-owner",
+    RITM_ASSEMBLY_V2_FEED_SECRET: signingKey,
+    DB: {
+      prepare,
+      async batch(statements: Prepared[]) {
+        c.db.sqlite.exec("BEGIN");
+        try {
+          const results = statements.map(statement => statement.execute());
+          c.db.sqlite.exec("COMMIT");
+          return results;
+        } catch (error) {
+          c.db.sqlite.exec("ROLLBACK");
+          throw error;
+        }
+      },
+    },
+  };
+  const request = (body: string, headers: Record<string, string> = {}) =>
+    new Request(origin + path, { method: "POST", headers, body });
+  const signed = async (input: Record<string, unknown>, nonce = crypto.randomUUID()) => {
+    const body = JSON.stringify(input), at = String(Date.now());
+    const signature = await hmac(signingKey, JSON.stringify([1, "POST", path, at, nonce, await digest(body)]));
+    return worker.fetch(request(body, {
+      "x-assembly-v2-at": at, "x-assembly-v2-nonce": nonce, "x-assembly-v2-signature": signature,
+    }), env);
+  };
+  const read = { action: "read", market: "OZON", article: first.sku };
+  assert.equal((await worker.fetch(request(JSON.stringify(read)), env)).status, 401);
+  assert.equal((await worker.fetch(request(JSON.stringify(read), { "oai-authenticated-user-id": "test-owner" }), env)).status, 403);
+  const sharedNonce = crypto.randomUUID();
+  const page = await signed(read, sharedNonce);
+  assert.equal(page.status, 200);
+  const { entries, fieldOptions } = await page.json();
+  assert.deepEqual(entries.map((row: { store: string }) => row.store), ["1", "2"]);
+  assert.deepEqual(fieldOptions.machine, ["2-GO", "XEROX"]);
+  assert.equal(entries[0].fields.rollMultiplicity, "15");
+  assert(!Object.hasOwn(entries[0], "rows"));
+  assert.equal((await signed(read, sharedNonce)).status, 409);
+  assert.deepEqual((await (await signed({ ...read, article: "EXPLICIT-ALIAS" })).json()).entries, []);
+  const { fields: _fields, ...identity } = entries[0];
+  const apply = { action: "apply", ...identity, field: "rollMultiplicity", value: 10,
+    approvalId: crypto.randomUUID(), approvedBy: "test-owner" };
+  assert.equal((await signed({ ...apply, field: "sku" })).status, 400);
+  assert.equal((await signed({ ...apply, store: "2" })).status, 409);
+  const applied = await signed(apply);
+  assert.equal(applied.status, 200);
+  assert.deepEqual(await applied.json(), { ok: true, entryId: first.id, revision: 1 });
+  assert.equal((await signed(apply)).status, 200);
+  assert.equal((await signed({ ...apply, revision: 1, value: 11 })).status, 409);
+  assert.equal((await signed({ ...apply, value: 11, approvalId: crypto.randomUUID() })).status, 409);
+  const audits = c.db.sqlite.prepare("select actor,\"before\",\"after\" from av2_quality_repairs where kind='catalog.edit'").all();
+  assert.equal(audits.length, 1);
+  assert.equal(audits[0].actor, "ritm-owner:test-owner");
+  const before = JSON.parse(String(audits[0].before));
+  const after = JSON.parse(String(audits[0].after));
+  assert.deepEqual(after, {
+    ...before, rollMultiplicity: "10", editRevision: 1, updatedAt: after.updatedAt, sheetCountSourceError: true,
+  });
+  assert.deepEqual(effectiveWorkNorms(after, []), effectiveWorkNorms(before, []));
+  const reloaded = await (await signed({ ...read, store: "1" })).json();
+  assert.equal(reloaded.entries[0].fields.rollMultiplicity, "10");
+  assert.equal((await catalogDetail(c.db.store, imported.id, second.id))?.rollMultiplicity, "15");
+  assert.equal(JSON.parse(String(c.db.sqlite.prepare("select data from av2_catalog_entries where entry_id=?").get(first.id)!.data)).rollMultiplicity, "15");
+  const outcomes = await Promise.all([90, 120].map(value => signed({
+    ...apply, revision: 1, field: "packingNorm", value, approvalId: crypto.randomUUID(),
+  })));
+  assert.deepEqual(outcomes.map(result => result.status).sort(), [200, 409]);
+  assert.equal(c.db.sqlite.prepare("select count(*) n from av2_quality_repairs where kind='catalog.edit'").get()!.n, 2);
+});
 
 test("редактор: обновляет сборку, сохраняет выработку, исходный Excel и правки после нового импорта", async t => {
   const c=await context();t.after(()=>c.db.sqlite.close());

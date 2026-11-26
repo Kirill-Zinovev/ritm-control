@@ -8,6 +8,7 @@ export type ManagedProduct = CatalogEntry & {
   workNorms?: Partial<Record<Operation, number | null>>;
   labelSha?: string | null;
   retiredIdentity?: true;
+  sheetCountSourceError?: true;
 };
 export type ManagedDetail = CatalogDetail & ManagedProduct;
 export type CatalogFamilyCard = Pick<ManagedDetail, 'id' | 'sku' | 'market' | 'store' | 'name'>;
@@ -22,6 +23,11 @@ export function catalogFamilyKey(sku: string) {
 export function catalogArticleForMarket(sku: string, market: Market) {
   const base = catalogKey(sku).replace(/(?:\s*\((?:OZ|WB)\))+$/u, '').trimEnd();
   return base && market === 'OZON' ? ozonArticle(base) : base;
+}
+export function catalogMachineSection(machine: string) {
+  const value = catalogKey(machine).replace(/[-‑–\s]+/g, ' ');
+  if (['2 GO','УФ','УФ БЕЛ.','УФ. БЕЛ','УФ БЕЛЫЙ','УФ ДВУСТОРОННИЙ'].includes(value)) return 'Рулонная печать';
+  return ['УФ ПЛАНШЕТ','DTF','XEROX'].includes(value) ? 'Бокс' : '';
 }
 export const productFields = [
   ['name', 'Название товара'], ['barcode', 'Штрихкод'], ['kind', 'Вид для расчёта выработки'],

@@ -11,6 +11,7 @@ import {
 } from "../shared/ritm";
 import { findCatalogAliases, requireCatalog as check } from "./catalog-store";
 import { hmac } from "./access";
+import { arkadyCatalogApi } from "./arkady-catalog";
 import { syncSourcePhotos } from "./source-photos";
 import {
   drainWorkOutbox,
@@ -474,6 +475,9 @@ export async function ritmApi(
 ): Promise<Response> {
   if (!actor) return json({ error: "Войдите в RITM Сборка." }, 401);
   const url = new URL(request.url);
+  if (url.pathname === "/api/ritm/arkady-catalog") {
+    return arkadyCatalogApi(request, store, db, actor);
+  }
   if (url.pathname === "/api/ritm/production-extensions") {
     if (actor !== "ritm-service" || request.method !== "POST")
       return json({error:"Требуется служебный запрос РИТМ."},403);
