@@ -472,7 +472,7 @@ export class ProductionSupplyService {
         name: DEPARTMENTS[s.department].name,
         status: s.status,
         rows: s.lines.length,
-        message: s.message || null,
+        message: s.status === "verified" ? null : s.message || null,
         spreadsheetUrl: s.plan
           ? `https://docs.google.com/spreadsheets/d/${DEPARTMENTS[s.department].documentId}/edit#gid=${s.plan.sheetId}`
           : "",
@@ -1281,6 +1281,7 @@ export class ProductionSupplyService {
                 "Связь поставки пока не подтверждена.",
               );
             step.status = "verified";
+            step.message = null;
             this.save(op);
             continue;
           } catch (error) {

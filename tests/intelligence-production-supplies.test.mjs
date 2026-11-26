@@ -781,8 +781,13 @@ test("lost accepted write is verified after restart rather than sent twice; miss
   assert.equal((await restarted.execute(resume)).status, "partial");
   assert.equal(f.writers.box.writes, 1);
   f.writers.box.unreadable = false;
-  assert.equal((await restarted.execute(resume)).status, "verified");
+  const verified = await restarted.execute(resume);
+  assert.equal(verified.status, "verified");
   assert.equal(f.writers.box.writes, 1);
+  assert.equal(verified.steps.find((step) => step.department === "box").message, null);
+  const saved = structuredClone(restarted.operations().find((operation) => operation.id === p.operationId));
+  saved.steps.find((step) => step.department === "box").message = "Предыдущая сверка ещё не завершена.";
+  assert.equal(restarted.publicOperation(saved).steps.find((step) => step.department === "box").message, null);
 });
 
 test("single department supply creates no empty job in the other department", async () => {
