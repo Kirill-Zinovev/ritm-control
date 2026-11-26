@@ -11,6 +11,14 @@ export type ManagedProduct = CatalogEntry & {
   sheetCountSourceError?: true;
 };
 export type ManagedDetail = CatalogDetail & ManagedProduct;
+export type CatalogHandoffLookup =
+  | { status: 'found'; entry: ManagedDetail }
+  | { status: 'missing'; importId: string };
+export const catalogHandoffBarcode = (value: unknown, market: Market): value is string =>
+  typeof value === 'string' &&
+  (/^[0-9]{6,32}$/.test(value) || (market === 'OZON' && /^OZN[0-9]{9,10}$/.test(value)));
+export const catalogHandoffStore = (value: unknown): value is '1' | '2' =>
+  value === '1' || value === '2';
 export type CatalogFamilyCard = Pick<ManagedDetail, 'id' | 'sku' | 'market' | 'store' | 'name'>;
 export interface CatalogFamilyMatches {
   cards: CatalogFamilyCard[];

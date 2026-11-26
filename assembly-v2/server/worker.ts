@@ -165,7 +165,11 @@ export default {
       }
       if (url.pathname.startsWith("/api/catalog") || url.pathname.startsWith("/api/labels")) {
         const isLabels = url.pathname.startsWith("/api/labels");
-        if (!isLabels && !["owner","manager"].includes(principal.role) && !(principal.role==="collector" && request.method==="GET" && ["/api/catalog","/api/catalog/entry","/api/catalog/photo","/api/catalog/media"].includes(url.pathname))) return json({error:"Изменение справочника доступно владельцу."},403);
+        const barcodeHandoff = url.pathname === "/api/catalog/entry" && url.searchParams.has("barcode");
+        const collectorRead = principal.role === "collector" && request.method === "GET" && !barcodeHandoff &&
+          ["/api/catalog", "/api/catalog/entry", "/api/catalog/photo", "/api/catalog/media"].includes(url.pathname);
+        if (!isLabels && !["owner", "manager"].includes(principal.role) && !collectorRead)
+          return json({ error: "Управление справочником доступно владельцу и менеджеру." }, 403);
         const bucket = env.BUCKET;
         const files: FileStore | undefined = bucket
           ? {

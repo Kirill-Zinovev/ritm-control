@@ -169,6 +169,62 @@ async function context() {
   return { db, call, files, upload };
 }
 
+test("переход Аркадия по штрихкоду открывает ровно одну карточку в заданном магазине", async (t) => {
+  const c = await context();
+  t.after(() => c.db.sqlite.close());
+  const barcode = "0012345678901";
+  const wb = entry("WB", "2");
+  assert.equal((await c.call(`/entry?market=WB&store=2&barcode=${barcode}`)).status, 409);
+  const ozonCode = "OZN1234567890";
+  const ozonCard = { ...entry("OZON", "1"), barcode: ozonCode };
+  const data = await bundle([entry("OZON", "2"), ozonCard, wb]);
+  await c.upload(data);
+  const before = await c.db.revision();
+  const exact = await c.call(`/entry?market=WB&store=2&barcode=${barcode}`);
+  assert.equal(exact.status, 200);
+  assert.equal(exact.value.status, "found");
+  assert.deepEqual(exact.value.entry, { ...wb, importId: data.id, photo: null,
+    photoUrl: null, kindCorrection: "", printExtension: "" });
+  assert.deepEqual((await c.call(`/entry?market=WB&store=1&barcode=${barcode}`)).value,
+    { status: "missing", importId: data.id });
+  const ozon = await c.call(`/entry?market=OZON&store=2&barcode=${barcode}`);
+  assert.equal((ozon.value.entry as CatalogEntry).id, entry("OZON", "2").id);
+  const prefixed = await c.call(`/entry?market=OZON&store=1&barcode=${ozonCode}`);
+  assert.equal((prefixed.value.entry as CatalogEntry).id, ozonCard.id);
+  assert.equal((await c.call(`/entry?market=WB&store=1&barcode=${ozonCode}`)).status, 400);
+  assert.equal((await c.call(`/entry?market=WB&barcode=${barcode}`)).status, 400);
+  assert.equal((await c.call("/entry?market=WB&store=2&barcode=123456+789")).status, 400);
+  assert.equal((await c.call(`/entry?market=unsupported&store=2&barcode=${barcode}`)).status, 400);
+  assert.equal((await c.call(`/entry?market=WB&store=2&barcode=${barcode.slice(2)}`)).value.status, "missing");
+  assert.equal(await c.db.revision(), before);
+  const duplicate = { ...wb, id: JSON.stringify(["WB", "2", "SKU-B"]), sku: "SKU-B", aliases: ["SKU-B"] };
+  await c.upload(await bundle([wb, duplicate]));
+  assert.equal((await c.call(`/entry?market=WB&store=2&barcode=${barcode}`)).status, 409);
+});
+
+test("подтверждение черновика Аркадия сохраняет один товар на магазин при одновременной записи", async (t) => {
+  const c = await context();
+  t.after(() => c.db.sqlite.close());
+  const data = await bundle([entry("OZON", "1")]);
+  await c.upload(data);
+  const barcode = "0012345678901";
+  const save = (sku: string, shop = "2") => c.db.command("catalog.save", {
+    create: true, revision: 0, importId: data.id, barcodeHandoff: true,
+    product: { ...entry("WB", shop), sku, aliases: [sku], barcode },
+  }, crypto.randomUUID(), "owner");
+  const results = await Promise.allSettled([save("SKU-C"), save("SKU-D")]);
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  const rejected = results.find((result) => result.status === "rejected") as PromiseRejectedResult;
+  assert.match(String(rejected.reason), /штрихкодом уже есть/);
+  const exact = await c.call(`/entry?market=WB&store=2&barcode=${barcode}`);
+  assert.equal(exact.value.status, "found");
+  assert.equal(c.db.sqlite.prepare("select count(*) n from av2_quality_repairs where kind='catalog.edit'").get()?.n, 1);
+  await save("SKU-E", "1");
+  assert.equal((await c.call(`/entry?market=WB&store=1&barcode=${barcode}`)).value.status, "found");
+  await c.upload(await bundle([entry("WB", "1")]));
+  await assert.rejects(save("SKU-STALE"), /Версия справочника изменилась/);
+});
+
 test("ссылка из отгрузки открывает карточку по артикулу, магазину и маркетплейсу", async (t) => {
   const c = await context();
   t.after(() => c.db.sqlite.close());

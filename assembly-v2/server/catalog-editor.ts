@@ -1,7 +1,7 @@
 import { labelArticle } from "../shared/labels";
-import { catalogDetail, catalogEntryWithStore, catalogLabelTargets, requireCatalog as check, selectableCatalog } from './catalog-store';
+import { catalogBarcodeMatches, catalogDetail, catalogEntryWithStore, catalogLabelTargets, requireCatalog as check, selectableCatalog } from './catalog-store';
 import { catalogKey, digest, photoAllowed } from '../shared/catalog';
-import { isCatalogMedia, productFields, type ManagedProduct } from '../shared/catalog-editor';
+import { catalogHandoffBarcode, catalogHandoffStore, isCatalogMedia, productFields, type ManagedProduct } from '../shared/catalog-editor';
 import type { SqlStore, Statement } from './database';
 import { labelInputKey, missingLabelFields } from '../shared/product-label-fields';
 import { qualityPlan } from './quality';
@@ -110,6 +110,12 @@ export async function catalogSavePlan(store: SqlStore, payload: Record<string, u
   const fields = Object.fromEntries(productFields.map(([key]) => [
     key, key === 'printExtension' ? clean(input[key] ?? before?.[key] ?? '', 32).toUpperCase() : clean(input[key], 4000),
   ]));
+  if (payload.barcodeHandoff === true) {
+    check(payload.create === true && catalogHandoffStore(shop) && catalogHandoffBarcode(fields.barcode, input.market),
+      'Укажите магазин и действительный штрихкод.');
+    const existing = await catalogBarcodeMatches(store, meta.activeCatalogId, input.market, shop, fields.barcode);
+    check(!existing.length, 'Карточка с таким штрихкодом уже есть в этом магазине. Откройте её для сверки.');
+  }
   check(/^[\p{L}\p{N}._-]*$/u.test(fields.printExtension), 'Проверьте расширение печати.');
   check(fields.name || assigningStore && !before?.name, 'Укажите название товара.');
   const units = input.unitsPerBox;

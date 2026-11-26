@@ -44,19 +44,20 @@ async function uploadMedia(file: Blob) {
   return data;
 }
 
-const empty = (): ManagedProduct => ({
+export const emptyCatalogProduct = (): ManagedProduct => ({
   id:'',market:'OZON',store:'1',sku:'',aliases:[],name:'',barcode:'',kind:'',category:'',machine:'',packaging:'',size:'',sheetsPerUnit:'',
   printFolder:'',printExtension:'',catalogDepartment:'',boxType:'',unitsPerBox:null,rollMultiplicity:'',xeroxMultiplicity:'',capacitySource:'review',photoId:null,issues:[],rows:[],
 });
-export function CatalogEditor({ item, initialDraft, importId, workspace:w, onClose, onSaved, onOpenExisting, normRequest, normFocus, inline=false }: {
+export function CatalogEditor({ item, initialDraft, importId, workspace:w, onClose, onSaved, onOpenExisting, normRequest, normFocus, barcodeHandoff=false, inline=false }: {
   item:ManagedDetail | null; initialDraft?:ManagedProduct; importId:string; workspace:Workspace;
   onClose():void; onSaved(nextDraft?:ManagedProduct, workNotice?:{ text:string; pending:boolean }):void; inline?:boolean;
   onOpenExisting?(entry: ManagedDetail): void;
   normRequest?: { workIds:string[]; article:string; market:string|null; store:string|null };
   normFocus?: "kind";
+  barcodeHandoff?: boolean;
 }) {
   const initial = item ?? initialDraft;
-  const [product,setProduct]=useState<ManagedProduct>(()=>initial ? {...initial} : empty());
+  const [product,setProduct]=useState<ManagedProduct>(()=>initial ? {...initial} : emptyCatalogProduct());
   const [aliases,setAliases]=useState(item ? editableAliases(item) : '');
   const [capacity,setCapacity]=useState(initial?.unitsPerBox?.toString() || '');
   const [norms,setNorms]=useState<Record<Operation,string>>({cut:String(initial?.workNorms?.cut ?? ''),assembly:String(initial?.workNorms?.assembly ?? ''),packing:String(initial?.workNorms?.packing ?? '')});
@@ -245,7 +246,10 @@ export function CatalogEditor({ item, initialDraft, importId, workspace:w, onClo
       let savedRevision = item?.editRevision ?? 0;
       let saved = false;
       if ((!createPair || !item || changed) && (!appliesToWork || changed || !item)) {
-        const result = await w.command('catalog.save',{id:item?.id ?? null,create:!item,revision:item?.editRevision || 0,importId,product:draft},'Карточка сохранена');
+        const result = await w.command('catalog.save',{
+          id:item?.id ?? null,create:!item,revision:item?.editRevision || 0,importId,product:draft,
+          ...(barcodeHandoff ? { barcodeHandoff: true } : {}),
+        },'Карточка сохранена');
         savedEntryId = typeof result.entryId === 'string' ? result.entryId : savedEntryId;
         savedRevision = typeof result.revision === 'number' ? result.revision : savedRevision;
         saved = true;
@@ -264,7 +268,7 @@ export function CatalogEditor({ item, initialDraft, importId, workspace:w, onClo
         }
       }
       onSaved(createPair ? {
-        ...empty(),...templateValues(draft),market:pairedMarket,store:draft.store,
+        ...emptyCatalogProduct(),...templateValues(draft),market:pairedMarket,store:draft.store,
         sku:catalogArticleForMarket(draft.sku,pairedMarket),
         unitsPerBox:draft.unitsPerBox,workNorms:draft.workNorms,
         photoUrl:draft.photoUrl ?? item?.photo?.primary ?? null,

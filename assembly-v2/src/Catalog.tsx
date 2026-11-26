@@ -1,6 +1,9 @@
-import { CatalogEditor } from "./CatalogEditor";
+import { CatalogEditor, emptyCatalogProduct } from "./CatalogEditor";
 import { catalogKey } from "../shared/catalog";
-import type { ManagedDetail, ManagedProduct } from "../shared/catalog-editor";
+import {
+  catalogHandoffBarcode, catalogHandoffStore,
+  type CatalogHandoffLookup, type ManagedDetail, type ManagedProduct,
+} from "../shared/catalog-editor";
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
 import type {
   CatalogBundle,
@@ -51,7 +54,18 @@ const labels: Record<string, string> = {
   store: "Магазин",
 };
 export function Catalog({ workspace: w }: { workspace: Workspace }) {
-  const initial = new URLSearchParams(location.search);
+  const [initial] = useState(() => new URLSearchParams(location.search));
+  const handoffBarcode = initial.get("catalog_barcode");
+  const handoffMarket = initial.get("catalog_market");
+  const handoffArticle = initial.get("catalog_article") ?? "";
+  const handoffStore = initial.get("catalog_store") ?? "";
+  const supportedHandoff = (handoffMarket === "WB" || handoffMarket === "OZON") &&
+    catalogHandoffBarcode(handoffBarcode, handoffMarket) &&
+    handoffArticle.length <= 300 && !/[\x00-\x1f\x7f]/.test(handoffArticle);
+  const [showHandoff, setShowHandoff] = useState(handoffBarcode !== null);
+  const [selectedHandoffStore, setSelectedHandoffStore] = useState(
+    catalogHandoffStore(handoffStore) ? handoffStore : "");
+  const [handoffError, setHandoffError] = useState("");
   const repairWorkIds = (initial.get("catalog_norm_work") ?? "").split(",")
     .filter(id => /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)).slice(0, 50);
   const normRequest = repairWorkIds.length ? {
@@ -69,9 +83,10 @@ export function Catalog({ workspace: w }: { workspace: Workspace }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [detail, setDetail] = useState<CatalogListItem | null>(null);
-  const [editor,setEditor]=useState<ManagedDetail | {draft:ManagedProduct} | "new" | null>(null);
+  const [editor,setEditor]=useState<ManagedDetail | { draft:ManagedProduct; barcodeImportId?:string } | "new" | null>(null);
   const activeCard = editor && editor!=="new" && !("draft" in editor) ? editor : null;
-  const initialDraft = editor && editor!=="new" && "draft" in editor ? editor.draft : undefined;
+  const draftEditor = editor && editor !== "new" && "draft" in editor ? editor : null;
+  const initialDraft = draftEditor?.draft;
   const [importing, setImporting] = useState(false);
   const [version, setVersion] = useState(0);
   const [notice, setNotice] = useState("");
@@ -95,11 +110,52 @@ export function Catalog({ workspace: w }: { workspace: Workspace }) {
   function openEditor(item: CatalogListItem) {
     return openEntry(new URLSearchParams({ import: item.importId, id: item.id }));
   }
+  const finishHandoff = useCallback(() => {
+    setShowHandoff(false);
+    const url = new URL(location.href);
+    url.searchParams.delete("catalog_barcode");
+    url.searchParams.delete("catalog_article");
+    history.replaceState(null, "", url);
+  }, []);
+  const openBarcode = useCallback(async (shop: string) => {
+    if (!supportedHandoff || !catalogHandoffStore(shop)) return;
+    editorRequest.current?.abort();
+    const controller = new AbortController();
+    editorRequest.current = controller;
+    setOpening(true);
+    setHandoffError("");
+    try {
+      const params = new URLSearchParams({ market: handoffMarket, store: shop, barcode: handoffBarcode });
+      const result = await catalogRequest<CatalogHandoffLookup>(`/api/catalog/entry?${params}`, undefined, controller.signal);
+      if (controller.signal.aborted) return;
+      if (result.status === "found") {
+        setEditor(result.entry);
+      } else if (result.status === "missing") {
+        setEditor({
+          draft: { ...emptyCatalogProduct(), market: handoffMarket, store: shop,
+            barcode: handoffBarcode, sku: catalogKey(handoffArticle) },
+          barcodeImportId: result.importId,
+        });
+      } else {
+        throw new Error("Справочник не подтвердил результат проверки.");
+      }
+      setStore(shop);
+      setPage(0);
+      finishHandoff();
+    } catch (error) {
+      if (!controller.signal.aborted) setHandoffError((error as Error).message);
+    } finally {
+      if (!controller.signal.aborted) setOpening(false);
+    }
+  }, [supportedHandoff, handoffMarket, handoffBarcode, handoffArticle, finishHandoff]);
+  useEffect(() => {
+    if (catalogHandoffStore(handoffStore)) void openBarcode(handoffStore);
+  }, [handoffStore, openBarcode]);
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const sku = params.get("catalog_q");
     const market = params.get("catalog_market");
-    if (params.get("catalog_open") === "1" && sku && market) {
+    if (!params.has("catalog_barcode") && params.get("catalog_open") === "1" && sku && market) {
       void openEntry(new URLSearchParams({ sku, market, store: params.get("catalog_store") ?? "" }));
     }
   }, [openEntry]);
@@ -170,13 +226,37 @@ export function Catalog({ workspace: w }: { workspace: Workspace }) {
           <h1>Справочник</h1>
           <p className="muted">Артикулы, упаковка, станки и фотографии</p>
         </div>
-        <div className="catalog-heading-actions"><Button onClick={() => safely(()=>setImporting(true))}>Загрузить Excel</Button><Button primary disabled={!data?.active || w.busy} onClick={()=>safely(()=>{editorRequest.current?.abort();setOpening(false);setEditor("new")})}>+ Добавить товар</Button></div>
+        <div className="catalog-heading-actions"><Button onClick={() => safely(()=>setImporting(true))}>Загрузить Excel</Button><Button primary disabled={!data?.active || !canOpenEditor} onClick={()=>safely(()=>{editorRequest.current?.abort();setOpening(false);setEditor("new")})}>+ Добавить товар</Button></div>
       </div>
       {notice ? (
         <p className="status-success" role="status">
           {notice}
         </p>
       ) : null}
+      {showHandoff && (
+        <section className="catalog-barcode-handoff" aria-label="Карточка по штрихкоду">
+          {supportedHandoff ? <>
+            <div>
+              <strong>{handoffMarket} · {handoffBarcode}</strong>
+              <p className="muted">Выберите магазин, чтобы открыть карточку товара или заполнить новую.</p>
+            </div>
+            <div className="catalog-barcode-actions">
+              <NativeSelect label="Магазин для штрихкода" value={selectedHandoffStore} disabled={opening}
+                onChange={(event) => setSelectedHandoffStore(event.target.value)}>
+                <option value="">Выберите магазин</option>
+                <option value="1">Магазин 1</option>
+                <option value="2">Магазин 2</option>
+              </NativeSelect>
+              <Button primary disabled={!selectedHandoffStore || !canOpenEditor}
+                onClick={() => safely(() => void openBarcode(selectedHandoffStore))}>
+                {opening ? "Проверяем…" : "Проверить штрихкод"}
+              </Button>
+            </div>
+            {handoffError && <p className="status-error" role="alert">{handoffError}</p>}
+          </> : <p className="status-error" role="alert">Ссылка содержит неверный штрихкод, маркетплейс или артикул.</p>}
+          <Button disabled={opening} onClick={finishHandoff}>Закрыть</Button>
+        </section>
+      )}
       {data?.active ? (
         <div className="catalog-summary">
           {missingLabel ? (
@@ -372,7 +452,8 @@ export function Catalog({ workspace: w }: { workspace: Workspace }) {
       </div>
       </div>
       {editor && data?.active ? <CatalogEditor key={activeCard?.id ?? (initialDraft ? `draft:${initialDraft.market}:${initialDraft.sku}` : "new")} inline item={activeCard}
-        initialDraft={initialDraft} importId={data.active.id} workspace={w}
+        initialDraft={initialDraft} importId={activeCard?.importId ?? draftEditor?.barcodeImportId ?? data.active.id} workspace={w}
+        barcodeHandoff={!!draftEditor?.barcodeImportId}
         normRequest={!initialDraft ? normRequest : undefined}
         normFocus={initial.get("catalog_focus") === "kind" ? "kind" : undefined}
         onOpenExisting={setEditor} onClose={()=>{editorRequest.current?.abort();setOpening(false);setEditor(null)}}

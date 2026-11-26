@@ -1,8 +1,12 @@
 import { labelArticle, labelMime } from "../shared/labels";
 import { json, type Database } from "./api";
 import type { SqlStore, Statement } from "./database";
-import { catalogFamilyKey, type CatalogFamilyCard, type CatalogFamilyMatches } from "../shared/catalog-editor";
 import {
+  catalogFamilyKey, catalogHandoffBarcode, catalogHandoffStore,
+  type CatalogFamilyCard, type CatalogFamilyMatches, type CatalogHandoffLookup,
+} from "../shared/catalog-editor";
+import {
+  catalogBarcodeMatches,
   catalogDetail,
   catalogList,
   findCatalogAliases,
@@ -257,6 +261,24 @@ export async function catalogApi(
     if (request.method === "GET" && url.pathname === "/api/catalog")
       return json(await catalogList(store, url));
     if (request.method === "GET" && url.pathname === "/api/catalog/entry") {
+      const barcode = url.searchParams.get("barcode");
+      if (barcode !== null) {
+        const market = url.searchParams.get("market"), shop = url.searchParams.get("store");
+        if ((market !== "WB" && market !== "OZON") || !catalogHandoffBarcode(barcode, market) || !catalogHandoffStore(shop))
+          return json({ error: "Проверьте штрихкод, маркетплейс и магазин." }, 400);
+        const [active] = await store.all<{ activeCatalogId: string | null }>(
+          "select active_catalog_id from av2_meta where id=1");
+        const importId = active?.activeCatalogId;
+        if (!importId) return json({ error: "Справочник пока не подключён." }, 409);
+        const matches = await catalogBarcodeMatches(store, importId, market, shop, barcode);
+        if (matches.length > 1)
+          return json({ error: "В этом магазине несколько карточек с таким штрихкодом. Сверьте их в справочнике." }, 409);
+        if (!matches.length) return json({ status: "missing", importId } satisfies CatalogHandoffLookup);
+        const entry = await catalogDetail(store, importId, matches[0].entryId);
+        if (entry?.barcode !== barcode || entry.market !== market || entry.store !== shop)
+          return json({ error: "Карточка изменилась. Повторите проверку." }, 409);
+        return json({ status: "found", entry } satisfies CatalogHandoffLookup);
+      }
       const article = url.searchParams.get("sku");
       if (article !== null) {
         const sku = catalogKey(article);

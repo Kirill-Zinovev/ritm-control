@@ -13,6 +13,11 @@ import { positionNeedsStoreReviewSql } from "./position-search";
 // Keep moved cards available to historical positions while excluding them from
 // catalog selection. Their managed row also masks the old key in later imports.
 export const selectableCatalog = "(select * from av2_resolved_catalog_entries where json_extract(data,'$.retiredIdentity') is null)";
+export function catalogBarcodeMatches(store: SqlStore, importId: string, market: string, shop: string, barcode: string) {
+  return store.all<{ entryId: string }>(`select entry_id from ${selectableCatalog}
+    where import_id=? and market=? and store=? and json_extract(data,'$.barcode')=? limit 2`,
+    [importId, market, shop, barcode]);
+}
 const q = (sql: string, ...args: (string | number | null)[]): Statement => ({
   sql,
   args,
