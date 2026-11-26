@@ -1473,7 +1473,8 @@ function AppShell() {
                   </section>
                 </div>
                 </div>
-                {printingDepartment!=='roll'&&<BoxPrintingStats value={printingReport} date={date} period={period} supplyFilter={supplyFilter} />}
+                {printingDepartment!=='roll'&&<BoxPrintingStats value={printingReport} date={date} period={period}
+                  supplyFilter={supplyFilter} liveSheetReport={mode === "imported" && cloudAuth.mode === "cloud"} />}
                 <div hidden={printingDepartment === "box"}>
                 {mode === "imported" && live.value && (
                   <section className="panel">

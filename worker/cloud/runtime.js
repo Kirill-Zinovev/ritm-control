@@ -21,6 +21,7 @@ import { CloudSheetsReader } from "./googleSheets.js";
 import { printingWorkspaceFeed, printingWorkspaceWrite } from "./printing-workspace/feed.mjs";
 import { printingReadModel } from "./printing-workspace/read-model.mjs";
 import { isPrintingWorkMonth, readD1PrintingWork } from "./printingD1Work.js";
+import { readLiveBoxSheetReport } from "./boxSheetReport.js";
 import { CloudStore } from "./store.js";
 import { CloudError, json, readJson, requireOwner, requireMaintenance } from "./access.js";
 import { assertSameOrigin, changeManagerPin, createManagerUser, listManagerUsers, loginWithPin, logoutWithPin, readOwnerPinSettings, removeOwnerPin, resetManagerPin, resolvePrincipal, ritmOwnerAccount, saveOwnerPin, setManagerStatus } from "./auth.js";
@@ -1097,6 +1098,15 @@ export async function cloudApi(request, bindings, ctx, { fetcher = fetch } = {})
     }
     if (path === "/api/printing") {
       methods(request, ["GET"]);
+      if (url.searchParams.get("view") === "box-sheets") {
+        if (!["owner", "manager"].includes(principal?.role))
+          throw new CloudError("manager_required", "Число листов доступно владельцу и менеджеру RITM.", 403);
+        return json(await readLiveBoxSheetReport(
+          new CloudSheetsReader(bindings, { fetcher }),
+          sourceId(bindings, "boxPrintingId"),
+          store,
+        ));
+      }
       if (url.searchParams.get("view") === "work") {
         if (!["owner", "manager"].includes(principal?.role))
           throw new CloudError("manager_required", "Журнал печати доступен в RITM владельцу и менеджеру.", 403);

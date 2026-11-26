@@ -2,6 +2,8 @@ import { Fragment, useId, useMemo, useState } from "react";
 import { Package, CaretRight } from "./icons";
 import { inPeriod, num, type Period } from "./model";
 import type { BoxPrintingEvent, LivePrinting } from "./livePrinting";
+import { useBoxSheetReport } from "./useBoxSheetReport";
+import { printingSnapshotTime } from "./printingSnapshotRefresh";
 
 const goodsNumber = (value: number) => num(value);
 const boxDate = (value: string) =>
@@ -66,11 +68,13 @@ export function BoxPrintingStats({
   date,
   period,
   supplyFilter,
+  liveSheetReport,
 }: {
   value: LivePrinting | null;
   date: string;
   period: Period;
   supplyFilter: string;
+  liveSheetReport?: boolean;
 }) {
   const [employee, setEmployee] = useState("");
   const [view, setView] = useState<"employees" | "days">("employees");
@@ -80,7 +84,11 @@ export function BoxPrintingStats({
   >("all");
   const [query, setQuery] = useState("");
   const source = value?.boxPrinting;
-  const sheetReport = value?.boxSheetReport;
+  const { value: liveSheetCounts, refresh: refreshSheetCounts } = useBoxSheetReport(!!liveSheetReport);
+  const sheetReport = liveSheetReport ? liveSheetCounts?.report : value?.boxSheetReport;
+  const showSheetMetric = liveSheetReport || !!sheetReport;
+  const sheetReportUnavailable = liveSheetCounts?.state === "stale" || sheetReport?.status === "unavailable";
+  const sheetReportTime = liveSheetCounts?.checkedAt && printingSnapshotTime(liveSheetCounts.checkedAt);
   const [showSheetReport, setShowSheetReport] = useState(false);
   const sheetReportId = useId();
   const sheetRows = useMemo(
@@ -158,19 +166,23 @@ export function BoxPrintingStats({
               </p>
             </div>
           </div>
-          {(source?.status === "available" || sheetReport) && (
-            <div className={`printing-kpis${sheetReport ? " printing-kpis--box-sheets" : ""}`}>
+          {(source?.status === "available" || showSheetMetric) && (
+            <div className={`printing-kpis${showSheetMetric ? " printing-kpis--box-sheets" : ""}`}>
               {source?.status === "available" && (
                 <div><span>Площадь печати</span><strong>{num(total.area, 2)} м²</strong></div>
               )}
-              {sheetReport && (
+              {showSheetMetric && (
                 <button type="button" className="box-sheet-kpi" aria-expanded={showSheetReport}
-                  aria-controls={sheetReportId} onClick={() => setShowSheetReport(open => !open)}>
+                  aria-controls={sheetReportId} onClick={() => {
+                    if (!showSheetReport && liveSheetReport) refreshSheetCounts();
+                    setShowSheetReport(!showSheetReport);
+                  }}>
                   <span>Фактически листов</span>
-                  <strong>{sheetReport.total === null ? "—" : num(sheetReport.total)}</strong>
-                  <small>{sheetReport.status === "available"
-                    ? `Внесено по ${sheetReport.entered} из ${sheetRows.length} поставок`
-                    : "Таблица недоступна"}</small>
+                  <strong>{sheetReport?.total == null ? "—" : num(sheetReport.total)}</strong>
+                  <small>{sheetReportUnavailable
+                    ? sheetReport?.status === "available" ? "Последние сохранённые данные" : "Таблица недоступна"
+                    : sheetReport ? `Внесено по ${sheetReport.entered} из ${sheetRows.length} поставок`
+                      : "Читаем таблицу…"}</small>
                   <CaretRight size={18} aria-hidden />
                 </button>
               )}
@@ -180,13 +192,15 @@ export function BoxPrintingStats({
             </div>
           )}
         </div>
-        {sheetReport && (
+        {showSheetMetric && (
           <div id={sheetReportId} hidden={!showSheetReport} className="box-sheet-report">
             <h3>Листы по поставкам Бокса</h3>
             <p>Введённые в шапке числа, включая сохранённые значения в архиве.</p>
-            {sheetReport.status === "unavailable" ? (
-              <p role="status">Google Sheets не подтвердил данные. Повторите обновление.</p>
-            ) : sheetRows.length ? (
+            {sheetReportTime && <p>Данные на {sheetReportTime}</p>}
+            {sheetReportUnavailable && (
+              <p role="status">Google Sheets пока не подтвердил обновление.</p>
+            )}
+            {sheetRows.length ? (
               <div className="table-wrap printing-employee-table box-sheet-report-table">
                 <table>
                   <thead><tr><th scope="col">Поставка</th><th scope="col">Фактически листов</th></tr></thead>
@@ -203,7 +217,8 @@ export function BoxPrintingStats({
                   ))}</tbody>
                 </table>
               </div>
-            ) : <p>Открытых поставок Бокса нет.</p>}
+            ) : sheetReport?.status === "available" ? <p>Открытых поставок Бокса нет.</p>
+              : !sheetReportUnavailable && <p role="status">Читаем значения из шапок поставок…</p>}
           </div>
         )}
         {source?.status !== "available" ? (

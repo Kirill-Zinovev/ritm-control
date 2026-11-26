@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { BOX_SHEET_REPORT_LABEL, readBoxSheetReport } from "../agent/boxSheetReport.js";
+import { readLiveBoxSheetReport } from "../worker/cloud/boxSheetReport.js";
 
 const label = { userEnteredValue: { stringValue: BOX_SHEET_REPORT_LABEL } };
 const documentId = "verified-box-workbook-for-test";
@@ -66,4 +67,63 @@ test("an unfilled report has no sum while an explicitly entered zero does", asyn
   const zero = await read({ userEnteredValue: { numberValue: 0 } });
   assert.equal(zero.total, 0);
   assert.equal(zero.entered, 1);
+});
+
+test("Box sheet counts refresh independently from the full printing snapshot and keep the last confirmed total on failure", async () => {
+  const first = supply(1, "Ozon Ярославль");
+  let now = 100000, count = 5, cached = null, acquisitions = 0, held = false;
+  let googleUnavailable = false, reads = 0;
+  const store = {
+    now: () => now,
+    async snapshot(kind) {
+      assert.equal(kind, "printing-box-sheet-report");
+      return cached;
+    },
+    async acquire(kind) {
+      assert.equal(kind, "printing-box-sheet-report");
+      acquisitions++;
+      if (held) throw Object.assign(new Error("busy"), { code: "cloud_operation_busy" });
+      held = true;
+      return kind;
+    },
+    async saveSnapshot(_kind, value, _lease, at) {
+      assert.equal(held, true);
+      cached = { value, at };
+    },
+    async release() { held = false; },
+  };
+  const reader = { async get(id, { ranges }) {
+    reads++;
+    if (googleUnavailable) throw new Error("connection failed");
+    return { spreadsheetId: id, sheets: ranges ? [banner(first, { userEnteredValue: { numberValue: count } })] : [first] };
+  } };
+  const read = () => readLiveBoxSheetReport(reader, documentId, store);
+  assert.equal((await read()).report.total, 5);
+  assert.equal(reads, 2);
+  count = 7;
+  now += 2000;
+  assert.equal((await read()).report.total, 5);
+  assert.equal(reads, 2);
+
+  now += 8000;
+  held = true;
+  const syncing = await read();
+  assert.equal(syncing.state, "syncing");
+  assert.equal(syncing.report.total, 5);
+  assert.equal(reads, 2);
+  held = false;
+  const updated = await read();
+  assert.equal(updated.state, "ready");
+  assert.equal(updated.report.total, 7);
+  assert.equal(updated.report.rows[0].count, 7);
+  assert.equal(reads, 4);
+
+  now += 10000;
+  googleUnavailable = true;
+  const stale = await read();
+  assert.equal(stale.state, "stale");
+  assert.equal(stale.report.total, 7);
+  assert.equal(stale.checkedAt, updated.checkedAt);
+  assert.equal(held, false);
+  assert.equal(acquisitions, 4);
 });

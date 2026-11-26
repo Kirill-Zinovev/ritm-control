@@ -74,6 +74,20 @@ export type LiveOrder = {
   spreadsheetId?: string;
   sourceUrl?: string;
 };
+export type BoxSheetReport = {
+  status: "available" | "unavailable";
+  entered: number;
+  total: number | null;
+  rows: {
+    sheetId: number;
+    name: string;
+    url: string;
+    archived: boolean;
+    status: "entered" | "empty" | "missing" | "invalid";
+    count: number | null;
+  }[];
+};
+
 export type LivePrinting = {
   ok: true;
   schemaVersion: 2;
@@ -104,19 +118,7 @@ export type LivePrinting = {
     ambiguous: number;
   };
   boxPrinting?: {stockStatus?: string; status: "available" | "unavailable"; reason: string | null; exceptions?: {id: string; date: string; timestamp: string; shipment: string; sheetId: number; article: string; employee: string; kind: "defect" | "surplus"; quantity: number; unit: "sheets" | "pieces" | "unknown"; stage: string; comment: string}[]; events: BoxPrintingEvent[]; cutEvents?: BoxPrintingEvent[]};
-  boxSheetReport?: {
-    status: "available" | "unavailable";
-    entered: number;
-    total: number | null;
-    rows: {
-      sheetId: number;
-      name: string;
-      url: string;
-      archived: boolean;
-      status: "entered" | "empty" | "missing" | "invalid";
-      count: number | null;
-    }[];
-  };
+  boxSheetReport?: BoxSheetReport;
   events: LiveEvent[];
   cutEvents?: LiveEvent[];
   stockRoll?: {status:string;orders:LiveOrder[];reason?:string|null};
