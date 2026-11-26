@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { IncidentStore } from "../agent/store.js";
 import {
   RollSupplyManagementService,
@@ -1434,10 +1435,12 @@ for (const department of ["roll", "box"]) test(`${department} writes catalog-onl
   const google = googleHarness({ box });
   google.sheets.delete(1475850544);
   google.sheets.set(849681173, { properties: { sheetId: 849681173, title: "_RITM_СПРАВОЧНИК", gridProperties: {rowCount: 100, columnCount: 6} }, data: [{ rowData: [] }] });
-  const headings = google.sheets.get(DEPARTMENTS[department].template.gid).data[0].rowData[3].values;
+  const templateRows = google.sheets.get(DEPARTMENTS[department].template.gid).data[0].rowData;
+  const headings = templateRows[3].values;
   for (const [column, label] of [[2, "Фото"], [4, "Станок"], [box ? 6 : 7, "Кол-во листов"], [box ? 7 : 8, "Размер"],
-    [box ? 12 : 13, "Папка печати"], [box ? 13 : 14, "Кратность"]])
+    [box ? 12 : 13, "Папка печати"], [box ? 13 : 14, "Кратность"], [box ? 26 : 27, "Магазин"]])
     headings[column - 1] = { userEnteredValue: { stringValue: label } };
+  if (box) templateRows[4].values[25] = { userEnteredValue: { formulaValue: "=OLD_STORE(E5)" } };
   const writer = new ProductionSupplyWriter({ department, assemblyCatalogOnly: true,
     credentialWriter: { token: async () => "test-token", metrics: {} }, fetcher: google.fetcher });
   const lines = [{ article: "FIRST", quantity: 10, extension: "F", catalogMachine: box ? "DTF" : "2-GO", store: "2" }];
@@ -1445,11 +1448,41 @@ for (const department of ["roll", "box"]) test(`${department} writes catalog-onl
   const created = await writer.prepareCreate(input);
   await writer.execute(created);
   await writer.verify(created);
+  const values = google.sheets.get(created.sheetId).data[0].rowData[4].values;
+  assert.deepEqual(values[26].userEnteredValue, box ? { stringValue: "2" } : { formulaValue: '="2"' });
+  if (box) {
+    const legacyStore = { row: 5, column: 27, cell: "AA5", sourceCell: "E5", formula: '="2"' };
+    const legacyFormulas = values.flatMap((cell, index) => {
+      const formula = index === 26 ? legacyStore.formula : cell.userEnteredValue?.formulaValue;
+      const column = index < 26 ? String.fromCharCode(65 + index) : "A" + String.fromCharCode(39 + index);
+      return formula ? [[column + "5", formula]] : [];
+    });
+    const savedPlan = structuredClone(created);
+    savedPlan.formulaRepairs.push(legacyStore);
+    savedPlan.formulaSignature = {
+      count: legacyFormulas.length,
+      digest: createHash("sha256").update(JSON.stringify(legacyFormulas)).digest("hex"),
+    };
+    assert.equal(savedPlan.formulaSignature.count, created.formulaSignature.count + 1);
+    const reloaded = new ProductionSupplyWriter({ department, assemblyCatalogOnly: true,
+      credentialWriter: { token: async () => "test-token", metrics: {} }, fetcher: google.fetcher });
+    const writes = google.counters.writes;
+    await reloaded.verify(savedPlan);
+    assert.equal(google.counters.writes, writes);
+    const photo = values[1];
+    values[1] = { userEnteredValue: { formulaValue: '=WRONG_PHOTO(E5)' } };
+    await assert.rejects(reloaded.verify(savedPlan), { code: "roll_supply_formula_readback_failed" });
+    values[1] = photo;
+    values[26] = { userEnteredValue: { stringValue: "1" } };
+    await assert.rejects(reloaded.verify(savedPlan), { code: "roll_supply_formula_readback_failed" });
+    values[26] = { userEnteredValue: { stringValue: "2" } };
+  }
   const added = await writer.prepareAppend({ ...input, operationId: "40b42ade-e0e0-4526-8870-4926a952ead9", sheetId: created.sheetId,
     lines: [{ ...lines[0], article: "SECOND" }], registeredSheets: [{ gid: created.sheetId, name: input.name }] });
   await writer.execute(added);
   await writer.verify(added);
   const firstRow = google.sheets.get(created.sheetId).data[0].rowData[4].values;
+  assert.deepEqual(firstRow[26].userEnteredValue, box ? { stringValue: "2" } : { formulaValue: '="2"' });
   assert.equal(firstRow[3].userEnteredValue.formulaValue, `="${lines[0].catalogMachine}"`);
   for (const column of [1, 6, 7, 12, 13]) {
     assert.match(firstRow[column].userEnteredValue.formulaValue, /_RITM_СПРАВОЧНИК/);

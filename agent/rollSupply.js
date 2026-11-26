@@ -42,6 +42,8 @@ const BOX_LAYOUT = Object.freeze({
   printReady: 18,
   cutReady: 19,
 });
+const BOX_STORE_COLUMN = 27; // AA is written as a literal input.
+const BOX_INITIALIZED_COLUMNS = [21, 22, 23, 24, 25, 26, BOX_STORE_COLUMN, 28, 29];
 
 // Box work events live in a separate journal. A new copy must never inherit
 // another shipment's totals, timestamps or row metadata identities.
@@ -77,7 +79,7 @@ function boxWorklogFormulaGrid(grid,lines,clearThrough){
   const rows=copy.data[0].rowData;
   for(let row=DATA_START_ROW;row<=clearThrough;row++){
     const values=(rows[row-1]||= {values:[]}).values;
-    for(const col of [21,22,23,24,25,26,28,29])values[col-1]={};
+    for (const column of BOX_INITIALIZED_COLUMNS) values[column - 1] = {};
   }
   const requests=boxWorklogInitializationRequests({sheetId:0,startRow:DATA_START_ROW,clearThrough,lines},35);
   const progress=requests.find(r=>r.updateCells?.start?.columnIndex===23).updateCells;
@@ -399,6 +401,24 @@ function formulaSignature(grid, startRow, endRow, formulaRepairs = [], layout = 
     count: formulas.length,
     digest: createHash("sha256").update(JSON.stringify(formulas)).digest("hex"),
   };
+}
+
+function sameFormulaSignature(actual, expected) {
+  return actual.count === expected.count && actual.digest === expected.digest;
+}
+
+const textFormula = (value) => `="${String(value || "").replace(/"/g, '""')}"`;
+
+function legacyBoxStoreFormulas(grid, plan) {
+  // Older plans hashed formulas in AA that the same batch subsequently replaced
+  // with the confirmed store. Reconstruct that hash only for matching inputs.
+  return (plan.formulaRepairs || []).filter((repair) => {
+    if (repair.column !== BOX_STORE_COLUMN) return false;
+    const line = plan.lines[repair.row - plan.startRow];
+    if (!line || repair.formula !== textFormula(line.store)) return false;
+    const cell = gridCell(grid, repair.row, BOX_STORE_COLUMN);
+    return !cell.userEnteredValue?.formulaValue && entered(cell) === String(line.store || "");
+  });
 }
 
 function validateTemplate(grid, allowEmptyUid = false, layout = ROLL_LAYOUT, requireExtension = false) {
@@ -725,10 +745,9 @@ export class RollSupplySheetsWriter {
     return lines.flatMap((line, index) => {
       const row = startRow + index;
       const repair = (column, formula) => ({ row, column, cell: columnName(column) + row, sourceCell: "E" + row, formula });
-      const text = value => `="${String(value || "").replace(/"/g, '""')}"`;
       const fields = columns.map((column, field) => repair(column, sheetCatalogFormula(target, row, field + 1)));
-      if (line.catalogMachine) fields.push(repair(machine, text(line.catalogMachine)));
-      if (store) fields.push(repair(store, text(line.store)));
+      if (line.catalogMachine) fields.push(repair(machine, textFormula(line.catalogMachine)));
+      if (store && (!this.box || store !== BOX_STORE_COLUMN)) fields.push(repair(store, textFormula(line.store)));
       if (this.box && line.xeroxFactor && line.xeroxMultiplicity) {
         fields[1] = repair(columns[1], `=${line.xeroxFactor}`);
         fields[4] = repair(columns[4], `=${line.xeroxMultiplicity}`);
@@ -1003,7 +1022,6 @@ export class RollSupplySheetsWriter {
       const add = (column, formula) => formulaRepairs.push({
         row, column, cell: columnName(column) + row, sourceCell: "E" + row, formula,
       });
-      const textFormula = value => `="${value.replace(/"/g, '""')}"`;
       add(catalogColumn("Станок"), textFormula(line.catalogMachine));
       if (!this.box && line.store) add(catalogColumn("Магазин"), textFormula(line.store));
       if (this.box && line.xeroxFactor && line.xeroxMultiplicity) {
@@ -1015,7 +1033,7 @@ export class RollSupplySheetsWriter {
       this.box ? boxWorklogFormulaGrid(sourceGrid,lines,clearThrough) : sourceGrid,
       DATA_START_ROW,
       clearThrough,
-      this.box ? formulaRepairs.filter(r=>![21,22,23,24,25,26,28,29].includes(r.column)) : formulaRepairs,
+      this.box ? formulaRepairs.filter((repair) => !BOX_INITIALIZED_COLUMNS.includes(repair.column)) : formulaRepairs,
       this.layout,
     );
     validateTemplateInputRange(sourceGrid, clearThrough, this.layout);
@@ -1549,7 +1567,7 @@ export class RollSupplySheetsWriter {
         "number",
       ),
       ...(this.box ? [cellsForColumn(
-        { sheetId, startRow: plan.startRow, columnIndex: 26, items: articleItems },
+        { sheetId, startRow: plan.startRow, columnIndex: BOX_STORE_COLUMN - 1, items: articleItems },
         "store",
         "string",
       )] : []),
@@ -1692,15 +1710,18 @@ export class RollSupplySheetsWriter {
         [],
         this.layout,
       );
-      if (
-        actualFormulas.count !== plan.formulaSignature.count ||
-        actualFormulas.digest !== plan.formulaSignature.digest
-      )
-        fail(
+      if (!sameFormulaSignature(actualFormulas, plan.formulaSignature)) {
+        const legacyStoreRepairs = this.box ? legacyBoxStoreFormulas(grid, plan) : [];
+        const legacyMatches = legacyStoreRepairs.length > 0 && sameFormulaSignature(
+          formulaSignature(grid, DATA_START_ROW, plan.clearThrough, legacyStoreRepairs, this.layout),
+          plan.formulaSignature,
+        );
+        if (!legacyMatches) fail(
           "roll_supply_formula_readback_failed",
           `Лист создан, но набор формул отличается от шаблона (${plan.formulaSignature.count} ожидалось, ${actualFormulas.count} прочитано). Повторная запись заблокирована.`,
           503,
         );
+      }
       const expected = new Map();
       plan.lines.forEach((line, index) => {
         const row = plan.startRow + index;
@@ -1713,7 +1734,7 @@ export class RollSupplySheetsWriter {
           expected.set(`${columnName(this.layout.printReady)}${row}`, false);
           expected.set(`${columnName(this.layout.cutReady)}${row}`, false);
           expected.set(`${columnName(plan.takeWorkColumn)}${row}`, false);
-          expected.set(`AA${row}`, String(plan.lines[index]?.store || ""));
+          expected.set(`${columnName(BOX_STORE_COLUMN)}${row}`, String(plan.lines[index]?.store || ""));
         }
         expected.set(`${columnName(this.layout.uid)}${row}`, plan.uids[index].uid);
       });
@@ -1770,7 +1791,7 @@ export class RollSupplySheetsWriter {
           `Google вернул другое значение в строке ${row}; операция не объявлена успешной.`,
           503,
         );
-      if (this.box && entered(gridCell(grid, row, 27)) !== String(plan.lines[index].store || ""))
+      if (this.box && entered(gridCell(grid, row, BOX_STORE_COLUMN)) !== String(plan.lines[index].store || ""))
         fail("box_store_readback_failed", `Магазин артикула ${article} в колонке AA не совпал с базой выбранного маркетплейса. Повторная запись заблокирована.`, 503);
       if (!this.box && Number(entered(gridCell(grid, row, this.layout.remainingPrint))) !== plan.lines[index].quantity)
         fail(
