@@ -3,7 +3,7 @@ import { rollCut, supplyPrinted } from "./liveSupplyProgress";
 import { buildProductionGroups } from "./productionData";
 import { buildSupplyDirections } from "./supplyDirectionData";
 
-export type DispatchStage = "print" | "cut" | "pack" | "ready" | "review";
+export type DispatchStage = "planned" | "print" | "cut" | "pack" | "ready";
 
 export type DispatchControlRow = {
   key: string;
@@ -16,16 +16,16 @@ export type DispatchControlRow = {
   plan: number;
   sent: number | null;
   remaining: number | null;
-  stage: DispatchStage;
+  stage: DispatchStage | null;
   location: string;
   cartons: { label: string; quantity: number }[];
   issue?: string;
   workQty: number;
+  plannedQty: number;
   printQty: number;
   cutQty: number;
   packQty: number;
   readyQty: number;
-  reviewQty: number;
 };
 
 export type DispatchFact = {
@@ -69,19 +69,13 @@ export type DispatchPosition = {
   plan: number;
   printed: number | null;
   cut: number | null;
-  review?: string;
+  issue?: string;
 };
 
-const unsupportedScope = "Связь позиции с РИТМ Сборкой не подтверждена.";
-const missingHistory =
-  "РИТМ Сборка не подтвердила количество отправленных штук.";
-const titleByStage: Record<DispatchStage, string> = {
-  print: "Рулонная печать",
-  cut: "Рулонная печать",
-  pack: "Сборка · короб не указан",
-  ready: "Готово к отгрузке",
-  review: "Место не подтверждено",
-};
+const unsupportedScope = "Нет данных по позиции из «РИТМ Сборки».";
+const missingHistory = "Нет данных о количестве отправленных штук.";
+const assemblyLocation = "Сборка · короб не указан";
+const unknownLocation = "Место не указано";
 const normalizeArticle = (value: string) =>
   value.trim().normalize("NFC").toUpperCase();
 const normalizeStore = (value: string) =>
@@ -125,7 +119,7 @@ export function buildDispatchPositions(live: LivePrinting | null) {
           continue;
         if (old) {
           old.plan += order.quantity;
-          old.review = "В исходном листе повторяется идентификатор позиции.";
+          old.issue = "В исходном листе повторяется идентификатор позиции.";
           continue;
         }
         result.set(positionId, {
@@ -149,6 +143,36 @@ export function buildDispatchPositions(live: LivePrinting | null) {
     }
   }
   return [...result.values()];
+}
+
+function productionLocation(position: DispatchPosition) {
+  return position.department === "box" ? "Бокс" : "Рулонная печать";
+}
+
+function stageFromMarks(
+  position: DispatchPosition,
+  fact: DispatchFact | undefined,
+): DispatchStage | null {
+  if (position.issue) return null;
+  const closed =
+    fact?.cartons.reduce(
+      (sum, box) => sum + (box.state === "closed" ? box.qty : 0),
+      0,
+    ) ?? 0;
+  if (closed >= position.plan) return "ready";
+  if (
+    position.department === "assembly" ||
+    (position.cut ?? 0) >= position.plan ||
+    (fact?.packed ?? 0) >= position.plan
+  )
+    return "pack";
+  if ((position.printed ?? 0) >= position.plan) return "cut";
+  if ((position.printed ?? 0) > 0) return "print";
+  if (fact?.cartons.some((box) => box.state === "open")) return "pack";
+  if (fact?.cartons.length) return "ready";
+  if ((position.cut ?? 0) > 0) return "pack";
+  if (position.printed === 0 && !fact?.sent && !fact?.packed) return "planned";
+  return null;
 }
 
 function classify(
@@ -176,24 +200,18 @@ function classify(
     sent: fact?.sent ?? null,
     remaining:
       fact?.sent == null ? null : Math.max(0, position.plan - fact.sent),
-    stage: "review",
-    location: titleByStage.review,
+    stage: null,
+    location: unknownLocation,
     cartons: [],
     workQty: 0,
+    plannedQty: 0,
     printQty: 0,
     cutQty: 0,
     packQty: 0,
     readyQty: 0,
-    reviewQty: 0,
   };
 
-  if (!fact) {
-    result.issue = position.review || unsupportedScope;
-    return result;
-  }
-
-  const quantity = result.remaining ?? 0;
-  const boxes = [...fact.cartons].sort(
+  const boxes = [...(fact?.cartons ?? [])].sort(
     (a, b) =>
       Number(b.state === "closed") - Number(a.state === "closed") ||
       a.label.localeCompare(b.label, "ru-RU", { numeric: true }),
@@ -202,15 +220,23 @@ function classify(
     label: box.label,
     quantity: box.qty,
   }));
-  if (fact.sent === null || position.plan !== fact.plan) {
+  if (!fact || fact.sent === null || position.plan !== fact.plan) {
     result.issue =
-      position.plan !== fact.plan
-        ? "План в производстве отличается от состава РИТМ Сборки."
-        : missingHistory;
+      position.issue ||
+      (!fact
+        ? unsupportedScope
+        : position.plan !== fact.plan
+          ? "План в производстве отличается от состава РИТМ Сборки."
+          : missingHistory);
     result.remaining = null;
+    result.stage = stageFromMarks(position, fact);
     if (result.cartons.length) result.location = cartonLabels(result.cartons);
+    else if (result.stage === "print" || result.stage === "cut")
+      result.location = productionLocation(position);
+    else if (result.stage === "pack") result.location = assemblyLocation;
     return result;
   }
+  const quantity = result.remaining ?? 0;
   if (quantity === 0) return result;
   let available = quantity;
   let inBoxesToPack = 0;
@@ -237,13 +263,10 @@ function classify(
           ),
         );
   available -= toPack;
-  const toCut =
-    position.cut === null
-      ? 0
-      : Math.min(
-          available,
-          Math.max(0, Math.floor(position.printed ?? 0) - afterBoxes - toPack),
-        );
+  const toCut = Math.min(
+    available,
+    Math.max(0, Math.floor(position.printed ?? 0) - afterBoxes - toPack),
+  );
   available -= toCut;
   const toPrint =
     position.printed === null
@@ -254,31 +277,33 @@ function classify(
         );
   available -= toPrint;
 
+  const planned = toPrint === position.plan && fact.packed === 0 ? toPrint : 0;
   result.workQty = toPrint + toCut + toPack + inBoxesToPack;
-  result.printQty = toPrint;
+  result.plannedQty = planned;
+  result.printQty = toPrint - planned;
   result.cutQty = toCut;
   result.packQty = toPack + inBoxesToPack;
-  result.reviewQty = available;
   result.stage =
-    toPrint > 0
-      ? "print"
-      : toCut > 0
-        ? "cut"
-        : toPack > 0 || inBoxesToPack > 0
-          ? "pack"
-          : available > 0
-            ? "review"
-            : "ready";
+    planned > 0
+      ? "planned"
+      : result.printQty > 0
+        ? "print"
+        : toCut > 0
+          ? "cut"
+          : result.packQty > 0
+            ? "pack"
+            : result.readyQty > 0
+              ? "ready"
+              : null;
   const places: string[] = [];
-  if (toPrint > 0 || toCut > 0)
-    places.push(position.department === "box" ? "Бокс" : "Рулонная печать");
-  if (toPack > 0) places.push(titleByStage.pack);
+  if (result.printQty > 0 || toCut > 0)
+    places.push(productionLocation(position));
+  if (toPack > 0) places.push(assemblyLocation);
   if (result.cartons.length) places.push(cartonLabels(result.cartons));
   if (available > 0) {
-    places.push(titleByStage.review);
-    result.issue = "Для части остатка нет подтверждённых данных по этапу.";
+    result.issue = "Нет отметок по этапу для части остатка.";
   }
-  result.location = places.join(" · ") || titleByStage[result.stage];
+  result.location = places.join(" · ") || unknownLocation;
   return result;
 }
 
@@ -287,11 +312,11 @@ function cartonLabels(cartons: DispatchControlRow["cartons"]) {
 }
 
 const stageRank: Record<DispatchStage, number> = {
-  print: 0,
-  cut: 1,
-  pack: 2,
-  ready: 3,
-  review: 4,
+  planned: 0,
+  print: 1,
+  cut: 2,
+  pack: 3,
+  ready: 4,
 };
 
 function mergeRow(row: DispatchControlRow, next: DispatchControlRow) {
@@ -304,19 +329,18 @@ function mergeRow(row: DispatchControlRow, next: DispatchControlRow) {
       ? null
       : row.remaining + next.remaining;
   const hasRemaining = next.remaining !== 0;
-  const knownStage = row.workQty + row.readyQty + row.reviewQty > 0;
   if (
     hasRemaining &&
-    (!knownStage || stageRank[next.stage] < stageRank[row.stage])
+    next.stage &&
+    (!row.stage || stageRank[next.stage] < stageRank[row.stage])
   )
     row.stage = next.stage;
   row.workQty += next.workQty;
+  row.plannedQty += next.plannedQty;
   row.printQty += next.printQty;
   row.cutQty += next.cutQty;
   row.packQty += next.packQty;
   row.readyQty += next.readyQty;
-  row.reviewQty += next.reviewQty;
-  if (row.remaining === null && row.workQty === 0) row.stage = "review";
   if (next.issue)
     row.issue = [...new Set([row.issue, next.issue].filter(Boolean))].join(" ");
   if (hasRemaining) {
@@ -364,7 +388,7 @@ export function buildDispatchRows(
       plan: fact.plan,
       printed: null,
       cut: null,
-      review: undefined,
+      issue: undefined,
     });
   }
 
@@ -404,7 +428,7 @@ export function buildDispatchRows(
   for (const pos of all) {
     let fact = facts.get(pos.positionId);
     if (
-      pos.review ||
+      pos.issue ||
       (fact &&
         (fact.supplyId !== pos.supplyId ||
           normalizeArticle(fact.sku) !== pos.article ||

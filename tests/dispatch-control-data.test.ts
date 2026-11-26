@@ -59,7 +59,6 @@ test("deducts sent units only, keeping partially cut, packed and boxed units in 
   assert.equal(row.stage, "cut");
   assert.equal(row.readyQty, 15);
   assert.equal(row.workQty, 55);
-  assert.equal(row.reviewQty, 0);
   assert.match(row.location, /Рулонная печать/);
   assert.match(row.location, /К-024, К-031/);
   assert.equal(row.cutQty, 35);
@@ -102,13 +101,75 @@ test("missing history and conflicting scopes yield a visible unknown instead of 
     const [row] = buildDispatchRows([position], data);
     assert.equal(row.remaining, null);
     assert.equal(row.sent, null);
-    assert.equal(row.stage, "review");
+    assert.equal(row.stage, "cut");
   }
   const [differentPlan] = buildDispatchRows(
     [position],
     [{ ...fact, plan: 121, sent: 120 }],
   );
   assert.equal(differentPlan.remaining, null);
+});
+
+test("uses only lifecycle steps as production marks advance and removes a fully dispatched row", () => {
+  const unsent = { ...fact, sent: 0, packed: 0 };
+  const [planned] = buildDispatchRows(
+    [{ ...position, printed: 0, cut: null }],
+    [unsent],
+  );
+  assert.equal(planned.stage, "planned");
+  assert.equal(planned.plannedQty, 120);
+  const [printing] = buildDispatchRows(
+    [{ ...position, printed: 20, cut: null }],
+    [unsent],
+  );
+  assert.equal(printing.stage, "print");
+  assert.equal(printing.printQty, 100);
+  assert.equal(printing.cutQty, 20);
+  const [cutting] = buildDispatchRows(
+    [{ ...position, printed: 120, cut: null }],
+    [unsent],
+  );
+  assert.equal(cutting.stage, "cut");
+  assert.equal(cutting.cutQty, 120);
+  const [packing] = buildDispatchRows(
+    [{ ...position, printed: 120, cut: 120 }],
+    [unsent],
+  );
+  assert.equal(packing.stage, "pack");
+  assert.equal(packing.packQty, 120);
+  const [ready] = buildDispatchRows(
+    [{ ...position, printed: 120, cut: 120 }],
+    [
+      {
+        ...unsent,
+        cartons: [
+          {
+            id: "box",
+            label: "К-024",
+            qty: 120,
+            state: "closed",
+            prepared: true,
+          },
+        ],
+      },
+    ],
+  );
+  assert.equal(ready.stage, "ready");
+  assert.equal(ready.remaining, 120);
+  assert.deepEqual(
+    buildDispatchRows([position], [{ ...unsent, sent: 120 }]),
+    [],
+  );
+});
+
+test("keeps the remaining quantity visible even when no stage is recorded for it", () => {
+  const [row] = buildDispatchRows(
+    [{ ...position, printed: null, cut: null }],
+    [{ ...fact, packed: 50 }],
+  );
+  assert.equal(row.remaining, 70);
+  assert.equal(row.stage, null);
+  assert.equal(row.workQty + row.readyQty, 0);
 });
 
 test("groups duplicate SKU positions only within the exact supply and store", () => {

@@ -43,7 +43,7 @@ async function fetchDispatchFacts(ids: string[], signal: AbortSignal) {
     }
     if (revision !== undefined && revision !== body.revision) {
       throw Error(
-        "История отгрузок обновилась во время загрузки. Повторите сверку.",
+        "История отгрузок обновилась во время загрузки. Обновите отчёт.",
       );
     }
     revision = body.revision;
@@ -107,7 +107,7 @@ export function useDispatchControl(live: LivePrinting | null) {
             error:
               error instanceof Error && error.name === "Error"
                 ? error.message
-                : "Не удалось прочитать историю отгрузок. Повторите сверку.",
+                : "Не удалось прочитать историю отгрузок. Обновите отчёт.",
           }));
         });
     };

@@ -2,12 +2,13 @@ import { useMemo, useState } from "react";
 import {
   ArrowSquareOut,
   ArrowsClockwise,
-  CheckCircle,
   Cube,
   DownloadSimple,
+  FileText,
   MagnifyingGlass,
   Printer,
   Scissors,
+  Truck,
   Warning,
 } from "./icons";
 import type { LivePrinting } from "./livePrinting";
@@ -19,19 +20,14 @@ import "./dispatchControl.css";
 const all = "";
 const pageSize = 40;
 const stages = {
-  print: { label: "Печать", detail: "На печати", Icon: Printer, order: 0 },
-  cut: { label: "Порезка", detail: "На порезке", Icon: Scissors, order: 1 },
-  pack: { label: "Упаковка", detail: "На упаковке", Icon: Cube, order: 2 },
+  planned: { label: "В плане", detail: "В плане", Icon: FileText, order: 0 },
+  print: { label: "Печать", detail: "На печати", Icon: Printer, order: 1 },
+  cut: { label: "Порезка", detail: "На порезке", Icon: Scissors, order: 2 },
+  pack: { label: "Упаковка", detail: "На упаковке", Icon: Cube, order: 3 },
   ready: {
-    label: "Готово к отгрузке",
-    detail: "К отгрузке",
-    Icon: CheckCircle,
-    order: 3,
-  },
-  review: {
-    label: "Требует сверки",
-    detail: "На сверку",
-    Icon: Warning,
+    label: "Отправка",
+    detail: "К отправке",
+    Icon: Truck,
     order: 4,
   },
 } satisfies Record<
@@ -76,11 +72,11 @@ function initialSupplyFilter(selection: string) {
 
 function stageAmounts(row: DispatchControlRow) {
   return {
-    print: row.printQty ?? 0,
-    cut: row.cutQty ?? 0,
-    pack: row.packQty ?? 0,
+    planned: row.plannedQty,
+    print: row.printQty,
+    cut: row.cutQty,
+    pack: row.packQty,
     ready: row.readyQty,
-    review: row.reviewQty,
   };
 }
 
@@ -89,6 +85,7 @@ function stageMatches(row: DispatchControlRow, stage: DispatchStage | "") {
 }
 
 function StageCell({ row }: { row: DispatchControlRow }) {
+  if (!row.stage) return <span aria-label="Нет данных об этапе">—</span>;
   const { Icon, label } = stages[row.stage];
   const quantities = stageAmounts(row);
   const parts = stageKeys.filter((stage) => quantities[stage] > 0);
@@ -98,7 +95,7 @@ function StageCell({ row }: { row: DispatchControlRow }) {
         <Icon size={15} aria-hidden="true" />
         {label}
       </span>
-      {parts.length > 1 && (
+      {parts.length > 1 ? (
         <small>
           {parts
             .map(
@@ -107,6 +104,8 @@ function StageCell({ row }: { row: DispatchControlRow }) {
             )
             .join(" · ")}
         </small>
+      ) : (
+        row.stage === "ready" && <small>Готово к отправке</small>
       )}
     </div>
   );
@@ -146,13 +145,13 @@ async function exportExcel(
     { header: "Где сейчас", key: "location", width: 40 },
     { header: "Короба и количество", key: "cartons", width: 43 },
     { header: "В работе, шт.", key: "work", width: 18 },
+    { header: "В плане, шт.", key: "planned", width: 18 },
     { header: "На печати, шт.", key: "print", width: 18 },
     { header: "На порезке, шт.", key: "cut", width: 18 },
     { header: "На упаковке, шт.", key: "pack", width: 18 },
-    { header: "Готово к отгрузке, шт.", key: "ready", width: 25 },
-    { header: "Нужна сверка, шт.", key: "review", width: 22 },
+    { header: "К отправке, шт.", key: "ready", width: 22 },
     { header: "Примечание", key: "note", width: 45 },
-    { header: "Сверено (МСК)", key: "checked", width: 22 },
+    { header: "Обновлено (МСК)", key: "checked", width: 22 },
   ];
   for (const row of rows) {
     sheet.addRow({
@@ -163,23 +162,23 @@ async function exportExcel(
       plan: row.plan,
       sent: row.sent,
       remaining: row.remaining,
-      stage: stages[row.stage].label,
+      stage: row.stage ? stages[row.stage].label : null,
       location: row.location || "Место не подтверждено",
       cartons: row.cartons
         .map((carton) => `${carton.label} — ${quantityLabel(carton.quantity)}`)
         .join("; "),
       work: row.remaining === null ? null : row.workQty,
+      planned: row.remaining === null ? null : row.plannedQty,
       print: row.remaining === null ? null : row.printQty,
       cut: row.remaining === null ? null : row.cutQty,
       pack: row.remaining === null ? null : row.packQty,
       ready: row.remaining === null ? null : row.readyQty,
-      review: row.remaining === null ? null : row.reviewQty,
       note: [
-        row.issue || (row.remaining === null ? "Остаток не подтверждён" : ""),
-        snapshot.stale ? "Последняя сверка, данные могли измениться" : "",
+        row.issue || (row.remaining === null ? "Нет данных об остатке." : ""),
+        snapshot.stale ? "Данные могли измениться после обновления." : "",
       ]
         .filter(Boolean)
-        .join(". "),
+        .join(" "),
       checked: snapshot.checked,
     });
   }
@@ -255,7 +254,8 @@ export function DispatchControl({
       )
       .sort(
         (left, right) =>
-          stages[left.stage].order - stages[right.stage].order ||
+          (left.stage ? stages[left.stage].order : stageKeys.length) -
+            (right.stage ? stages[right.stage].order : stageKeys.length) ||
           (right.remaining ?? 0) - (left.remaining ?? 0) ||
           compare(left.article, right.article) ||
           compare(left.supplyName, right.supplyName),
@@ -264,27 +264,33 @@ export function DispatchControl({
   const totals = visible.reduce(
     (values, row) => {
       if (row.remaining === null) {
-        values.unconfirmed += 1;
+        values.incomplete = true;
       } else {
         values.remaining += row.remaining;
         values.work += row.workQty;
         values.ready += row.readyQty;
-        values.review += row.reviewQty;
+        values.stageIncomplete ||= row.workQty + row.readyQty < row.remaining;
       }
       return values;
     },
-    { remaining: 0, work: 0, ready: 0, review: 0, unconfirmed: 0 },
+    {
+      remaining: 0,
+      work: 0,
+      ready: 0,
+      incomplete: false,
+      stageIncomplete: false,
+    },
   );
   const checked =
     updatedAt && Number.isFinite(Date.parse(updatedAt))
       ? moscowTime.format(new Date(updatedAt))
       : "";
-  const incomplete = !!totals.unconfirmed || !checked;
+  const incomplete = totals.incomplete || !checked;
   const pending = productionLoading || loading;
   const warning = error || productionError;
   const hasPrevious = !!checked && (!!stale || !!warning || !!live?.stale);
-  const label = (value: number) =>
-    incomplete
+  const label = (value: number, partial = incomplete) =>
+    partial
       ? value
         ? `≥ ${quantityLabel(value)}`
         : "—"
@@ -394,7 +400,7 @@ export function DispatchControl({
       {(warning || hasPrevious) && (
         <div className="production-alert" role="status">
           <Warning size={17} aria-hidden="true" />
-          <span>{warning || "Показаны данные последней сверки."}</span>
+          <span>{warning || "Показаны данные последнего обновления."}</span>
           {error && (
             <button
               type="button"
@@ -402,7 +408,7 @@ export function DispatchControl({
               disabled={loading}
               onClick={reload}
             >
-              Повторить
+              Обновить
             </button>
           )}
         </div>
@@ -420,28 +426,20 @@ export function DispatchControl({
           label="Осталось отправить"
           amount={label(totals.remaining)}
         />
-        <DispatchMetric label="В работе" amount={label(totals.work)} />
         <DispatchMetric
-          label="Готово к отгрузке"
-          amount={label(totals.ready)}
+          label="В работе"
+          amount={label(totals.work, incomplete || totals.stageIncomplete)}
+        />
+        <DispatchMetric
+          label="Готово к отправке"
+          amount={label(totals.ready, incomplete || totals.stageIncomplete)}
         />
         <div className="dispatch-control-source">
-          {totals.review > 0 && (
-            <span className="dispatch-control-review">
-              {quantityLabel(totals.review)} · нужна сверка
-            </span>
-          )}
-          {totals.unconfirmed > 0 && (
-            <span className="dispatch-control-review">
-              {count(totals.unconfirmed, ["позиция", "позиции", "позиций"])} без
-              подтверждённого остатка
-            </span>
-          )}
           <span>
             {pending
-              ? "Сверяем с РИТМ Сборкой…"
+              ? "Загружаем данные РИТМ Сборки…"
               : checked
-                ? `Сверено с РИТМ Сборкой · ${checked}`
+                ? `РИТМ Сборка · обновлено ${checked}`
                 : "Отгрузка не подтверждена"}
             <button
               type="button"
@@ -531,7 +529,7 @@ export function DispatchControl({
                     </td>
                     <td className="dispatch-control-remaining">
                       {row.remaining === null ? (
-                        <small>Не подтверждено</small>
+                        <small>Нет данных</small>
                       ) : (
                         <strong>{quantityLabel(row.remaining)}</strong>
                       )}
@@ -564,7 +562,7 @@ export function DispatchControl({
           <div className="dispatch-control-empty" role="status">
             <strong>
               {pending
-                ? "Сверяем отгрузки…"
+                ? "Загружаем отгрузки…"
                 : !checked
                   ? "Данные об отгрузке пока недоступны"
                   : "По этим фильтрам неотправленных позиций нет"}
