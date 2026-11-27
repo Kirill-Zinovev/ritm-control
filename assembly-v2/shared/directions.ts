@@ -1,11 +1,11 @@
 import type { Supply } from "./model";
-import { directionCity } from "./cities";
+import { supplyDirectionCity } from "./cities";
 export { directionCity } from "./cities";
 
 export function groupDirections(supplies: Supply[], selectedId: string | null) {
   const groups = new Map<string, Supply[]>();
   for (const s of supplies) {
-    const direction = directionCity(s.title, s.market),
+    const direction = supplyDirectionCity(s.title, s.market),
       key =
         direction && /^[1-9]\d*$/.test(s.store)
           ? JSON.stringify([s.market, direction.key, s.store])
@@ -16,7 +16,7 @@ export function groupDirections(supplies: Supply[], selectedId: string | null) {
   }
   return [...groups.values()].map((sources) => {
     const selected = sources.find((s) => s.id === selectedId) || sources[0],
-      direction = directionCity(selected.title, selected.market);
+      direction = supplyDirectionCity(selected.title, selected.market);
     return {
       ...selected,
       title:

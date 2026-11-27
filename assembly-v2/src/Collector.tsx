@@ -141,11 +141,11 @@ export function Collector({
     row.scrollIntoView({ block: "center", inline: "nearest" });
     row.querySelector<HTMLButtonElement>(".article-main")?.focus({ preventScroll: true });
   }, [searchTarget, supply?.sourceActive, targetIndex, w.loading, w.selectionPending]);
-  const supplies = directions.filter(
-    ({direction: s}) =>
-      `${s.title} ${s.destination} ${s.store}`
-        .toLocaleLowerCase("ru")
-        .includes(supplyQuery.toLocaleLowerCase("ru")),
+  const directionQuery = supplyQuery.toLocaleLowerCase("ru");
+  const supplies = directions.filter(({ direction, sources }) =>
+    [direction, ...sources.map(({ supply }) => supply)].some(supply =>
+      `${supply.title} ${supply.destination} ${supply.store}`.toLocaleLowerCase("ru").includes(directionQuery),
+    ),
   );
   const activeWork = state.positions.find((p) => p.id === workId);
   const labelVersion = labelIds?.map(id => state.positions.find(p => p.id === id)?.catalog?.labelSha ?? "").join(":");

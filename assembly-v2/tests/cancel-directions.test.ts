@@ -150,7 +150,7 @@ test("partial imported carton corrections are visible as native changes to RITM;
     true,
   );
 });
-test("directions group only the old recognized city/market/store combinations and preserve every original position", async (t) => {
+test("directions group recognized city/market/store combinations and preserve every original position", async (t) => {
   const db = await openDatabase();
   t.after(() => db.sqlite.close());
   const f = await bootstrap(db);
@@ -168,6 +168,24 @@ test("directions group only the old recognized city/market/store combinations an
     });
   const ungrouped = (await db.snapshot(null)) as Snapshot,
     chosen = ungrouped.supplies.find((s) => s.externalId === "spb-a")!;
+  for (const [city, first, second] of [
+    ["Ярославль", "Ozon Ярославль - 1 магазин - 25.11.26", "OZON Ярославль 17.11.2026 (1 магазин)"],
+    ["Уфа", "Ozon УФА - 1 магазин - 25.11", "OZON УФА 18.11.2026 (1 магазин)"],
+    ["Красноярск", "Ozon Красноярск - 1 магазин - 25.11", "OZON Красноярск 18.11.2026 (1 магазин)"],
+  ]) {
+    const supplies = [
+      { ...chosen, id: "first", title: first },
+      { ...chosen, id: "second", title: second },
+      { ...chosen, id: "shop-2", title: second, store: "2" },
+      { ...chosen, id: "wb", title: second, market: "WB" as const },
+      { ...chosen, id: "unknown-shop", title: second, store: "Не подтверждён" },
+    ];
+    const [group, ...separate] = groupDirections(supplies, "second");
+    assert.equal(group.id, "second");
+    assert.equal(group.title, "OZON " + city + " · Магазин 1");
+    assert.deepEqual(group.sources, supplies.slice(0, 2));
+    assert.deepEqual(separate.map(direction => direction.id), ["shop-2", "wb", "unknown-shop"]);
+  }
   const s = (await db.snapshot(chosen.id, true, true)) as Snapshot,
     g = s.supplies.find((s) => s.id === chosen.id)!;
   assert.equal(g.title, "OZON СПБ · Магазин 1");
