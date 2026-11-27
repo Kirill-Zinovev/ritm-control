@@ -232,6 +232,13 @@
       "when": 1795613855851,
       "tag": "0032_wb_dacha_carton_scope",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1795764900000,
+      "tag": "0033_carton_direction_cities",
+      "breakpoints": true
     }
   ]
 }

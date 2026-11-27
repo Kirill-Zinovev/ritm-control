@@ -113,3 +113,67 @@ test('общий короб доступен во всех поставках г
   db.sqlite.prepare("update av2_cartons set state='closed' where id=?").run(ekbBox);
   assert.throws(()=>raw.run(crypto.randomUUID(),ekbBox,xerox.position.id),/ASSEMBLY_CARTON_UNAVAILABLE/);
 });
+
+test('Красноярск, Ярославль и Уфа показывают короба всех поставок своего магазина с исходным составом', async t => {
+  const db = await openDatabase();
+  t.after(() => db.sqlite.close());
+  const f = await bootstrap(db);
+  const cityNames = [
+    ['Красноярск', 'Красноярска'],
+    ['Ярославль', 'Ярославля'],
+    ['Уфа', 'Уфы'],
+  ];
+
+  async function job(city: string, variant: string, title: string, store = '1', market: Market = 'OZON') {
+    const externalId = city + '-' + variant;
+    await f.cmd('supply.import', {
+      ...fixture, externalId, title, destination: title, market, store,
+      positions: [{ ...fixture.positions[0], externalId: externalId + '|product', sku: externalId, plan: 30 }],
+    });
+    const roster = await db.snapshot(null) as Snapshot;
+    const supply = roster.supplies.find(entry => entry.externalId === externalId)!;
+    const snapshot = await db.snapshot(supply.id) as Snapshot;
+    return { supply, position: snapshot.positions[0] };
+  }
+
+  async function box(source: Awaited<ReturnType<typeof job>>, qty: number) {
+    const positionId = source.position.id;
+    await f.cmd('work.save', { positionId, employeeId: f.employee.id, operation: 'packing', qty: qty + 2 });
+    const { cartonId } = await f.cmd('allocation.place', { positionId, qty, newCarton: true });
+    return String(cartonId);
+  }
+
+  for (const [city, genitive] of cityNames) {
+    const first = await job(city, 'first', `OZON ${city} 17.11.2026 (1 магазин)`);
+    const second = await job(city, 'second', `OZON ${genitive.toLowerCase()} - 1 магазин - 25.11.26`);
+    const otherStore = await job(city, 'store-two', `OZON ${city} · Магазин 2`, '2');
+    const otherMarket = await job(city, 'wb', `WB ${city} · Магазин 1`, '1', 'WB');
+    const firstBox = await box(first, 7);
+    const secondBox = await box(second, 11);
+    const otherStoreBox = await box(otherStore, 9);
+    const otherMarketBox = await box(otherMarket, 8);
+    const firstBeforeClose = (await db.snapshot(first.supply.id) as Snapshot).cartons.find(c => c.id === firstBox)!;
+    await f.cmd('carton.close', {
+      cartonId: firstBox,
+      items: firstBeforeClose.items.map(({ id, qty }) => ({ id, qty })),
+    });
+
+    for (const source of [first, second]) {
+      for (const grouped of [true, false]) {
+        const snapshot = await db.snapshot(source.supply.id, true, grouped) as Snapshot;
+        const contents = snapshot.cartons.map(c => [c.id, c.state, c.items.map(i => [i.positionId, i.qty])]);
+        assert.deepEqual(contents.sort(), [
+          [firstBox, 'closed', [[first.position.id, 7]]],
+          [secondBox, 'open', [[second.position.id, 11]]],
+        ].sort(), city);
+        assert(snapshot.cartons.every(c => sameCartonScope(c, source.supply)), city);
+      }
+    }
+    await assert.rejects(f.cmd('allocation.place', { positionId: first.position.id, qty: 1, cartonId: otherStoreBox }), /другой|отличается/);
+    await assert.rejects(f.cmd('allocation.place', { positionId: first.position.id, qty: 1, cartonId: otherMarketBox }), /другой|отличается/);
+    await f.cmd('allocation.place', { positionId: first.position.id, qty: 2, cartonId: secondBox });
+    const afterPlacement = await db.snapshot(second.supply.id, true, true) as Snapshot;
+    assert.equal(afterPlacement.cartons.find(c => c.id === firstBox)?.qty, 7);
+    assert.equal(afterPlacement.cartons.find(c => c.id === secondBox)?.qty, 13);
+  }
+});
