@@ -325,7 +325,7 @@ export function DispatchControl({
   }
 
   return (
-    <section className="dispatch-control" aria-label="Контроль отгрузки">
+    <section className={`dispatch-control${shipped ? " is-shipped" : ""}`} aria-label="Контроль отгрузки">
       <div
         className="dispatch-control-filters"
         role="group"
@@ -526,7 +526,7 @@ export function DispatchControl({
                   <th scope="col">Поставка</th>
                   <th scope="col">{shipped ? "Отправлено, шт." : "Отправлено / план"}</th>
                   {!shipped && <th scope="col">Осталось</th>}
-                  {!shipped && <th scope="col">Этап</th>}
+                  <th scope="col">Этап</th>
                   <th scope="col">{shipped ? "Отправленные короба" : "Где сейчас"}</th>
                 </tr>
               </thead>
@@ -539,8 +539,13 @@ export function DispatchControl({
                       <small>{storeLabel(row.store)}</small>
                     </td>
                     <td className="dispatch-control-sent">
-                      {row.sent === null ? "—" : num(row.sent)}
-                      {!shipped && ` / ${num(row.plan)}`}
+                      {shipped && row.sent !== null ? (
+                        <strong className="dispatch-control-shipped-quantity">
+                          {quantityLabel(row.sent)}
+                        </strong>
+                      ) : (
+                        <>{row.sent === null ? "—" : num(row.sent)} / {num(row.plan)}</>
+                      )}
                     </td>
                     {!shipped && <td className="dispatch-control-remaining">
                       {row.remaining === null ? (
@@ -549,23 +554,45 @@ export function DispatchControl({
                         <strong>{quantityLabel(row.remaining)}</strong>
                       )}
                     </td>}
-                    {!shipped && <td>
-                      <StageCell row={row} />
-                    </td>}
+                    <td>
+                      {shipped ? (
+                        <span className="dispatch-control-stage is-sent">
+                          <Truck size={15} aria-hidden="true" />
+                          Отправлено
+                        </span>
+                      ) : <StageCell row={row} />}
+                    </td>
                     <td className="dispatch-control-location">
-                      {row.location || "Место не подтверждено"}
-                      {row.cartons.length > 0 && (
-                        <small>
-                          {row.cartons
-                            .map(
-                              (carton) =>
-                                `${carton.label} · ${quantityLabel(carton.quantity)}`,
-                            )
-                            .join(", ")}
-                        </small>
-                      )}
-                      {row.issue && row.issue !== row.location && (
-                        <small>{row.issue}</small>
+                      {shipped ? (
+                        <ul
+                          className="dispatch-control-shipped-cartons"
+                          aria-label="Короба и количество по артикулу"
+                        >
+                          {row.cartons.map((carton) => (
+                            <li key={carton.label}>
+                              <Cube size={14} aria-hidden="true" />
+                              <span>{carton.label}</span>
+                              <strong>{quantityLabel(carton.quantity)}</strong>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <>
+                          {row.location || "Место не подтверждено"}
+                          {row.cartons.length > 0 && (
+                            <small>
+                              {row.cartons
+                                .map(
+                                  (carton) =>
+                                    `${carton.label} · ${quantityLabel(carton.quantity)}`,
+                                )
+                                .join(", ")}
+                            </small>
+                          )}
+                          {row.issue && row.issue !== row.location && (
+                            <small>{row.issue}</small>
+                          )}
+                        </>
                       )}
                     </td>
                   </tr>

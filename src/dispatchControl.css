@@ -47,6 +47,10 @@
   --dispatch-pack-surface: #f0e7ff;
   --dispatch-ready-ink: #146541;
   --dispatch-ready-surface: #e2f7e9;
+  --dispatch-sent-ink: #07534e;
+  --dispatch-sent-surface: #d8f3ee;
+  --dispatch-carton-ink: #254b74;
+  --dispatch-carton-surface: #edf4fc;
   display: grid;
   gap: 16px;
   min-width: 0;
@@ -150,6 +154,54 @@
 .dispatch-control-metric:nth-child(3) {
   --metric-ink: var(--dispatch-ready-ink);
   --metric-surface: var(--dispatch-ready-surface);
+}
+
+.dispatch-control.is-shipped .dispatch-control-summary {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.dispatch-control.is-shipped .dispatch-control-metric {
+  --metric-ink: var(--dispatch-sent-ink);
+  --metric-surface: var(--dispatch-sent-surface);
+  border-inline-start: 4px solid #24a391;
+}
+
+.dispatch-control.is-shipped .dispatch-control-table thead th {
+  background: color-mix(in srgb, var(--dispatch-sent-surface) 50%, var(--surface));
+  color: var(--dispatch-sent-ink);
+}
+
+.dispatch-control-shipped-quantity {
+  color: var(--dispatch-sent-ink);
+  font-size: var(--font-size-lg);
+  font-weight: 800;
+}
+
+.dispatch-control-shipped-cartons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dispatch-control-shipped-cartons li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 7px;
+  border: 1px solid #d4e2f3;
+  border-radius: var(--radius-sm);
+  background: var(--dispatch-carton-surface);
+  color: var(--dispatch-carton-ink);
+  font-size: var(--font-size-xs);
+}
+
+.dispatch-control-shipped-cartons strong {
+  padding-inline-start: 6px;
+  border-inline-start: 1px solid #c7d8ee;
+  white-space: nowrap;
 }
 
 .dispatch-control-metric dt {
@@ -364,6 +416,11 @@
   --stage-surface: var(--dispatch-ready-surface);
 }
 
+.dispatch-control-stage.is-sent {
+  --stage-ink: var(--dispatch-sent-ink);
+  --stage-surface: var(--dispatch-sent-surface);
+}
+
 .dispatch-control-stage.is-planned {
   --stage-ink: var(--dispatch-planned-ink);
   --stage-surface: var(--dispatch-planned-surface);
@@ -413,6 +470,10 @@
 @container dispatch-control (max-width: 830px) {
   .dispatch-control-summary {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .dispatch-control.is-shipped .dispatch-control-summary {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .dispatch-control-source {
