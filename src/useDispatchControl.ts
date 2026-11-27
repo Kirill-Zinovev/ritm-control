@@ -4,6 +4,7 @@ import type { LivePrinting } from "./livePrinting";
 import {
   buildDispatchPositions,
   buildDispatchRows,
+  buildSentDispatchRows,
   dispatchSupplyIds,
   type DispatchFact,
   type DispatchReport,
@@ -128,6 +129,7 @@ export function useDispatchControl(live: LivePrinting | null) {
   );
   return {
     rows,
+    sentRows: useMemo(() => buildSentDispatchRows(matches ? state.facts : []), [matches, state.facts]),
     loading: ids !== "[]" && (!matches || state.loading),
     updatedAt: matches ? state.updatedAt : null,
     stale: matches && state.stale,

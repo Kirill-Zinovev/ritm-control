@@ -47,7 +47,25 @@ export type DispatchFact = {
     state: "open" | "closed";
     prepared: boolean;
   }[];
+  sentCartons?: { id: string; label: string; qty: number }[];
 };
+
+export function buildSentDispatchRows(facts: DispatchFact[]): DispatchControlRow[] {
+  return facts.flatMap(fact => {
+    const cartons = (fact.sentCartons ?? []).map(box => ({ label: box.label, quantity: box.qty }));
+    if (!cartons.length) return [];
+    return [{
+      key: JSON.stringify([fact.supplyId, fact.market, fact.store, fact.positionId]),
+      direction: fact.destination || fact.supplyTitle || fact.supplyId,
+      supplyId: fact.supplyId, supplyName: fact.supplyTitle || fact.supplyId,
+      store: displayStore(normalizeStore(fact.store)), market: fact.market,
+      article: normalizeArticle(fact.sku), plan: fact.plan,
+      sent: cartons.reduce((sum, box) => sum + box.quantity, 0), remaining: null,
+      stage: null, location: cartonLabels(cartons), cartons,
+      workQty: 0, plannedQty: 0, printQty: 0, cutQty: 0, packQty: 0, readyQty: 0,
+    }];
+  });
+}
 
 export type DispatchReport = {
   ok: true;

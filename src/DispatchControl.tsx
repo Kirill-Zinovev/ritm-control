@@ -30,7 +30,7 @@ const stages = {
   cut: { label: "Порезка", detail: "На порезке", Icon: Scissors, order: 2 },
   pack: { label: "Упаковка", detail: "На упаковке", Icon: Cube, order: 3 },
   ready: {
-    label: "Отправка",
+    label: "Готово к отправке",
     detail: "К отправке",
     Icon: Truck,
     order: 4,
@@ -123,7 +123,7 @@ function DispatchMetric({ label, amount }: { label: string; amount: string }) {
 
 async function exportExcel(
   rows: DispatchControlRow[],
-  snapshot: { direction: string; checked: string; stale: boolean },
+  snapshot: { direction: string; checked: string; stale: boolean; shipped: boolean },
 ) {
   const [{ default: ExcelJS }, { downloadWorkbook }] = await Promise.all([
     import("exceljs"),
@@ -131,10 +131,10 @@ async function exportExcel(
   ]);
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "РИТМ";
-  const sheet = workbook.addWorksheet("Неотправленные артикулы", {
+  const sheet = workbook.addWorksheet(snapshot.shipped ? "Отправленные артикулы" : "Неотправленные артикулы", {
     views: [{ state: "frozen", ySplit: 1 }],
   });
-  sheet.columns = [
+  const columns = [
     { header: "Артикул", key: "article", width: 21 },
     { header: "Направление", key: "direction", width: 22 },
     { header: "Поставка", key: "supply", width: 38 },
@@ -154,6 +154,9 @@ async function exportExcel(
     { header: "Примечание", key: "note", width: 45 },
     { header: "Обновлено (МСК)", key: "checked", width: 22 },
   ];
+  sheet.columns = snapshot.shipped
+    ? columns.filter(column => ["article", "direction", "supply", "store", "sent", "cartons", "checked"].includes(column.key))
+    : columns;
   for (const row of rows) {
     sheet.addRow({
       article: row.article,
@@ -194,7 +197,7 @@ async function exportExcel(
     };
     cell.alignment = { vertical: "middle" };
   });
-  for (const key of ["supply", "location", "cartons", "note"]) {
+  for (const key of snapshot.shipped ? ["supply", "cartons"] : ["supply", "location", "cartons", "note"]) {
     sheet.getColumn(key).alignment = { vertical: "top", wrapText: true };
   }
   sheet.autoFilter = {
@@ -204,7 +207,7 @@ async function exportExcel(
   const direction = snapshot.direction.replace(/[<>:"/\\|?*]/g, "").trim();
   await downloadWorkbook(
     workbook,
-    `РИТМ-неотправленные-${direction || "все-направления"}.xlsx`,
+    `РИТМ-${snapshot.shipped ? "отправленные" : "неотправленные"}-${direction || "все-направления"}.xlsx`,
   );
 }
 
@@ -219,7 +222,7 @@ export function DispatchControl({
   productionError: string;
   initialSupply: string;
 }) {
-  const { rows, loading, error, updatedAt, stale, reload, historyUrl } =
+  const { rows: remainingRows, sentRows, loading, error, updatedAt, stale, reload, historyUrl } =
     useDispatchControl(live);
   const [direction, setDirection] = useState(all);
   const [supply, setSupply] = useState(() =>
@@ -227,7 +230,9 @@ export function DispatchControl({
   );
   const [store, setStore] = useState(all);
   const [query, setQuery] = useState("");
-  const [stage, setStage] = useState<DispatchStage | "">(all);
+  const [stage, setStage] = useState<DispatchStage | "sent" | "">(all);
+  const shipped = stage === "sent";
+  const rows = shipped ? sentRows : remainingRows;
   const [limit, setLimit] = useState(pageSize);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState("");
@@ -247,7 +252,7 @@ export function DispatchControl({
         (row) =>
           row.remaining !== 0 &&
           (!store || row.store === store) &&
-          (!stage || row.stage === stage) &&
+          (!stage || shipped || row.stage === stage) &&
           (!search ||
             normalize(
               `${row.article} ${row.cartons.map((carton) => carton.label).join(" ")}`,
@@ -261,7 +266,7 @@ export function DispatchControl({
           compare(left.article, right.article) ||
           compare(left.supplyName, right.supplyName),
       );
-  }, [forSupply, query, stage, store]);
+  }, [forSupply, query, shipped, stage, store]);
   const totals = visible.reduce(
     (values, row) => {
       if (row.remaining === null) {
@@ -302,7 +307,7 @@ export function DispatchControl({
     setExporting(true);
     setExportError("");
     try {
-      await exportExcel(visible, { direction, checked, stale: hasPrevious });
+      await exportExcel(visible, { direction, checked, stale: hasPrevious, shipped });
     } catch {
       setExportError("Не удалось скачать Excel. Попробуйте ещё раз.");
     } finally {
@@ -423,6 +428,7 @@ export function DispatchControl({
         className="dispatch-control-summary"
         aria-label="Итоги отгрузки по текущим фильтрам"
       >
+        {shipped ? <DispatchMetric label="Отправлено" amount={label(visible.reduce((sum, row) => sum + (row.sent ?? 0), 0), !checked)} /> : <>
         <DispatchMetric
           label="Осталось отправить"
           amount={label(totals.remaining)}
@@ -435,6 +441,7 @@ export function DispatchControl({
           label="Готово к отправке"
           amount={label(totals.ready, incomplete || totals.stageIncomplete)}
         />
+        </>}
         <div className="dispatch-control-source">
           <span>
             {pending
@@ -458,7 +465,7 @@ export function DispatchControl({
       <div className="dispatch-control-panel">
         <div className="dispatch-control-heading">
           <div className="dispatch-control-title">
-            <h2>Не отправлено</h2>
+            <h2>{shipped ? "Отправлено" : "Не отправлено"}</h2>
             <span>
               {count(visible.length, ["позиция", "позиции", "позиций"])}
             </span>
@@ -485,11 +492,18 @@ export function DispatchControl({
               aria-label="Этап"
               value={stage}
               onChange={(event) => {
-                setStage(event.target.value as DispatchStage | "");
+                const next = event.target.value as DispatchStage | "sent" | "";
+                if ((next === "sent") !== shipped) {
+                  setDirection(all);
+                  setSupply(all);
+                  setStore(all);
+                }
+                setStage(next);
                 setLimit(pageSize);
               }}
             >
               <option value={all}>Все этапы</option>
+              <option value="sent">Отправка</option>
               {Object.entries(stages).map(([value, item]) => (
                 <option key={value} value={value}>
                   {item.label}
@@ -502,7 +516,7 @@ export function DispatchControl({
           <div
             className="dispatch-control-scroll"
             role="region"
-            aria-label="Таблица остатков к отгрузке"
+            aria-label={shipped ? "Подтверждённые отправки" : "Таблица остатков к отгрузке"}
             tabIndex={0}
           >
             <table className="dispatch-control-table">
@@ -510,10 +524,10 @@ export function DispatchControl({
                 <tr>
                   <th scope="col">Артикул</th>
                   <th scope="col">Поставка</th>
-                  <th scope="col">Отправлено / план</th>
-                  <th scope="col">Осталось</th>
-                  <th scope="col">Этап</th>
-                  <th scope="col">Где сейчас</th>
+                  <th scope="col">{shipped ? "Отправлено, шт." : "Отправлено / план"}</th>
+                  {!shipped && <th scope="col">Осталось</th>}
+                  {!shipped && <th scope="col">Этап</th>}
+                  <th scope="col">{shipped ? "Отправленные короба" : "Где сейчас"}</th>
                 </tr>
               </thead>
               <tbody>
@@ -525,19 +539,19 @@ export function DispatchControl({
                       <small>{storeLabel(row.store)}</small>
                     </td>
                     <td className="dispatch-control-sent">
-                      {row.sent === null ? "—" : num(row.sent)} /{" "}
-                      {num(row.plan)}
+                      {row.sent === null ? "—" : num(row.sent)}
+                      {!shipped && ` / ${num(row.plan)}`}
                     </td>
-                    <td className="dispatch-control-remaining">
+                    {!shipped && <td className="dispatch-control-remaining">
                       {row.remaining === null ? (
                         <small>Нет данных</small>
                       ) : (
                         <strong>{quantityLabel(row.remaining)}</strong>
                       )}
-                    </td>
-                    <td>
+                    </td>}
+                    {!shipped && <td>
                       <StageCell row={row} />
-                    </td>
+                    </td>}
                     <td className="dispatch-control-location">
                       {row.location || "Место не подтверждено"}
                       {row.cartons.length > 0 && (
@@ -566,7 +580,7 @@ export function DispatchControl({
                 ? "Загружаем отгрузки…"
                 : !checked
                   ? "Данные об отгрузке пока недоступны"
-                  : "По этим фильтрам неотправленных позиций нет"}
+                  : shipped ? "По этим фильтрам подтверждённых отправок нет" : "По этим фильтрам неотправленных позиций нет"}
             </strong>
             {checked && (direction || supply || store || query || stage) && (
               <button

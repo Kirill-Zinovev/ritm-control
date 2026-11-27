@@ -42,12 +42,18 @@ function verifiedRows(rows, requested) {
       (row.sent !== null && !validQuantity(row.sent)) || !Array.isArray(row.cartons) ||
       !row.cartons.every(validCarton) || new Set(row.cartons.map((carton) => carton.id)).size !== row.cartons.length)
       throw invalidReport();
-    const key = JSON.stringify([row.supplyId, row.positionId]);
+    const key = JSON.stringify([row.supplyId, row.market, row.store, row.positionId]);
     if (positions.has(key)) throw invalidReport();
     positions.add(key);
     const { supplyId, supplyTitle, positionId, sku, department, market, store, destination, plan, packed, sent } = row;
     const cartons = row.cartons.map(({ id, label, qty, state, prepared }) => ({ id, label, qty, state, prepared }));
-    return { supplyId, ...(supplyTitle === undefined ? {} : { supplyTitle }), positionId, sku, department, market, store, destination, plan, packed, sent, cartons };
+    const sentCartons = row.sentCartons ?? [];
+    if (!Array.isArray(sentCartons) || !sentCartons.every(box => requiredString(box?.id, 240) &&
+        requiredString(box.label, 240) && validQuantity(box.qty) && box.qty > 0) ||
+        new Set(sentCartons.map(box => box.id)).size !== sentCartons.length ||
+        (sent !== null && sentCartons.reduce((sum, box) => sum + box.qty, 0) > sent)) throw invalidReport();
+    return { supplyId, ...(supplyTitle === undefined ? {} : { supplyTitle }), positionId, sku, department, market, store, destination, plan, packed, sent, cartons,
+      ...(row.sentCartons !== undefined && {sentCartons: sentCartons.map(({ id, label, qty }) => ({ id, label, qty }))}) };
   });
 }
 
