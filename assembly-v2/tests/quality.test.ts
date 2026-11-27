@@ -109,12 +109,20 @@ test("подтверждение магазина Ozon переносит одн
   assert.ok(waitingForStore?.storeNeedsReview);
 
   const action = "quality.confirmPositionStore";
-  const payload = {shipmentId,sku,reason:"Сверили подтверждённую карточку Ozon"};
+  const payload = {positionId:before.id,shipmentId,sku,expectedStore:"2",reason:"Сверили подтверждённую карточку Ozon"};
   const call = (role:"owner"|"manager"|"collector", cmd:string, data:Record<string,unknown>) => api(
     new Request("https://assembly.test/api/command", {method:"POST",headers:{"content-type":"application/json"},
       body:JSON.stringify({action:cmd,key:crypto.randomUUID(),payload:data})}), f.db, role, role,
   );
   for (const role of ["manager","collector"] as const) assert.equal((await call(role,action,payload)).status,403);
+
+  // The position remains unresolved even when the cached RITM review is empty.
+  f.db.sqlite.prepare("update av2_ritm_links set issues='[]' where shipment_id=?").run(shipmentId);
+  await assert.rejects(f.cmd(action,{...payload,expectedStore:"1"}));
+  const otherPosition = f.db.sqlite.prepare("select id from av2_positions where external_id=?")
+    .get(source.positions[1].positionId)!;
+  await assert.rejects(f.cmd(action,{...payload,positionId:String(otherPosition.id)}));
+  assert.equal(f.db.sqlite.prepare("select supply_id from av2_positions where id=?").get(before.id)?.supply_id,before.supplyId);
 
   const targetedUpdate = f.db.sqlite.prepare("update av2_ritm_links set payload=? where shipment_id=?");
   targetedUpdate.run(JSON.stringify({...source,locked:true}),shipmentId);
@@ -125,11 +133,11 @@ test("подтверждение магазина Ozon переносит одн
   const key = crypto.randomUUID();
   const repaired = await f.cmd(action,payload,key);
   assert.deepEqual(await f.cmd(action,payload,key),repaired);
-  assert.deepEqual(repaired,{positionId:before.id,store:"2",updatedWorks:2});
   assert.deepEqual(workFacts(),facts);
   assert.deepEqual(f.db.sqlite.prepare("select * from av2_ritm_work_outbox order by id").all(),events);
   const bound = f.db.sqlite.prepare(`select p.id,p.supply_id,p.external_id,p.barcode,p.units_per_box,p.ready,s.store
     from av2_positions p join av2_supplies s on s.id=p.supply_id where p.id=?`).get(before.id)!;
+  assert.deepEqual(repaired,{positionId:before.id,store:"2",updatedWorks:2,supplyId:bound.supply_id});
   assert.equal(bound.external_id,source.positions[0].positionId);
   assert.equal(bound.store,"2");
   assert.equal(bound.ready,1);

@@ -4,7 +4,7 @@ import { cartonStoreNumber } from "./carton-number";
 
 function storeCorrection(p: Position, supply: Supply): string {
   const store = p.catalog?.store;
-  const path = "Владелец подтверждает магазин позиции в «Управление → Подключение → Требуют проверки».";
+  const path = "Владелец может подтвердить магазин прямо в карточке позиции.";
   if (store && /^[1-9]\d*$/.test(store) && cartonStoreNumber(supply.store) === null) {
     const units = p.catalog?.unitsPerBox;
     const capacity = units ? `, ${number(units)} шт. в коробе` : "";
@@ -13,7 +13,7 @@ function storeCorrection(p: Position, supply: Supply): string {
   }
   if (p.storeNeedsReview && cartonStoreNumber(supply.store) !== null)
     return "Магазин позиции расходится с РИТМ. Попросите владельца сверить магазин в поставке РИТМ и в справочнике.";
-  return `У позиции не подтверждён магазин. Проверьте поле «Магазин» в карточке ${supply.market} и заполните его, если оно пустое. ${path}`;
+  return `У позиции не подтверждён магазин. Проверьте поле «Магазин» в карточке ${supply.market} и заполните его, если оно пустое.`;
 }
 
 export function workBlockedReason(p: Position, supply: Supply): string {

@@ -168,8 +168,14 @@ function ProductDetails({
   const role = useAccess();
   const boxBlock = boxingBlockedReason(p, supply);
   const storeMissing = cartonStoreNumber(supply.store) === null;
-  const catalogNeedsReview = storeMissing ? !p.catalog?.store || !p.catalog.unitsPerBox : !p.unitsPerBox;
+  const catalogStore = p.catalog?.store;
+  const catalogNeedsReview = storeMissing ? !catalogStore || !p.catalog?.unitsPerBox : !p.unitsPerBox;
+  const shipmentId = supply.originShipmentId;
+  const canConfirmStore = role === "owner" && !!shipmentId && supply.store === "Не подтверждён" &&
+    !supply.sourceLocked && supply.sourceActive !== false && (p.sourceActive !== false || p.storeNeedsReview) &&
+    !!catalogStore && /^[1-9]\d*$/.test(catalogStore) && !catalogNeedsReview;
   const helpId = `boxing-help-${p.id}`;
+  const [storeError, setStoreError] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [cancelId, setCancelId] = useState<string | null>(null);
   const records = w.state!.works.filter((x) => x.positionId === p.id);
@@ -177,6 +183,17 @@ function ProductDetails({
     c.items.some((i) => i.positionId === p.id),
   );
   const cancel = records.find((x) => x.id === cancelId);
+  async function confirmStore() {
+    if (!canConfirmStore) return;
+    setStoreError("");
+    try {
+      await w.command("quality.confirmPositionStore",
+        { positionId: p.id, shipmentId, sku: p.sku, expectedStore: catalogStore, reason: "Подтверждено владельцем в карточке позиции" },
+        `Для ${p.sku} подтверждён магазин ${catalogStore}.`);
+    } catch (error) {
+      setStoreError(error instanceof Error ? error.message : "Не удалось подтвердить магазин.");
+    }
+  }
   return (
     <div className="details compact-details">
       <div className="compact-actions">
@@ -211,8 +228,12 @@ function ProductDetails({
       {boxBlock && (
         <div className="box-guidance is-error" id={helpId} role="status">
           <strong>Добавление в короб недоступно.</strong> {boxBlock}
-          {role === "owner" && storeMissing && !supply.sourceLocked && supply.sourceActive !== false && p.catalog?.store ? (
-            <> <a href="/?view=setup#ritm-issues">Открыть проверку</a></>
+          {canConfirmStore ? (
+            <div className="store-confirm-action">
+              <Button className="button-quiet" disabled={w.busy || w.loading || w.selectionPending}
+                onClick={() => void confirmStore()}>Подтвердить магазин {catalogStore}</Button>
+              {storeError && <p role="alert">{storeError}</p>}
+            </div>
           ) : null}
           {role !== "collector" && (p.sourceActive !== false || p.storeNeedsReview) && supply.sourceActive !== false &&
             !supply.sourceLocked && catalogNeedsReview ? (

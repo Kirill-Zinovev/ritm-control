@@ -15,7 +15,7 @@ test("по позиции без магазина подсказка разли�
   const supply = { market: "OZON", store: "Не подтверждён", sourceActive: true } as Supply;
   const guidance = boxingBlockedReason(held, supply);
   assert.match(guidance, /уже указан магазин 2, 108 шт./);
-  assert.match(guidance, /Подключение → Требуют проверки/);
+  assert.match(guidance, /подтвердить магазин прямо в карточке позиции/);
   assert.match(boxingBlockedReason({ ...held, catalog: null }, supply), /поле «Магазин»/);
   assert.match(boxingBlockedReason(held, { ...supply, sourceLocked: true }), /откройте её замок в РИТМ/);
   assert.match(boxingBlockedReason({ ...held, sourceActive: true, ready: true, storeNeedsReview: false },

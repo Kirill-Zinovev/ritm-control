@@ -98,6 +98,8 @@ export async function qualityPlan(
   if (action === "quality.confirmPositionStore") {
     const shipmentId = string(payload.shipmentId);
     const sku = catalogKey(string(payload.sku, 300));
+    const positionId = payload.positionId === undefined ? null : string(payload.positionId);
+    const expectedStore = positionId ? string(payload.expectedStore, 100) : null;
     check(ritmShipmentId(shipmentId), "Выберите исходную поставку РИТМ.");
     const link = await one<{ payload: string; issues: string; sourceRevision: number }>(
       "select payload,issues,source_revision from av2_ritm_links where shipment_id=?", [shipmentId],
@@ -110,7 +112,9 @@ export async function qualityPlan(
     const issues = JSON.parse(link.issues) as RitmIssue[];
     const isIssue = (issue: RitmIssue) => issue.shipmentId === shipmentId &&
       catalogKey(unconfirmedStoreArticle(issue.message) || "") === sku;
-    check(issues.some(isIssue), "Нет актуальной ошибки привязки этого артикула. Обновите поставку.");
+    // An exact position can still need confirmation when the sync report did
+    // not record a warning. Validate it against the saved source row below.
+    check(positionId || issues.some(isIssue), "Нет актуальной ошибки привязки этого артикула. Обновите поставку.");
 
     const unresolved = await store.all<{
       id: string; supplyId: string; externalId: string; sku: string; plan: number; name: string;
@@ -120,7 +124,11 @@ export async function qualityPlan(
           p.catalog_import_id,p.catalog_entry_id,s.destination,p.ready,p.source_active
         from av2_positions p join av2_supplies s on s.id=p.supply_id
         where s.origin_shipment_id=? and s.market=? and s.store='Не подтверждён'
-          and s.is_demo=0 and p.source_active=p.ready`, [shipmentId, source.market]);
+          and s.is_demo=0 and p.source_active=p.ready
+          and (? is null or (p.id=? and s.source_active=1))
+          and not exists(select 1 from av2_quality_repairs r
+            where r.kind='ritm.manualRetired' and r.entity_id=p.external_id)`,
+      [shipmentId, source.market, positionId, positionId]);
     const matches = unresolved.filter(p => catalogKey(p.sku) === sku);
     check(matches.length === 1, "Нужна одна позиция с этим артикулом и неподтверждённым магазином.");
     const [before] = matches;
@@ -140,6 +148,8 @@ export async function qualityPlan(
     }));
     check(cards.size === 1, `Нужна одна карточка ${source.market} для артикула и подтверждённого магазина.`);
     const [{entry, importId}] = cards.values();
+    check(!expectedStore || entry.store === expectedStore,
+      "Магазин в справочнике изменился. Обновите поставку и проверьте карточку.");
     check(/^[1-9]\d*$/.test(entry.store) && entry.barcode.trim() && entry.boxType.trim() &&
       entry.unitsPerBox !== null && Number.isSafeInteger(entry.unitsPerBox) && entry.unitsPerBox > 0,
       `В карточке ${source.market} подтвердите магазин, штрихкод, тип и вместимость короба.`);
@@ -175,7 +185,8 @@ export async function qualityPlan(
         before.supplyId, before.supplyId),
       q("update av2_ritm_links set issues=? where shipment_id=?", JSON.stringify(issues.filter(i => !isIssue(i))), shipmentId),
     );
-    return { statements, result: {positionId: before.id, store: entry.store, updatedWorks: activity.works} };
+    return { statements, result: {positionId: before.id, store: entry.store, updatedWorks: activity.works,
+      ...(positionId ? {supplyId: target.id} : {})} };
   }
 
   if (action === "quality.resolveStores") {
