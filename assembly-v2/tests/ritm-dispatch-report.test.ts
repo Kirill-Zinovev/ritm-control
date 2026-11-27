@@ -52,6 +52,7 @@ test("Сверка учитывает фактический выезд, воз�
   const report = afterDeparture.rows.find((row) => row.supplyId === root && row.store === "1")!;
   assert.equal(report.packed, 40);
   assert.equal(report.sent, 8);
+  assert.deepEqual(report.sentCartons, [{ id: first.id, label: first.label, qty: 8 }]);
   assert.deepEqual(report.cartons, [
     { id: second.id, label: second.label, qty: 12, state: "closed", prepared: true },
     { id: open.id, label: open.label, qty: 9, state: "open", prepared: false },
@@ -60,6 +61,7 @@ test("Сверка учитывает фактический выезд, воз�
 
   await f.cmd("dispatch.returnCarton", { cartonId: first.id, dispatchId: sentId, confirmed: true });
   assert.equal((await rows()).rows[0].sent, 0);
+  assert.deepEqual((await rows()).rows[0].sentCartons, []);
   assert((await rows()).rows[0].cartons.some((box) => box.id === first.id && box.state === "closed" && !box.prepared));
   await f.cmd("dispatch.cancel", { dispatchId });
   assert((await rows()).rows[0].cartons.some((box) => box.id === second.id && !box.prepared));
@@ -70,6 +72,7 @@ test("Сверка учитывает фактический выезд, воз�
   db.sqlite.prepare("update av2_dispatches set sent_payload=null where id=?").run(String(next.dispatchId));
   const legacy = (await rows()).rows[0];
   assert.equal(legacy.sent, null);
+  assert.deepEqual(legacy.sentCartons, []);
   assert(!legacy.cartons.some((box) => box.id === first.id));
 });
 

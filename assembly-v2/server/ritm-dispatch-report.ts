@@ -23,6 +23,7 @@ interface DispatchPosition {
   packed: number;
   sent: number | null;
   cartons: DispatchCarton[];
+  sentCartons: { id: string; label: string; qty: number }[];
 }
 
 export interface RitmDispatchReport {
@@ -32,7 +33,7 @@ export interface RitmDispatchReport {
   rows: DispatchPosition[];
 }
 
-type PositionRow = Omit<DispatchPosition, "sent" | "cartons"> & { id: string };
+type PositionRow = Omit<DispatchPosition, "sent" | "cartons" | "sentCartons"> & { id: string };
 type CartonRow = Omit<DispatchCarton, "prepared"> & {
   positionId: string;
   dispatchState: "draft" | "sent" | "canceled" | null;
@@ -98,7 +99,7 @@ export async function readRitmDispatchReport(store: SqlStore, supplyIds: string[
   for (const { id, ...position } of rawPositions as unknown as PositionRow[]) {
     const destination = position.destination || position.supplyTitle;
     const city = directionCity(destination, position.market);
-    positions.set(id, { ...position, destination: city?.label ?? destination, sent: 0, cartons: [] });
+    positions.set(id, { ...position, destination: city?.label ?? destination, sent: 0, cartons: [], sentCartons: [] });
   }
   for (const carton of rawCartons as unknown as CartonRow[]) {
     const position = positions.get(carton.positionId)!;
@@ -106,7 +107,10 @@ export async function readRitmDispatchReport(store: SqlStore, supplyIds: string[
       // A returned carton has no live sent link. If sent again, only its new
       // departure counts. Mutable contents alone cannot confirm a legacy shipment.
       if (!carton.correctScope || carton.archivedQty === null) position.sent = null;
-      else if (position.sent !== null) position.sent += carton.archivedQty;
+      else {
+        if (position.sent !== null) position.sent += carton.archivedQty;
+        if (carton.archivedQty > 0) position.sentCartons.push({ id: carton.id, label: carton.label, qty: carton.archivedQty });
+      }
     } else if (carton.correctScope) {
       const { id, label, qty, state } = carton;
       position.cartons.push({ id, label, qty, state, prepared: carton.dispatchState === "draft" });
