@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Plus, Save, ImagePlus } from 'lucide-react';
 import { catalogKey, spreadsheetError } from '../shared/catalog';
 import { catalogArticleForMarket, catalogFamilyKey, catalogMachineSection, emptyCatalogProduct, productFields, type ManagedDetail, type ManagedProduct } from '../shared/catalog-editor';
@@ -72,6 +72,7 @@ export function CatalogEditor({ item, initialDraft, importId, workspace:w, onClo
   const [generating, setGenerating] = useState(false);
   const labelFile = useRef<HTMLInputElement>(null);
   const editorBody = useRef<HTMLDivElement>(null);
+  const saveStatusId = useId();
   const entryId = item?.id;
   const storeMissing = item?.store === '';
   const normalizedSku = catalogKey(product.sku);
@@ -131,6 +132,14 @@ export function CatalogEditor({ item, initialDraft, importId, workspace:w, onClo
   const assistance = help?.key === fillQuery ? help.value : undefined;
   const duplicate = sku ? assistance?.cards.find(card => card.id!==entryId && card.market===product.market && card.store===product.store.trim()) : undefined;
   const references = !item && sku ? assistance?.cards.filter(card => card.store && card.id!==duplicate?.id) ?? [] : [];
+  const unchanged = !!item && !changed && !appliesToWork;
+  const saveStatus = uploading ? 'Загружаем файл…'
+    : generating ? 'Генерируем этикетку…'
+    : referenceLoading ? 'Открываем карточку…'
+    : w.busy ? 'Сохраняем карточку…'
+    : needsBarcode ? `Введите штрихкод ${product.market === 'OZON' ? 'Ozon' : 'WB'}.`
+    : changed ? 'Есть несохранённые изменения'
+    : unchanged ? 'Внесите изменения, чтобы сохранить карточку.' : '';
   const selectedBase = base && references.some(reference=>reference.id===base.id) ? base : undefined;
   const fillFields = reusableFields.filter(([key]) => {
     const value = selectedBase?.[key]?.trim() || '';
@@ -308,10 +317,6 @@ export function CatalogEditor({ item, initialDraft, importId, workspace:w, onClo
         onChange={e=>changeMarket(e.target.value as ManagedProduct['market'])}><option>OZON</option><option>WB</option></NativeSelect>
       {!storeMissing && storeField}
     </div>
-    {duplicate && <div className="catalog-fill-hint" role="status">
-      <strong>Такая карточка уже есть · {shopLabel(duplicate)}</strong>
-      {onOpenExisting && <Button disabled={busy} onClick={()=>safely(()=>void loadReference(duplicate,'open'))}>Открыть карточку</Button>}
-    </div>}
     {!duplicate && references.length>0 && <div className="catalog-fill-hint">
       {selectedBase ? <>
         <strong>{selectedBase.name || selectedBase.sku} · {shopLabel(selectedBase)}</strong>
@@ -414,8 +419,18 @@ export function CatalogEditor({ item, initialDraft, importId, workspace:w, onClo
         {tab==='История' && (history===null ? <p>Загружаем историю…</p>:history.length ? <div className="catalog-edit-history">{history.map(h=><article key={h.after.editRevision}><strong>{h.before?'Карточка обновлена':'Товар добавлен'}</strong><time>{dateTime(h.createdAt)} МСК</time><p>{changedFields(h).map(f=>f.label).join(' · ')}</p><details><summary>Что изменилось</summary>{changedFields(h).map(({key,label})=><p key={key}><b>{label}: </b>{['photoUrl','labelSha'].includes(key)?'Файл обновлён':`${JSON.stringify(h.before?.[key as keyof ManagedProduct] ?? '—')} → ${JSON.stringify(h.after[key as keyof ManagedProduct] ?? '—')}`}</p>)}</details></article>)}</div>:<p className="muted">Изменений через редактор пока нет. Исходная карточка сохранена.</p>)}
       </div>
       <div className="catalog-editor-footer">
-        <span aria-live="polite">{uploading?'Загружаем файл…':changed?'Есть несохранённые изменения':''}</span>
-        <div><Button disabled={busy} onClick={()=>safely(onClose)}>Отмена</Button><Button primary type="submit" disabled={busy || !!duplicate || needsBarcode || (!!item&&!changed&&!appliesToWork)}>{item?<Save size={16}/>:<Plus size={16}/>} {w.busy?'Сохраняем…':appliesToWork?(changed?'Сохранить и подтянуть КЭФ':'Подтянуть КЭФ'):item?'Сохранить изменения':'Добавить товар'}</Button></div>
+        {duplicate ? (
+          <section className="catalog-fill-hint catalog-save-conflict">
+            <strong id={saveStatusId} role="status">Такая карточка уже есть · {shopLabel(duplicate)}</strong>
+            {onOpenExisting && <Button disabled={busy} onClick={()=>safely(()=>void loadReference(duplicate,'open'))}>Открыть карточку</Button>}
+          </section>
+        ) : <span id={saveStatusId} aria-live="polite">{saveStatus}</span>}
+        <div>
+          <Button disabled={busy} onClick={()=>safely(onClose)}>Отмена</Button>
+          <Button primary type="submit" aria-describedby={saveStatusId} disabled={busy || !!duplicate || needsBarcode || unchanged}>
+            {item ? <Save size={16}/> : <Plus size={16}/>} {w.busy ? 'Сохраняем…' : appliesToWork ? (changed ? 'Сохранить и подтянуть КЭФ' : 'Подтянуть КЭФ') : item ? 'Сохранить изменения' : 'Добавить товар'}
+          </Button>
+        </div>
         {!initialDraft && <Button className={`catalog-pair-create is-${pairedMarket.toLowerCase()}`} type="submit" data-catalog-action="pair"
           disabled={busy || !!duplicate || !product.sku.trim() || !product.name.trim() || !product.store.trim()}>
           <Plus size={16} aria-hidden="true"/>Создать карточку артикула для {pairedName}

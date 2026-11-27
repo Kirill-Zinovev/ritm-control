@@ -369,6 +369,8 @@
 .catalog-choice-empty { color: #546987; font-size: 13px; }
 .catalog-fill-hint { display: grid; gap: 8px; margin-top: 6px; padding: 10px 12px; border: 1px solid #d9e6f8; border-radius: 8px; background: #f3f7fe; font-size: 13px; }
 .catalog-fill-hint p { margin: 0; }
+.catalog-save-conflict { align-items: center; display: flex; flex-wrap: wrap; justify-content: space-between; margin: 0; }
+.catalog-save-conflict .button { min-height: 32px; padding: 5px 8px; }
 .catalog-fill-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .catalog-fill-actions button { min-height: 32px; padding: 5px 8px; }
 .is-catalog .catalog-editor .field { min-height: 36px; padding: 7px 10px; }
