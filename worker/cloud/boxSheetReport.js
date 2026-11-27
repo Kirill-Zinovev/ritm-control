@@ -23,6 +23,9 @@ export async function readLiveBoxSheetReport(reader, spreadsheetId, store) {
     if (isFresh(previous)) return view("ready", previous);
 
     const value = await readBoxSheetReport(reader, spreadsheetId, AbortSignal.timeout(12000));
+    const previousFbs = previous?.value?.fbs;
+    if (value.fbs.status === "stale" && previousFbs && previousFbs.url === value.fbs.url && previousFbs.status !== "missing")
+      value.fbs = { ...previousFbs, status: "stale" };
     const at = store.now();
     await store.saveSnapshot(cacheKey, value, lease, at);
     return view("ready", { at, value });

@@ -9545,6 +9545,18 @@ td small {
 .box-sheet-report-table th:last-child,.box-sheet-report-table td:last-child { width: 200px; }
 .box-sheet-report-table td a { color: var(--primary); font-weight: 600; overflow-wrap: anywhere; }
 .box-sheet-archived { display: inline-block; margin-left: 8px; color: var(--muted); font-size: 12px; }
+.box-fbs-sheets { margin: 0 0 20px; padding: 16px; border: 1px solid var(--border); border-radius: 9px; background: #f8faff; }
+.box-fbs-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.box-fbs-heading h3 { margin: 0; }
+.box-fbs-heading a { color: var(--primary); font-weight: 600; }
+.box-fbs-totals { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; max-width: 460px; margin: 12px 0 0; }
+.box-fbs-totals > div { padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: white; }
+.box-fbs-totals dt { color: var(--muted); }
+.box-fbs-totals dd { margin: 4px 0 0; font-size: 21px; font-weight: 700; }
+.box-fbs-sheets > p { margin: 10px 0 0; }
+.box-fbs-days { margin-top: 12px; max-height: 400px; overflow: auto; }
+.box-fbs-days table { min-width: 0; }
+.box-fbs-days thead { position: sticky; top: 0; }
 @media (max-width: 1100px) { .printing-kpis--box-sheets { max-width: none; } }
 @media (max-width: 620px) {
   .printing-kpis--box-sheets { grid-template-columns: repeat(2, minmax(0, 1fr)); }

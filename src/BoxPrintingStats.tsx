@@ -5,6 +5,7 @@ import type { BoxPrintingEvent, LivePrinting } from "./livePrinting";
 import { useBoxSheetReport } from "./useBoxSheetReport";
 import { printingSnapshotTime } from "./printingSnapshotRefresh";
 import { BoxAreaDiagnostics } from "./BoxAreaDiagnostics";
+import { BoxFbsSheetStats } from "./BoxFbsSheetStats";
 
 const goodsNumber = (value: number) => num(value);
 const boxDate = (value: string) =>
@@ -221,6 +222,11 @@ export function BoxPrintingStats({
             ) : sheetReport?.status === "available" ? <p>Открытых поставок Бокса нет.</p>
               : !sheetReportUnavailable && <p role="status">Читаем значения из шапок поставок…</p>}
           </div>
+        )}
+        {showSheetMetric && (
+          <BoxFbsSheetStats report={sheetReport?.fbs} date={date} period={period}
+            stale={sheetReportUnavailable}
+            loading={!!liveSheetReport && (!liveSheetCounts || liveSheetCounts.state === "syncing")} />
         )}
         {source?.status !== "available" ? (
           <p role="status">

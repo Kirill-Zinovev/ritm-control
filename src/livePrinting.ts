@@ -75,10 +75,18 @@ export type LiveOrder = {
   spreadsheetId?: string;
   sourceUrl?: string;
 };
+export type BoxFbsSheetReport = {
+  status: "available" | "missing" | "stale";
+  rows: { date: string; employee: string; print: number; cut: number }[];
+  invalidRows: number[];
+  url?: string;
+};
+
 export type BoxSheetReport = {
   status: "available" | "unavailable";
   entered: number;
   total: number | null;
+  fbs?: BoxFbsSheetReport;
   rows: {
     sheetId: number;
     name: string;

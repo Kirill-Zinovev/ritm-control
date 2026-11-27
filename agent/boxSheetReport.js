@@ -1,4 +1,15 @@
 export const BOX_SHEET_REPORT_LABEL = "Фактически листов";
+const fbsHeaders = [
+  "Дата",
+  "Сотрудник",
+  "Акрил прозрачный",
+  "Акрил молочный",
+  "ПЭТ",
+  "ПВХ",
+  "Лазер",
+];
+const sheetEpoch = Date.UTC(1899, 11, 30);
+const lastDateSerial = 2958465;
 
 function isBoxSupply({ properties }) {
   return /^(OZON|WB)\s+\S/iu.test(properties?.title?.trim() ?? "");
@@ -24,10 +35,67 @@ function readCount(grid) {
   return { status: "entered", count };
 }
 
+async function readFbsSheet(reader, spreadsheetId, tab, signal) {
+  if (!tab) return { status: "missing", rows: [], invalidRows: [] };
+  const { sheetId, gridProperties } = tab.properties;
+  const url = "https://docs.google.com/spreadsheets/d/" + spreadsheetId + "/edit#gid=" + sheetId;
+  try {
+    const rowCount = gridProperties?.rowCount;
+    if (!Number.isSafeInteger(rowCount) || rowCount < 1 || gridProperties.columnCount < fbsHeaders.length)
+      throw new Error("FBS table grid unavailable");
+    const response = await reader.get(spreadsheetId, {
+      ranges: ["'FBS'!A1:G" + rowCount],
+      fields: "spreadsheetId,sheets(properties(sheetId,title),data(startRow,startColumn,rowData(values(userEnteredValue))))",
+    }, signal);
+    const sheet = response.sheets?.find(({ properties }) => properties?.sheetId === sheetId);
+    const grid = sheet?.data?.[0];
+    const [header, ...contents] = grid?.rowData ?? [];
+    if (response.spreadsheetId !== spreadsheetId || sheet?.properties?.title !== "FBS" ||
+        (grid?.startRow ?? 0) !== 0 || (grid?.startColumn ?? 0) !== 0 ||
+        !fbsHeaders.every((label, i) => header?.values?.[i]?.userEnteredValue?.stringValue === label))
+      throw new Error("FBS table headers changed");
+
+    const entries = new Map();
+    const invalidRows = [];
+    for (const [i, { values }] of contents.entries()) {
+      const row = i + 2;
+      const [day, person, ...cells] = Array.from({ length: fbsHeaders.length },
+        (_, column) => values?.[column]?.userEnteredValue);
+      if (!day && !person && cells.every(cell => !cell)) continue;
+      const serial = day?.numberValue;
+      const employee = person?.stringValue?.trim().replace(/\s+/gu, " ").normalize("NFC");
+      const counts = cells.map(cell => cell ? cell.numberValue : 0);
+      const print = counts.slice(0, 4).reduce((sum, count) => sum + count, 0);
+      if (!Number.isSafeInteger(serial) || serial < 1 || serial > lastDateSerial || !employee ||
+          !counts.every(count => Number.isSafeInteger(count) && count >= 0) || !Number.isSafeInteger(print)) {
+        invalidRows.push(row);
+        continue;
+      }
+      if (cells.every(cell => !cell)) continue;
+      const date = new Date(sheetEpoch + serial * 86400000).toISOString().slice(0, 10);
+      const key = date + "|" + employee.toLocaleLowerCase("ru-RU");
+      const group = entries.get(key) ?? [];
+      group.push({ row, entry: { date, employee, print, cut: counts[4] } });
+      entries.set(key, group);
+    }
+    const rows = [];
+    for (const group of entries.values()) {
+      if (group.length === 1) rows.push(group[0].entry);
+      else invalidRows.push(...group.map(({ row }) => row));
+    }
+    invalidRows.sort((a, b) => a - b);
+    return { status: "available", rows, invalidRows, url };
+  } catch {
+    return { status: "stale", rows: [], invalidRows: [], url };
+  }
+}
+
 export async function readBoxSheetReport(reader, spreadsheetId, signal) {
   const metadata = await reader.get(spreadsheetId, {
     fields: "spreadsheetId,sheets(properties(sheetId,title,hidden,gridProperties(columnCount,rowCount)))",
   }, signal);
+  const fbs = readFbsSheet(reader, spreadsheetId,
+    metadata.sheets.find(({ properties }) => properties?.title === "FBS"), signal);
   const supplies = metadata.sheets.filter(isBoxSupply);
   const rows = [];
 
@@ -64,5 +132,5 @@ export async function readBoxSheetReport(reader, spreadsheetId, signal) {
   const entered = rows.filter(row => row.status === "entered");
   const total = entered.reduce((sum, row) => sum + row.count, 0);
   if (!Number.isSafeInteger(total)) throw new Error("Box sheet total exceeds supported precision");
-  return { status: "available", rows, entered: entered.length, total: entered.length ? total : null };
+  return { status: "available", rows, entered: entered.length, total: entered.length ? total : null, fbs: await fbs };
 }
