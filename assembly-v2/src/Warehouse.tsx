@@ -9,6 +9,7 @@ import { filterWarehouseCartons, warehouseCity } from "../shared/warehouse-filte
 import { Button, Dialog, Empty, NativeSelect, Pagination, Search } from "./ui";
 import { CartonDetails } from "./Cartons";
 import { WarehouseStock } from "./WarehouseStock";
+import { WarehouseNumberExport } from "./WarehouseNumberExport";
 import { WarehouseCompositionPreview, WarehouseOverview, WarehousePageCheck } from "./WarehouseOverview";
 import { PreparedDispatches, type DepartureReview } from "./PreparedDispatches";
 import "./warehouse-inventory.css";
@@ -25,6 +26,7 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
   const [city, setCity] = useState("");
   const [shop, setShop] = useState("");
   const [downloading, setDownloading] = useState(false);
+  const [exportByNumber, setExportByNumber] = useState(false);
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [wbNumbers, setWbNumbers] = useState("");
@@ -207,11 +209,14 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
             { label: "Изделий в коробах", value: ready.reduce((total, box) => total + box.qty, 0) },
             { label: "Подготовлено отгрузок", value: draftCount },
           ]} actions={
-            <Button disabled={downloading || w.busy || !filtered.length} onClick={() => void downloadStock(filtered)}>
-              <Download size={17} />
-              {downloading ? "Готовим Excel…" : city ? "Скачать Excel по городу"
-                : market || shop || query ? "Скачать короба по фильтру" : "Скачать все короба"}
-            </Button>
+            <>
+              <Button disabled={downloading || w.busy} onClick={() => setExportByNumber(true)}>Скачать по номерам</Button>
+              <Button disabled={downloading || w.busy || !filtered.length} onClick={() => void downloadStock(filtered)}>
+                <Download size={17} />
+                {downloading ? "Готовим Excel…" : city ? "Скачать Excel по городу"
+                  : market || shop || query ? "Скачать короба по фильтру" : "Скачать все короба"}
+              </Button>
+            </>
           } />
           <div className="tools warehouse-filters">
             <Search
@@ -378,6 +383,7 @@ export function Warehouse({ workspace: w }: { workspace: Workspace }) {
           onSend={(review) => { setSend(review); setError(""); }}
         />
       )}
+      {exportByNumber && tab === "ready" && <WarehouseNumberExport scope="ready" onClose={() => setExportByNumber(false)} />}
       {details ? (
         <CartonDetails
           box={details}

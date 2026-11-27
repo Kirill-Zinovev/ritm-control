@@ -3,6 +3,7 @@ import type { SqlStore, Statement } from "./database";
 import type {
   WarehouseCarton,
   WarehouseNumberPreview,
+  WarehouseNumberScope,
   WarehousePage,
   WarehouseReceipt,
 } from "../shared/warehouse";
@@ -20,27 +21,38 @@ const str = (v: unknown, max = 300) =>
   typeof v === "string" && v.trim().length > 0 && v.length <= max
     ? v.trim()
     : "";
-const warehouseExportSelectionLimit = 100;
+export const warehouseExportSelectionLimit = 100;
 
-export async function previewWarehouseNumbers(store: SqlStore, input: string): Promise<WarehouseNumberPreview> {
+export async function previewWarehouseNumbers(store: SqlStore, input: string, scope: WarehouseNumberScope = "stock"): Promise<WarehouseNumberPreview> {
   const labels = cartonNumberList(input);
-  check(labels.length > 0, "Введите номера складских коробов.");
+  check(labels.length > 0, "Введите номера коробов.");
   check(labels.length <= warehouseExportSelectionLimit,
-    `Проверьте список. За один раз можно выбрать до ${warehouseExportSelectionLimit} складских коробов.`);
+    `Проверьте список. За один раз можно выбрать до ${warehouseExportSelectionLimit} коробов.`);
 
   type Carton = WarehouseNumberPreview["cartons"][number];
+  type Issue = WarehouseNumberPreview["issues"][number]["reason"];
   const wanted = new Set(labels);
   const matches = new Map<string, Carton | null>();
-  const rows = await store.all<Carton>("select id,label,market,store,state from av2_warehouse_cartons");
-  for (const row of rows) {
+  const unavailable = new Map<string, Issue>();
+  const rows = await store.all<Carton & { dispatchId?: string | null; dispatchState?: string | null }>(scope === "ready"
+    ? `select c.id,c.label,c.market,c.store,c.state,c.destination,c.dispatch_id,d.state dispatch_state
+       from av2_production_cartons c left join av2_dispatches d on d.id=c.dispatch_id`
+    : "select id,label,market,store,state from av2_warehouse_cartons");
+  for (const { dispatchId, dispatchState, ...row } of rows) {
     const key = cartonNumberKey(row.label);
-    if (wanted.has(key)) matches.set(key, matches.has(key) ? null : row);
+    if (!wanted.has(key)) continue;
+    if (scope === "ready" && (row.state !== "closed" || dispatchId)) {
+      const reason = dispatchState === "sent" ? "sent" : dispatchId ? "prepared" : "open";
+      unavailable.set(key, unavailable.has(key) ? "ambiguous" : reason);
+      continue;
+    }
+    matches.set(key, matches.has(key) ? null : row);
   }
   const preview: WarehouseNumberPreview = { cartons: [], issues: [] };
   for (const label of labels) {
     const carton = matches.get(label);
     if (carton) preview.cartons.push(carton);
-    else preview.issues.push({ label, reason: carton === null ? "ambiguous" : "missing" });
+    else preview.issues.push({ label, reason: carton === null ? "ambiguous" : unavailable.get(label) ?? "missing" });
   }
   return preview;
 }

@@ -38,7 +38,8 @@ export interface WarehousePage {
   itemPage: number;
   summary?: { qty: number; openCount: number };
 }
+export type WarehouseNumberScope = "stock" | "ready";
 export interface WarehouseNumberPreview {
-  cartons: Pick<WarehouseCarton, "id" | "label" | "market" | "store" | "state">[];
-  issues: { label: string; reason: "missing" | "ambiguous" }[];
+  cartons: (Pick<WarehouseCarton, "id" | "label" | "market" | "store" | "state"> & { destination?: string })[];
+  issues: { label: string; reason: "missing" | "ambiguous" | "open" | "prepared" | "sent" }[];
 }

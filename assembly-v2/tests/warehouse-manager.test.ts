@@ -5,9 +5,10 @@ import {openDatabase} from "../server/local-db";
 import {bootstrap} from "./fixtures";
 import {readWarehouse} from "../server/warehouse";
 import {api} from "../server/api";
-import {warehouseWorkbook} from "../src/exports/excel";
+import {accountWorkbook, warehouseWorkbook} from "../src/exports/excel";
 import {positionCatalogJoin,effectiveCatalogData} from "../server/catalog-store";
 import type { WarehouseNumberPreview, WarehousePage } from "../shared/warehouse";
+import type { Carton, Snapshot } from "../shared/model";
 
 test("warehouse manager filters and complete Excel include open/closed reserve cartons and more than 30 items without changing stock",async t=>{
  const db=await openDatabase();t.after(()=>db.sqlite.close());const f=await bootstrap(db),at=new Date().toISOString();
@@ -107,4 +108,92 @@ test("indexed catalog lookup matches resolved catalog for imported, managed, ref
   const actual=await db.store.all<{data:string|null}>(`select pc.value data from (select ? catalog_import_id,? catalog_entry_id) p ${positionCatalogJoin()}`,['i',entryId]);
   assert.deepEqual(actual[0].data?JSON.parse(actual[0].data):null,expected[0]?.data?JSON.parse(expected[0].data):null,entryId);
  }
+});
+
+test("готовые к отгрузке короба выгружаются по номерам с полным составом, статус проверяется повторно", async t => {
+  const db = await openDatabase();
+  t.after(() => db.sqlite.close());
+  const { cmd, a, b, employee, supply } = await bootstrap(db);
+  const snapshot = async () => await db.snapshot(supply.id) as Snapshot;
+  for (const position of [a, b]) {
+    await cmd("work.save", {
+      positionId: position.id, employeeId: employee.id, operation: "packing", qty: 80,
+    });
+  }
+
+  async function makeCarton(qty: number, close = true, extraQty = 0) {
+    const { cartonId } = await cmd("allocation.place", { positionId: a.id, qty, newCarton: true });
+    if (extraQty) await cmd("allocation.place", { positionId: b.id, qty: extraQty, cartonId });
+    const box = (await snapshot()).cartons.find(({ id }) => id === cartonId)!;
+    if (close) {
+      await cmd("carton.close", {
+        cartonId, items: box.items.map(({ id, qty }) => ({ id, qty })).sort((x, y) => x.id.localeCompare(y.id)),
+      });
+    }
+    return box;
+  }
+
+  const readyFirst = await makeCarton(9, true, 11);
+  const readySecond = await makeCarton(7);
+  const open = await makeCarton(1, false);
+  const prepared = await makeCarton(2);
+  await cmd("dispatch.create", { cartonIds: [prepared.id] });
+  const sent = await makeCarton(3);
+  const { dispatchId } = await cmd("dispatch.create", { cartonIds: [sent.id] });
+  await cmd("dispatch.send", { dispatchId, confirmed: true });
+  const duplicate = await makeCarton(4);
+  const otherDuplicate = await makeCarton(5);
+  db.sqlite.prepare("update av2_cartons set label=? where id=?").run(duplicate.label.toUpperCase(), otherDuplicate.id);
+  db.sqlite.prepare("insert into av2_warehouse_cartons(id,label,market,store,state,created_at) values(?,?,?,?,?,?)")
+    .run("stock-only", "1скл99", "OZON", "1", "closed", new Date().toISOString());
+
+  type Role = "owner" | "manager" | "collector";
+  const call = (path: "number-preview" | "ready-export", body: object, role: Role) =>
+    api(new Request(`https://local/api/warehouse/${path}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    }), db, role, role);
+  const numbers = [
+    readySecond.label.toUpperCase(), readyFirst.label, readySecond.label,
+    open.label, prepared.label, sent.label, duplicate.label, "1скл99", "отсутствует",
+  ].join(",\n");
+  const before = await snapshot();
+  const input = { numbers, scope: "ready" };
+  assert.equal((await call("number-preview", input, "collector")).status, 403);
+  const lookup = await call("number-preview", input, "manager");
+  assert.equal(lookup.status, 200);
+  const preview = await lookup.json() as WarehouseNumberPreview;
+  assert.deepEqual(preview.cartons.map(box => box.id), [readySecond.id, readyFirst.id]);
+  assert.deepEqual(preview.issues.map(({ label, reason }) => [label, reason]), [
+    [open.label, "open"], [prepared.label, "prepared"], [sent.label, "sent"],
+    [duplicate.label, "ambiguous"], ["1скл99", "missing"], ["отсутствует", "missing"],
+  ]);
+
+  const ids = preview.cartons.map(box => box.id);
+  assert.equal((await call("ready-export", { ids }, "collector")).status, 403);
+  assert.equal((await call("ready-export", { ids: [...ids, open.id] }, "manager")).status, 409);
+  const response = await call("ready-export", { ids }, "owner");
+  assert.equal(response.status, 200);
+  const { cartons } = await response.json() as { cartons: Carton[] };
+  assert.deepEqual(cartons.map(({ id, qty, items }) => [id, qty, items.length]), [
+    [readySecond.id, 7, 1], [readyFirst.id, 20, 2],
+  ]);
+  const workbook = accountWorkbook({ createdAt: new Date().toISOString(), payload: { cartons } });
+  const persisted = new ExcelJS.Workbook();
+  await persisted.xlsx.load(await workbook.xlsx.writeBuffer());
+  assert.deepEqual(persisted.worksheets.map(sheet => sheet.name), ["Короба", "Состав", "Сводка"]);
+  const boxesSheet = persisted.getWorksheet("Короба")!;
+  assert.deepEqual([boxesSheet.getCell("A2").value, boxesSheet.getCell("A3").value], [readySecond.label, readyFirst.label]);
+  const rows: unknown[][] = [];
+  persisted.getWorksheet("Состав")!.eachRow((row, index) => {
+    if (index > 1) rows.push(["A", "E", "G", "H"].map(column => row.getCell(column).value));
+  });
+  assert.deepEqual(rows.sort(), [
+    [readyFirst.label, a.sku, a.barcode, 9],
+    [readyFirst.label, b.sku, b.barcode, 11],
+    [readySecond.label, a.sku, a.barcode, 7],
+  ]);
+  assert.deepEqual(await snapshot(), before);
+
+  await cmd("dispatch.create", { cartonIds: [readyFirst.id] });
+  assert.equal((await call("ready-export", { ids }, "manager")).status, 409);
 });

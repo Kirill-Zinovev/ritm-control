@@ -30,7 +30,7 @@ import { catalogKey, digest, photoAllowed } from "../shared/catalog";
 import { prepareRitmImport } from "./ritm-import";
 import { ritmShipmentId, type RitmSupply } from "../shared/ritm";
 import { nextCartonLabel } from "../shared/carton-number";
-import { cancelWarehouseWorkPlan, previewWarehouseNumbers, readWarehouse, warehousePlan } from "./warehouse";
+import { cancelWarehouseWorkPlan, previewWarehouseNumbers, readWarehouse, warehouseExportSelectionLimit, warehousePlan } from "./warehouse";
 import { marketplaceShipments } from "./marketplace-shipments";
 import { readDispatchHistoryDetail, readDispatchHistoryPage } from "./dispatch-history";
 import { planCartonReturn, planDeparture, readPreparedDispatches } from "./dispatch-departure";
@@ -130,23 +130,23 @@ export function createDatabase(store: SqlStore, onCatalogCommit?: () => void): D
       ? `coalesce(case when ${sameStore} then nullif(trim(json_extract(pc.value,'$.barcode')),'') end,p.barcode) barcode`
       : "p.barcode";
     const productFields = `${sku},p.name,${barcode}`;
-    const [boxes, items] = await Promise.all([
-      all<CartonRow>(
+    const [boxRows, itemRows] = await store.readBatch([
+      statement(
         "select c.*,d.state dispatch_state from av2_production_cartons c left join av2_dispatches d on d.id=c.dispatch_id where c.id in (select value from json_each(?)) order by c.label",
-        [parameter],
+        parameter,
       ),
-      all<MergeAllocation & { cartonId: string }>(
+      statement(
         `select a.id,a.carton_id,a.position_id,p.supply_id,s.title supply,coalesce(s.origin_shipment_id,s.external_id) external_supply_id,p.external_id external_position_id,${productFields},p.catalog_import_id,json_extract(pc.value,'$.photoId') photo_id,a.qty,a.units_per_box,a.legacy from av2_all_allocations a join av2_positions p on p.id=a.position_id join av2_supplies s on s.id=p.supply_id ${positionCatalogJoin()} where a.carton_id in (select value from json_each(?)) and a.removed_at is null order by a.created_at,a.id`,
-        [parameter],
+        parameter,
       ),
     ]);
     const contents = new Map<string, MergeAllocation[]>();
-    for (const item of items) {
+    for (const item of itemRows as unknown as (MergeAllocation & { cartonId: string })[]) {
       const content = contents.get(item.cartonId) ?? [];
       content.push(item);
       contents.set(item.cartonId, content);
     }
-    return boxes.map((b) => {
+    return (boxRows as unknown as CartonRow[]).map((b) => {
       const content = contents.get(b.id) ?? [];
       return {
         ...b,
@@ -1161,7 +1161,20 @@ export function createDatabase(store: SqlStore, onCatalogCommit?: () => void): D
       detail: (shipmentId) => readDispatchHistoryDetail(store, shipmentId),
     },
     warehouse: (url: URL) => readWarehouse(store, url),
-    warehouseNumberPreview: (numbers) => previewWarehouseNumbers(store, numbers),
+    warehouseNumberPreview: (numbers, scope) => previewWarehouseNumbers(store, numbers, scope),
+    async readyCartonExport(ids) {
+      assert(Array.isArray(ids) && ids.length > 0 && ids.length <= warehouseExportSelectionLimit &&
+        ids.every(id => typeof id === "string" && id.length > 0 && id.length <= 300) &&
+        new Set(ids).size === ids.length, `Выберите от 1 до ${warehouseExportSelectionLimit} коробов.`);
+      const boxes = new Map((await loadCartons(ids)).map(box => [box.id, box]));
+      const cartons = ids.map(id => {
+        const box = boxes.get(id);
+        assert(box?.state === "closed" && !box.dispatchId,
+          "Часть коробов больше не готова к отгрузке. Найдите короба заново.");
+        return box;
+      });
+      return { cartons };
+    },
     workHistory: (url: URL) => readWorkHistory(store, url),
     searchPositions: (url: URL) => searchPositions(store, url),
     snapshot,

@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { Download } from "lucide-react";
-import type { WarehouseNumberPreview, WarehousePage } from "../shared/warehouse";
+import type { Carton } from "../shared/model";
+import type { WarehouseNumberPreview, WarehouseNumberScope, WarehousePage } from "../shared/warehouse";
 import { request } from "./useWorkspace";
 import { Button, Dialog } from "./ui";
 
@@ -15,12 +16,21 @@ export async function downloadWarehouseCartons(params: URLSearchParams, order?: 
   await downloadWorkbook(warehouseWorkbook(cartons, at), `Запас-на-складе-${at.slice(0, 10)}.xlsx`);
 }
 
-export function WarehouseNumberExport({ onClose }: { onClose(): void }) {
+const issueText: Record<WarehouseNumberPreview["issues"][number]["reason"], string> = {
+  missing: "Короб не найден. Проверьте номер.",
+  ambiguous: "Несколько коробов с этим номером. Отметьте нужный в таблице.",
+  open: "Короб открыт. После закрытия его можно будет скачать здесь.",
+  prepared: "Короб в подготовленной отгрузке.",
+  sent: "Короб уже отправлен.",
+};
+
+export function WarehouseNumberExport({ scope = "stock", onClose }: { scope?: WarehouseNumberScope; onClose(): void }) {
   const [numbers, setNumbers] = useState("");
   const [preview, setPreview] = useState<WarehouseNumberPreview | null>(null);
   const [busy, setBusy] = useState<"search" | "download" | null>(null);
   const [error, setError] = useState("");
   const found = preview?.cartons.length ?? 0;
+  const ready = scope === "ready";
 
   async function find(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -32,7 +42,7 @@ export function WarehouseNumberExport({ onClose }: { onClose(): void }) {
       setPreview(await request<WarehouseNumberPreview>("/api/warehouse/number-preview", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ numbers }),
+        body: JSON.stringify({ numbers, scope }),
       }));
     } catch (e) {
       setError((e as Error).message);
@@ -47,7 +57,19 @@ export function WarehouseNumberExport({ onClose }: { onClose(): void }) {
     setError("");
     try {
       const ids = preview.cartons.map(box => box.id);
-      await downloadWarehouseCartons(new URLSearchParams({ export: JSON.stringify(ids) }), ids);
+      if (ready) {
+        const { cartons } = await request<{ cartons: Carton[] }>("/api/warehouse/ready-export", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ids }),
+        });
+        const { accountWorkbook, downloadWorkbook } = await import("./exports/excel");
+        const createdAt = new Date().toISOString();
+        const workbook = accountWorkbook({ createdAt, payload: { cartons } });
+        await downloadWorkbook(workbook, `Короба-к-отгрузке-${createdAt.slice(0, 10)}.xlsx`);
+      } else {
+        await downloadWarehouseCartons(new URLSearchParams({ export: JSON.stringify(ids) }), ids);
+      }
       onClose();
     } catch (e) {
       setError((e as Error).message);
@@ -60,9 +82,9 @@ export function WarehouseNumberExport({ onClose }: { onClose(): void }) {
     <Dialog title="Скачать состав по номерам" busy={busy !== null} onClose={onClose} initialFocusId="warehouse-number-list">
       <form className="stack" onSubmit={find}>
         <div className="field-wrap">
-          <label className="label" htmlFor="warehouse-number-list">Номера складских коробов</label>
+          <label className="label" htmlFor="warehouse-number-list">{ready ? "Номера коробов к отгрузке" : "Номера складских коробов"}</label>
           <textarea id="warehouse-number-list" className="field" rows={5} spellCheck={false}
-            placeholder={"1скл11\n1скл10"} value={numbers} disabled={busy !== null} aria-describedby="warehouse-number-help"
+            placeholder={ready ? "1мос260\n1мос258" : "1скл11\n1скл10"} value={numbers} disabled={busy !== null} aria-describedby="warehouse-number-help"
             onChange={event => { setNumbers(event.target.value); setPreview(null); setError(""); }} />
           <span id="warehouse-number-help" className="muted">Разделяйте номера новой строкой, пробелом или запятой.</span>
         </div>
@@ -70,19 +92,17 @@ export function WarehouseNumberExport({ onClose }: { onClose(): void }) {
           <p role="status"><strong>Найдено {found} из {found + preview.issues.length}</strong></p>
           {!!found && <div className="table-scroll">
             <table>
-              <thead><tr><th scope="col">Короб</th><th scope="col">Маркетплейс и магазин</th><th scope="col">Статус</th></tr></thead>
+              <thead><tr><th scope="col">Короб</th><th scope="col">Маркетплейс и магазин</th><th scope="col">{ready ? "Направление" : "Статус"}</th></tr></thead>
               <tbody>{preview.cartons.map(box => (
                 <tr key={box.id}><td><strong>{box.label}</strong></td>
                   <td>{box.market} · Магазин {box.store}</td>
-                  <td>{box.state === "open" ? "Открыт" : "Закрыт"}</td></tr>
+                  <td>{ready ? box.destination : box.state === "open" ? "Открыт" : "Закрыт"}</td></tr>
               ))}</tbody>
             </table>
           </div>}
           {!!preview.issues.length && <ul>
             {preview.issues.map(({ label, reason }) => (
-              <li key={label}><strong>{label}</strong> · {reason === "missing"
-                ? "Короб не найден. Проверьте номер."
-                : "Несколько коробов с этим номером. Отметьте нужный в таблице склада."}</li>
+              <li key={label}><strong>{label}</strong> · {issueText[reason]}</li>
             ))}
           </ul>}
         </>}

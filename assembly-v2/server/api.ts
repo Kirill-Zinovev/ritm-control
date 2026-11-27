@@ -1,8 +1,8 @@
-import type { Command, PreparedDispatch } from "../shared/model";
+import type { Carton, Command, PreparedDispatch } from "../shared/model";
 import type { PositionSearchPage } from "../shared/position-search";
 import type { DispatchHistoryDetail, DispatchHistoryPage } from "../shared/dispatch-history";
 import type { OzonBatch, OzonBatchSummary, OzonPreview } from "../shared/ozon-shipment";
-import type { WarehouseNumberPreview } from "../shared/warehouse";
+import type { WarehouseNumberPreview, WarehouseNumberScope } from "../shared/warehouse";
 import { collectorActions, managerActions } from "./access";
 export interface Database {
   ozon?: {
@@ -12,7 +12,8 @@ export interface Database {
   };
   wb?: Database["ozon"];
   warehouse?(url: URL): Promise<unknown>;
-  warehouseNumberPreview?(numbers: string): Promise<WarehouseNumberPreview>;
+  warehouseNumberPreview?(numbers: string, scope?: WarehouseNumberScope): Promise<WarehouseNumberPreview>;
+  readyCartonExport?(ids: unknown): Promise<{ cartons: Carton[] }>;
   preparedDispatches?(): Promise<PreparedDispatch[]>;
   dispatchHistory?: {
     page(index: number, query?: string): Promise<DispatchHistoryPage>;
@@ -121,15 +122,22 @@ export async function api(
     }
     if (request.method === "GET" && url.pathname === "/api/positions/search" && db.searchPositions)
       return json(await db.searchPositions(url));
-    if (request.method === "POST" && url.pathname === "/api/warehouse/number-preview" && db.warehouseNumberPreview) {
+    const numberPreview = url.pathname === "/api/warehouse/number-preview" ? db.warehouseNumberPreview : undefined;
+    const readyExport = url.pathname === "/api/warehouse/ready-export" ? db.readyCartonExport : undefined;
+    if (request.method === "POST" && (numberPreview || readyExport)) {
       if (role === "collector") return json({ error: "Выгрузки доступны руководителю." }, 403);
       if (!request.headers.get("content-type")?.startsWith("application/json"))
         return json({ error: "Ожидается JSON." }, 415);
       const body = await request.text();
-      if (body.length > 20_000) return json({ error: "Вставьте более короткий список складских коробов." }, 413);
+      if (body.length > 20_000) return json({ error: "Вставьте более короткий список коробов." }, 413);
       const input = JSON.parse(body);
-      if (typeof input?.numbers !== "string") return json({ error: "Проверьте список складских коробов." }, 400);
-      return json(await db.warehouseNumberPreview(input.numbers));
+      if (readyExport) return json(await readyExport(input?.ids));
+      if (numberPreview) {
+        const scope = input?.scope ?? "stock";
+        if (typeof input?.numbers !== "string" || (scope !== "stock" && scope !== "ready"))
+          return json({ error: "Проверьте список коробов." }, 400);
+        return json(await numberPreview(input.numbers, scope));
+      }
     }
     if (
       request.method === "GET" &&
