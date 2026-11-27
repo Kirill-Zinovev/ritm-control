@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { PositionSearchPage } from "../shared/position-search";
+import { matchesPositionQuery, type PositionSearchPage } from "../shared/position-search";
 import { api } from "../server/api";
 import { openDatabase } from "../server/local-db";
 import { searchPositions } from "../server/position-search";
@@ -64,4 +64,49 @@ test("position search returns active exact and prefix matches with their actual 
     },
   }, new URL(request.url));
   assert.ok(plans.some(plan => plan.includes("av2_active_positions_sku") && plan.includes(">?")), plans.join("\n"));
+});
+
+test("four digits find SKU endings in current and other supplies without matching titles or middle digits", async t => {
+  const db = await openDatabase();
+  t.after(() => db.sqlite.close());
+  const { cmd } = await bootstrap(db);
+  async function supply(id: string, skus: string[], options: { active?: boolean; positionActive?: boolean } = {}) {
+    const { active = true, positionActive = true } = options;
+    const result = await cmd("supply.import", {
+      ...fixture,
+      externalId: id,
+      sourceActive: active,
+      positions: skus.map((sku, i) => ({
+        ...fixture.positions[0],
+        externalId: `${id}|${i}`,
+        sku,
+        name: "Наклейки 7525",
+        sourceActive: positionActive,
+      })),
+    });
+    return String(result.supplyId);
+  }
+  const current = await supply("suffix-current", ["WT0017.A7525"]);
+  const other = await supply("suffix-other", [
+    "CB0001.A7525(oz)",
+    "KI0051.A17525",
+    "KB0001.A75250(OZ)",
+    "KB0002.A1234",
+    "752500",
+  ]);
+  await supply("suffix-archived", ["KB0003.A7525"], { active: false });
+  await supply("suffix-inactive-position", ["KB0004.A7525"], { positionActive: false });
+
+  const endpoint = "https://assembly.test/api/positions/search";
+  const response = await api(new Request(`${endpoint}?q=%207525%20&supply=${current}`), db, "collector", "collector");
+  assert.equal(response.status, 200);
+  const page = await response.json() as PositionSearchPage;
+  assert.deepEqual(page.items.map(item => item.sku.toUpperCase()).sort(), ["CB0001.A7525(OZ)", "KI0051.A17525"]);
+  assert.ok(page.items.every(item => item.supplyId === other));
+  assert.deepEqual((await searchPositions(db.store, new URL(`${endpoint}?q=75250`))).items.map(item => item.sku), ["752500"]);
+
+  assert.equal(matchesPositionQuery({ sku: "WT0017.A7525", name: "Наклейки" }, "7525"), true);
+  assert.equal(matchesPositionQuery({ sku: "CB0001.A7525 (oz) ", name: "Наклейки" }, "7525"), true);
+  assert.equal(matchesPositionQuery({ sku: "KB0001.A75250(OZ)", name: "Наклейки 7525" }, "7525"), false);
+  assert.equal(matchesPositionQuery({ sku: "KB0002.A1234", name: "Наклейки 7525" }, "7525"), false);
 });

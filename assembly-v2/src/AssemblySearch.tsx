@@ -146,7 +146,7 @@ export function AssemblySearch({ query, currentId, positions, disabled, onQuery,
         if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) setOpen(false);
       }}
       onKeyDown={handleKeys}>
-      <Search label="Артикул или название" value={query} onChange={value => {
+      <Search label="Артикул, название или последние 4 цифры" value={query} onChange={value => {
         setPage({ key: "", offset: 0, retry: 0 });
         setOtherExpanded(true);
         setOpen(true);
