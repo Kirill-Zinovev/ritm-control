@@ -8,7 +8,7 @@ const clean = value => typeof value==='string' && !value.trim().startsWith('#') 
 const sku = value => clean(value).normalize('NFC').toLocaleUpperCase('ru-RU');
 export const skuKey = (market,value) => market==='OZON' ? sku(value).replace(/\(OZ\)$/u,'') : sku(value);
 
-function shopFromSupply(name) {
+function shopFromSupply(name = '') {
   const matches=Array.from(name.matchAll(/(?:магазин\s*([12])(?!\d)|(?<!\d)([12])\s*(?:[-‑–]\s*)?(?:й|ый)?\s*магазин)/giu));
   const values=new Set(matches.map(match=>match[1]||match[2]));
   return values.size===1 ? values.values().next().value : '';
@@ -36,7 +36,7 @@ export async function decorateRows(db, group, rows) {
   }
   const groupStore=shopFromSupply(group.name);
   return rows.map(row=>{
-    const store=clean(row.catalogStore)||groupStore;
+    const store=clean(row.catalogStore)||(group.name ? groupStore : shopFromSupply(row.supplyName));
     const candidates=index.get(skuKey(group.market,row.article))??[];
     const scoped=store ? candidates.filter(card=>card.store===store) : candidates;
     if (!store && new Set(scoped.map(card=>card.store)).size>1) return row;

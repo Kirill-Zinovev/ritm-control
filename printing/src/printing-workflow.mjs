@@ -94,6 +94,25 @@ export function boxTakeBlockReason(row, records, working) {
   return '';
 }
 
+const clipboardQuantity = new Intl.NumberFormat('ru-RU', {
+  useGrouping:false, maximumFractionDigits:8,
+});
+
+export function boxSelectionText(rows, entryForRow) {
+  const lines = [];
+  for (const row of rows) {
+    const entry = entryForRow(row);
+    if (!Number.isFinite(entry?.pieces) || entry.pieces <= 0) {
+      return {error:row.article+' — '+(entry?.error || 'Количество не подтверждено.')};
+    }
+    const article = String(row.article ?? '').trim();
+    if (!article || /[\t\r\n]/u.test(article)) return {error:'Проверьте артикул выбранной позиции.'};
+    const cell = /^[=+\-@]/u.test(article) ? "'"+article : article;
+    lines.push(cell+'\t'+clipboardQuantity.format(entry.pieces));
+  }
+  return {text:lines.join('\n')};
+}
+
 export function takeEntry(row, records, draft = {}) {
   const remaining = takeRemaining(row, records);
   const valid = (quantity, unit, pieces) => ({quantity, unit, pieces});

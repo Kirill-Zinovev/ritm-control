@@ -1,5 +1,5 @@
 import React from 'react';
-import { MAX_ROLLS, isXerox, operationNames, rollDraft, takeRemaining, unitFactor } from './printing-workflow.mjs';
+import { MAX_ROLLS, boxSelectionText, isXerox, operationNames, rollDraft, takeRemaining, unitFactor } from './printing-workflow.mjs';
 
 export const quantityText = new Intl.NumberFormat('ru-RU', {maximumFractionDigits:3});
 export const showAmount = value => value == null ? '—' : quantityText.format(value);
@@ -9,6 +9,35 @@ export function ProductPhoto({url, loading = 'lazy'}) {
   return url && !failed
     ? <img className="photo" alt="" src={url} loading={loading} referrerPolicy="no-referrer" onError={() => setFailed(true)}/>
     : <span className="photo missing">Нет фото</span>;
+}
+
+export function PrintExtension({value}) {
+  const extension = typeof value === 'string' ? value.trim() : '';
+  return <small className="print-extension" title={extension ? 'Расширение печати' : 'Расширение печати не указано'}>
+    <span className="sr-only">Расширение печати </span>{extension || '—'}
+  </small>;
+}
+
+export function CopyBoxSelection({rows, entryForRow, disabled}) {
+  const [feedback, setFeedback] = React.useState(null);
+  async function copy() {
+    const result = boxSelectionText(rows,entryForRow);
+    if (result.error) {
+      setFeedback({error:result.error});
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(result.text);
+      setFeedback({message:'Скопировано позиций: '+rows.length});
+    } catch {
+      setFeedback({error:'Не удалось скопировать. Проверьте доступ к буферу обмена.'});
+    }
+  }
+  return <>
+    <button className="link" type="button" disabled={disabled} onClick={copy}>Скопировать артикулы и количество (шт.)</button>
+    {feedback?.message && <small className="quiet" role="status">{feedback.message}</small>}
+    {feedback?.error && <small className="error" role="alert">{feedback.error}</small>}
+  </>;
 }
 
 export function SelectionBar({eligible, count, onSelectAll, onClear, children, disabled}) {
@@ -80,7 +109,7 @@ export function RollBatchWork({selection, operation, onOperation, onAssign, onOp
       {selection.map(({row,[operation]:work,unassigned,printRemaining}) => <li key={row.id}>
         <button className="product" type="button" onClick={() => onOpen(row.id)}>
           <ProductPhoto key={row.photo} url={row.photo}/>
-          <span className="product-copy"><strong>{row.article}</strong><small className="product-name" title={row.name}>{row.name}</small></span>
+          <span className="product-copy"><span className="product-heading"><strong>{row.article}</strong><PrintExtension value={row.extension}/></span><small className="product-name" title={row.name}>{row.name}</small></span>
         </button>
         <div className="take-fields">
           {work.map(item => <small key={item.rollId}>{item.name || 'Рулон'} · <strong>{showAmount(item.quantity)} шт.</strong> · {item.employee}</small>)}
@@ -132,7 +161,7 @@ export function RollAllocation({rows, drafts, changeDraft, mode, setMode, shared
       const field = (key,label,attrs) => <label>{label}<input aria-label={label+' '+row.article}
         value={value[key] ?? ''} onChange={event => changeDraft(row.id,{[key]:event.target.value})} {...attrs}/></label>;
       return <li key={row.id}>
-        <div className="allocation-product"><ProductPhoto url={row.photo}/><span className="product-copy"><strong>{row.article}</strong>
+        <div className="allocation-product"><ProductPhoto url={row.photo}/><span className="product-copy"><span className="product-heading"><strong>{row.article}</strong><PrintExtension value={row.extension}/></span>
           {row.name && <small className="product-name" title={row.name}>{row.name}</small>}
           <small>В рулонах {showAmount(row.rolls?.reduce((sum,roll) => sum + roll.quantity,0))} из {showAmount(row.plan)} шт.</small>
         </span></div>

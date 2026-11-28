@@ -19,8 +19,9 @@ export async function searchPrintingPositions(db, department, excludedId, input)
   if (query.length > 160) return response({message:'Введите артикул или часть названия.'},400);
   if (!query) return response({hits:[],total:0});
   const {results} = await db.prepare(`
-    SELECT p.supply_id AS supplyId,s.name AS supplyName,p.row_id AS rowId,
+    SELECT p.supply_id AS supplyId,s.name AS supplyName,s.market,p.row_id AS rowId,
       json_extract(p.payload,'$.article') AS article,json_extract(p.payload,'$.name') AS name,
+      json_extract(p.payload,'$.extension') AS extension,json_extract(p.payload,'$.catalogStore') AS catalogStore,
       p.plan,p.printed,p.cut,p.cut_available AS cutAvailable
     FROM printing_supplies s JOIN printing_positions p ON p.supply_id=s.id
     WHERE s.department=? AND s.id<>coalesce(?,'')
@@ -30,8 +31,23 @@ export async function searchPrintingPositions(db, department, excludedId, input)
     if (normalize(row.article) === query) exact.push(row);
     else if (matchesArticle(row,query)) similar.push(row);
   }
+  const hits = [...exact,...similar.slice(0, Math.max(0,50-exact.length))];
+  const missingByMarket = new Map();
+  for (const hit of hits) {
+    if (!hit.market || hit.extension) continue;
+    if (!missingByMarket.has(hit.market)) missingByMarket.set(hit.market,[]);
+    missingByMarket.get(hit.market).push(hit);
+  }
+  const extensions = new Map();
+  await Promise.all([...missingByMarket].map(async ([market, items]) => {
+    const decorated = await decorateRows(db,{market},items);
+    items.forEach((hit,index) => extensions.set(hit,decorated[index].extension));
+  }));
   return response({
-    hits:[...exact,...similar.slice(0, Math.max(0,50-exact.length))],
+    hits:hits.map(hit => {
+      const {market,catalogStore,extension,...position} = hit;
+      return {...position,extension:extension || extensions.get(hit) || ''};
+    }),
     total:exact.length+similar.length,
   });
 }

@@ -505,6 +505,15 @@ small { font-size: .85em; }
 .photo.missing { display: grid; place-content: center; text-align: center; color: var(--muted); font-size: 11px; background: var(--photo-bg); }
 .product-copy { display: grid; gap: 2px; min-width: 0; }
 .product-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 7px; }
+.print-extension {
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--layout-bg);
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
 .product-copy strong { font-size: clamp(15px, 1.42vw, 20px); overflow-wrap: anywhere; }
 .job-state { padding: 2px 6px; border-radius: 5px; background: var(--in-work-bg); color: var(--in-work-ink); font-size: 12px; font-weight: 650; }
 .job-state.done { background: var(--done-bg); color: var(--done-ink); }

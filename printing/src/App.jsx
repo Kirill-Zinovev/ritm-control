@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { BoxBatchDock, ProductPhoto, RollAllocation, RollBatchWork, SelectionBar, TakeFields, showAmount } from './BatchWork.jsx';
+import { BoxBatchDock, CopyBoxSelection, PrintExtension, ProductPhoto, RollAllocation, RollBatchWork, SelectionBar, TakeFields, showAmount } from './BatchWork.jsx';
 import { InlineWork } from './InlineWork.jsx';
 import { ArticleSummary, JobFilters, JobQueue, OtherShipmentMatches, ShipmentPicker } from './WorkspaceViews.jsx';
 import { printingDepartments } from './printing-departments.mjs';
@@ -758,6 +758,8 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
                   <div className="queue-tools">
                     {selectable && <SelectionBar eligible={eligible.size} count={selected.length} disabled={busy}
                       onSelectAll={() => { setChecked(new Set(eligible));setBatchView(true);setDetailOpen(true);setFeedback(null); }} onClear={clearSelection}>
+                      {!isRoll && selected.length > 0 && <CopyBoxSelection rows={selected} disabled={busy}
+                        entryForRow={row => showTake ? takeEntry(row,recordsForRow(row.id),drafts[row.id]) : boxChoices.get(row.id)}/>}
                       {assignmentRows.length > 0 && <button className="link" type="button" disabled={allocationOpen || blocked}
                         onClick={() => openRollAllocation()}>Назначить рулоны</button>}
                       {selected.length > 0 && (!isRoll || working) && <button className="link" type="button" disabled={busy}
@@ -789,7 +791,7 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
                   return <li key={row.id}>
                     <button className="product" type="button" onClick={() => openArticle(row.id)}>
                       <ProductPhoto key={row.photo} url={row.photo}/>
-                      <span className="product-copy"><strong>{row.article}</strong><small className="product-name" title={row.name}>{row.name}</small></span>
+                      <span className="product-copy"><span className="product-heading"><strong>{row.article}</strong><PrintExtension value={row.extension}/></span><small className="product-name" title={row.name}>{row.name}</small></span>
                     </button>
                     {showTake ? <TakeFields row={row} records={recordsForRow(row.id)} draft={drafts[row.id]}
                       checked={!blocked} onChange={patch => changeDraft(row.id,patch)}/> :

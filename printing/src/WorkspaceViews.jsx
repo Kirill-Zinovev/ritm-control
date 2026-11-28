@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ProductPhoto, showAmount } from './BatchWork.jsx';
+import { PrintExtension, ProductPhoto, showAmount } from './BatchWork.jsx';
 import { Meter } from './InlineWork.jsx';
 import { localTotal, matchesRoll, normalize, rollTitle, workRemaining } from './printing-workflow.mjs';
 import { rollCutAvailable } from './shipment-progress.mjs';
@@ -113,7 +113,10 @@ export function OtherShipmentMatches({result, busy, onOpen}) {
         <ul className="article-matches">
           {result.hits.map(hit => <li key={JSON.stringify([hit.supplyId,hit.rowId])}>
             <button className="article-match" type="button" disabled={busy} onClick={() => onOpen(hit)}>
-              <span className="match-product"><strong>{hit.article}</strong><small>{hit.supplyName}</small></span>
+              <span className="match-product">
+                <span className="product-heading"><strong>{hit.article}</strong><PrintExtension value={hit.extension}/></span>
+                <small>{hit.supplyName}</small>
+              </span>
               <span>
                 <small className="quiet" aria-hidden="true">Печать</small>
                 <Meter label="Печать" value={hit.printed} plan={hit.plan}/>
@@ -169,7 +172,7 @@ export function JobQueue({rows, showChecks, selectionDisabled, chosen, eligible,
             <ProductPhoto key={row.photo} url={row.photo}/>
             <span className="product-copy">
               <span className="product-heading">
-                <strong>{row.article}</strong>
+                <strong>{row.article}</strong><PrintExtension value={row.extension}/>
                 {ready ? <small className="job-state done">Готово</small> :
                   needsRoll ? <small className="quiet">Нужно назначить рулон</small> : rollAssigned ?
                   <small className="quiet">Рулоны назначены</small> : taken > 0 &&
@@ -199,12 +202,12 @@ export function JobQueue({rows, showChecks, selectionDisabled, chosen, eligible,
 }
 
 export function ArticleSummary({row, records, isRoll}) {
-  const specs = [row.machine,row.material,row.extension].filter(Boolean);
+  const specs = [row.machine,row.material].filter(Boolean);
   return <>
     <div className="article-summary">
       <ProductPhoto key={row.photo} url={row.photo} loading="eager"/>
       <div className="article-copy">
-        <h2>{row.article}</h2>
+        <div className="product-heading"><h2>{row.article}</h2><PrintExtension value={row.extension}/></div>
         {row.name && <p className="article-name">{row.name}</p>}
         <div className="article-specs">
           {specs.length > 0 && <strong>{specs.join(' · ')}</strong>}

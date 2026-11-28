@@ -7,7 +7,7 @@ import worker from '../worker/index.mjs';
 import { fingerprint } from '../worker/import-data.mjs';
 import { correctionPlan, progressFacts } from '../worker/workflow.mjs';
 import { transferPrinting } from '../scripts/import-snapshot.mjs';
-import { boxTakeBlockReason, boxWorkEntry, rollEmployee } from '../src/printing-workflow.mjs';
+import { boxSelectionText, boxTakeBlockReason, boxWorkEntry, rollEmployee, takeEntry } from '../src/printing-workflow.mjs';
 import { rollBatchEntries, rollChoiceMatches, rollWorkChoice } from '../src/roll-batch-work.mjs';
 
 const boxSupply='fixture-workspace-box-0001:1';
@@ -143,6 +143,7 @@ test('imports position state and existing receipts, preserves shop scope, and bl
   assert.equal((await h.call(list+'roll',null,use(login.cookie))).status,401);
   const detail=await h.call(list+'box&supply='+encodeURIComponent(boxSupply),null,use(login.cookie));
   assert.equal(detail.value.rows[0].name,'Карточка магазина 2');
+  assert.equal(detail.value.rows[0].extension,'DTF');
   const replay=await h.call(write,{department:'box',supplyId:boxSupply,command:'work',items:[data.old[1]]},use(login.cookie));
   assert.equal(replay.value.results[0].repeated,true);
   assert.equal((await h.call(list+'box&journal=1',null,use(login.cookie))).value.work.length,1);
@@ -159,7 +160,7 @@ test('article search shows current progress from other supplies in the signed-in
   const rollRow={...JSON.parse(roll[3]),article:'SKU-A'};
   roll[3]=JSON.stringify(rollRow);
   data.parts.supplies[0].push([otherRoll,'OZON Другие рулоны','roll','open',3,'OZON']);
-  const confirmedRoll={...rollRow,plan:12,printed:9,cut:4,rolls:[{id:'roll-1',name:'д1',quantity:5,printed:5,cut:4}]};
+  const confirmedRoll={...rollRow,plan:12,printed:9,cut:4,extension:'PDF',rolls:[{id:'roll-1',name:'д1',quantity:5,printed:5,cut:4}]};
   const unknownRoll={...confirmedRoll,id:'unconfirmed',rolls:[]};
   data.parts.positions[0].push([otherRoll,confirmedRoll.id,0,JSON.stringify(confirmedRoll),12,9,4,1],
     [otherRoll,unknownRoll.id,1,JSON.stringify(unknownRoll),12,9,4,null]);
@@ -175,7 +176,7 @@ test('article search shows current progress from other supplies in the signed-in
   assert.equal(initial.status,200);
   assert.deepEqual(initial.value,{
     hits:[{supplyId:otherBox,supplyName:'OZON Другая поставка',rowId:boxRow.id,article:'SKU-A',
-      name:boxRow.name,plan:12,printed:8,cut:4,cutAvailable:4}],total:1,
+      name:boxRow.name,plan:12,printed:8,cut:4,cutAvailable:4,extension:'DTF'}],total:1,
   });
   assert.equal((await h.call(search+encodeURIComponent('БЛОКНОТА'),null,use(cookie))).value.hits[0].supplyId,otherBox);
   const cut=await h.call(write,{department:'box',supplyId:otherBox,command:'work',
@@ -189,6 +190,16 @@ test('article search shows current progress from other supplies in the signed-in
   const rollSearch=await h.call(list+'roll&supply='+encodeURIComponent(rollSupply)+'&search=sku-a',null,use(rollLogin.cookie));
   assert.equal(rollSearch.status,200);
   assert.deepEqual(rollSearch.value.hits.map(hit=>[hit.supplyId,hit.cutAvailable]),[[otherRoll,1],[otherRoll,null]]);
+  assert.deepEqual(rollSearch.value.hits.map(hit=>hit.extension),['PDF','PDF']);
+});
+
+test('Box selection copies the selected operation amounts as spreadsheet columns in pieces', ()=>{
+  const xerox = {id:'a',article:'SKU-A',machine:'Xerox',plan:30,taken:0,printed:0,sheetsInProduct:1,multiplicity:3};
+  const other = {id:'b',article:'SKU-B',machine:'Laser',plan:1500,taken:230,printed:50,cut:24};
+  assert.deepEqual(boxSelectionText([other,xerox],row=>takeEntry(row,[],row.id==='a'
+    ? {quantity:'2',unit:'sheets'} : undefined)),{text:'SKU-B\t1270\nSKU-A\t6'});
+  assert.deepEqual(boxSelectionText([other],row=>boxWorkEntry(row,[],'cut',false)),{text:'SKU-B\t26'});
+  assert.match(boxSelectionText([xerox],row=>takeEntry(row,[],{quantity:'99'})).error,/SKU-A.*доступный остаток/u);
 });
 
 test('atomic Box write retries cannot exceed the plan or duplicate an existing receipt', async t=>{
