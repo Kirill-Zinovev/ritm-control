@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { MAX_ROLLS, normalize } from '../src/printing-workflow.mjs';
 import { validSupplyId } from '../src/workspace-write.mjs';
+import { decorateRows } from './catalog.mjs';
 import { json, readJson, sameOriginJson } from './http.mjs';
 import { finishRollCut, progressFacts } from './workflow.mjs';
 
@@ -19,18 +20,19 @@ function supplyOf(id) {
 
 async function loadSupplies(db, ids) {
   const projection=ids ? 'p.payload' : `json_object('id',p.row_id,'article',json_extract(p.payload,'$.article'),
-    'name',json_extract(p.payload,'$.name'),'rolls',json_extract(p.payload,'$.rolls')) AS payload`;
+    'name',json_extract(p.payload,'$.name'),'catalogStore',json_extract(p.payload,'$.catalogStore'),
+    'rolls',json_extract(p.payload,'$.rolls')) AS payload`;
   const positionFilter=ids ? '' : "AND json_array_length(p.payload,'$.rolls')>0";
   const supplyFilter=ids ? 'AND s.id IN (SELECT value FROM json_each(?))' : '';
   const selection=db.prepare(`
-    SELECT s.id,s.name,s.status,p.row_id AS rowId,p.revision,${projection}
+    SELECT s.id,s.name,s.status,s.market,p.row_id AS rowId,p.revision,${projection}
     FROM printing_supplies s LEFT JOIN printing_positions p ON p.supply_id=s.id ${positionFilter}
     WHERE s.department='roll' ${supplyFilter}
     ORDER BY s.sort_order,p.sort_order`);
   const {results}=await (ids ? selection.bind(JSON.stringify(ids)) : selection).all();
   const supplies=new Map();
   for (const value of results) {
-    if (!supplies.has(value.id)) supplies.set(value.id,{id:value.id,name:value.name,status:value.status,rows:[],revision:0});
+    if (!supplies.has(value.id)) supplies.set(value.id,{id:value.id,name:value.name,status:value.status,market:value.market,rows:[],revision:0});
     const supply=supplies.get(value.id);
     if (value.rowId!=null) {
       supply.rows.push({row:JSON.parse(value.payload),revision:value.revision});
@@ -97,6 +99,25 @@ async function historicCutTimes(db, completed) {
   return new Map(results.map(value=>[JSON.stringify([value.supplyId,value.rollId]),value.at]));
 }
 
+async function decorateRollItems(db, supplies, rolls) {
+  const byMarket=new Map();
+  for (const {summary,positions} of rolls) {
+    const {market,name:supplyName}=supplies.get(summary.supplyId);
+    if (!market) continue;
+    if (!byMarket.has(market)) byMarket.set(market,new Map());
+    const byRow=byMarket.get(market);
+    positions.forEach(({position:{row}},index)=>{
+      if (!byRow.has(row)) byRow.set(row,{article:row.article,name:row.name,catalogStore:row.catalogStore,supplyName,items:[]});
+      byRow.get(row).items.push(summary.items[index]);
+    });
+  }
+  await Promise.all([...byMarket].map(async ([market,byRow])=>{
+    const rows=[...byRow.values()];
+    const decorated=await decorateRows(db,{market},rows);
+    decorated.forEach(({name,items})=>{ for (const item of items) item.name=name; });
+  }));
+}
+
 async function cutterFeed(db) {
   const data=await loadSupplies(db);
   const supplies=[], ready=[], completed=[];
@@ -106,22 +127,21 @@ async function cutterFeed(db) {
     for (const roll of rolls) {
       if (roll.completed) completed.push(roll);
       else {
-        ready.push(roll.summary);
+        ready.push(roll);
         remaining++;
       }
     }
     if (supply.status==='open' || rolls.length) supplies.push({id:supply.id,name:supply.name,remaining});
   }
-  const times=await historicCutTimes(db,completed);
+  const [times]=await Promise.all([historicCutTimes(db,completed),decorateRollItems(db,data,[...ready,...completed])]);
   const history=completed.map(({summary,positions})=>{
     const timesForRoll=positions.map(({roll})=>
       roll.cutAt || times.get(JSON.stringify([summary.supplyId,roll.id]))).filter(Boolean);
     return {...summary,completedAt:timesForRoll.sort().at(-1)??null};
   });
   const byName=(left,right)=>compareText(left.name,right.name) || left.number-right.number;
-  ready.sort(byName);
   history.sort((left,right)=>compareText(right.completedAt??'',left.completedAt??'') || byName(left,right));
-  return {supplies,ready,completed:history};
+  return {supplies,ready:ready.map(roll=>roll.summary).sort(byName),completed:history};
 }
 
 function validInput(body) {

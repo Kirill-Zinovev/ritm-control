@@ -47,6 +47,7 @@ export default {
         if (session.department!=='cutter') return json({rejected:true,message:'Войдите в рабочее место резчика по PIN.'},403);
         const cutter=cutterPinRecord(env);
         if (!cutter) return json({rejected:true,message:'PIN резчика ещё не настроен.'},503);
+        if (request.method==='GET') await refreshCatalog(db,env.PRINTING_CATALOG_READ_TOKEN,false,ctx).catch(()=>{});
         return await printingCutter(db,request,cutter.employee);
       }
       if (session.department==='cutter') return json({rejected:true,message:'Откройте рабочее место резчика.'},403);

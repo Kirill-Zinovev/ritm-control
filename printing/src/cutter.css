@@ -23,10 +23,16 @@
   gap: 10px;
   min-width: 0;
   text-align: start;
-  white-space: normal;
 }
-.cutter-shipment span { overflow-wrap: anywhere; }
-.cutter-shipment strong { font-variant-numeric: tabular-nums; }
+.cutter-shipment > span {
+  min-inline-size: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.cutter-shipment > strong {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
 .cutter-shipment[aria-pressed="true"], .cutter-shipment[aria-pressed="true"]:hover {
   border-color: var(--accent);
   background: var(--accent);

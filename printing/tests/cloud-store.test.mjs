@@ -630,6 +630,42 @@ test('cutter loads legacy history and records a selection across supplies with s
   assert.deepEqual((await read()).value.supplies.map(s=>s.remaining),[0,0]);
 });
 
+test('cutter shows catalog names for ready and completed rolls in the matching market and shop', async t=>{
+  const h=host(t);
+  await transferPrinting(snapshot(),h.admin);
+  const wb='fixture-workspace-roll-002:3';
+  const unscoped='fixture-workspace-roll-003:4';
+  h.sql.prepare('UPDATE printing_supplies SET name=? WHERE id=?').run('OZON Рулоны 1 магазин',rollSupply);
+  const supply=h.sql.prepare('INSERT INTO printing_supplies VALUES (?,?,?,?,?,?)');
+  supply.run(wb,'WB Рулоны 2 магазин','roll','open',2,'WB');
+  supply.run(unscoped,'OZON Рулоны без магазина','roll','open',3,'OZON');
+  h.sql.prepare(`INSERT INTO printing_catalog_cards(id,market,sku,sku_key,store,name,extension,photo,photo_id,import_id)
+    VALUES ('wb-a','WB','SKU-A','SKU-A','2','Карточка WB','','','','catalog-v1')`).run();
+  h.sql.prepare('DELETE FROM printing_positions WHERE supply_id=?').run(rollSupply);
+  const position=h.sql.prepare('INSERT INTO printing_positions VALUES (?,?,?,?,?,?,?,?,?)');
+  function add(supplyId,id,article,name,rollName,cut,catalogStore) {
+    const row={id,article,name,catalogStore,plan:1,printed:1,cut,
+      rolls:[{id:'roll-'+id,name:rollName,number:1,quantity:1,printed:1,cut}]};
+    position.run(supplyId,id,0,JSON.stringify(row),1,1,cut,1-cut,0);
+  }
+  add(rollSupply,'override','sku-a(oz)','','д1',0,'2');
+  add(rollSupply,'history','sku-a','','д2',1);
+  add(rollSupply,'missing','SKU-UNKNOWN','Название из поставки','д3',0);
+  add(wb,'wb','SKU-A','','д4',0);
+  add(unscoped,'ambiguous','SKU-A','Название без магазина','д5',0);
+
+  const {cookie}=await h.login('cutter');
+  const feed=await h.call(cutter,null,use(cookie));
+  assert.equal(feed.status,200);
+  assert.deepEqual(feed.value.ready.map(({name,items})=>[name,items[0].name]),[
+    ['д1','Карточка магазина 2'],
+    ['д3','Название из поставки'],
+    ['д4','Карточка WB'],
+    ['д5','Название без магазина'],
+  ]);
+  assert.deepEqual(feed.value.completed.map(({name,items})=>[name,items[0].name]),[['д2','Чужая карточка']]);
+});
+
 test('missing cutter PIN leaves existing sign-ins available and cutter access fails closed', async t=>{
   const h=host(t,{cutterConfigured:false});
   await transferPrinting(snapshot(),h.admin);
