@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { BoxBatchDock, CopyBoxSelection, PrintExtension, ProductPhoto, RollAllocation, RollBatchWork, SelectionBar, TakeFields, showAmount } from './BatchWork.jsx';
 import { InlineWork } from './InlineWork.jsx';
+import { PrintingHeader, SearchField } from './PrintingChrome.jsx';
 import { ArticleSummary, JobFilters, JobQueue, OtherShipmentMatches, RollJobFilters, ShipmentPicker } from './WorkspaceViews.jsx';
 import { buildJobFilterIndex, filterJobRows, selectedJobRows } from './job-filters.mjs';
 import { printingDepartments } from './printing-departments.mjs';
@@ -672,17 +673,13 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
   }
 
   return <>
-    <header className="header">
-      <div className="brand"><b>RITM /</b> Печать</div>
-      <span className="department-title">{printingDepartments[department]}</span>
-      <div className="header-actions">
-        {themeControl}
-        {!readOnly && <button className="link" type="button" aria-pressed={page === 'journal'} onClick={() => setPage(page === 'journal' ? 'jobs' : 'journal')}>
-          {page === 'journal' ? 'К заданиям' : 'Журнал печати'}
-        </button>}
-        <button className="link" type="button" disabled={busy || loggingOut} onClick={onLogout}>{loggingOut ? 'Выходим…' : 'Выйти'}</button>
-      </div>
-    </header>
+    <PrintingHeader title={printingDepartments[department]}>
+      {themeControl}
+      {!readOnly && <button className="link" type="button" aria-pressed={page === 'journal'} onClick={() => setPage(page === 'journal' ? 'jobs' : 'journal')}>
+        {page === 'journal' ? 'К заданиям' : 'Журнал печати'}
+      </button>}
+      <button className="link" type="button" disabled={busy || loggingOut} onClick={onLogout}>{loggingOut ? 'Выходим…' : 'Выйти'}</button>
+    </PrintingHeader>
     <main className="print-main" data-department={department}>
       {accessError && <p className="notice error" role="alert">{accessError}</p>}
       {pendingWork && <p className="notice" role="status">{busy ? 'Ждём подтверждение из журнала.' : 'Нужно проверить результат предыдущей записи.'}{' '}
@@ -720,9 +717,9 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
                     onClick={() => { clearSelection();setReload(value => value+1); }}>Обновить</button>
                 </div>
                 {id && <div className="queue-search">
-                    {isRoll && <input type="search" aria-label="Поиск по рулонам" placeholder="Поиск по рулонам"
+                    {isRoll && <SearchField label="Поиск по рулонам"
                       value={rollQuery} onChange={event => { clearSelection();setRollQuery(event.target.value); }}/>}
-                    <input type="search" aria-label="Артикул или название" placeholder="Артикул или название" value={query}
+                    <SearchField label="Артикул или название" value={query}
                       maxLength={160} onChange={event => {
                         clearSelection();
                         setQuery(event.target.value);

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { showAmount } from './BatchWork.jsx';
+import { PrintingHeader, SearchField } from './PrintingChrome.jsx';
 import { MAX_ROLLS, matchesRoll, rollTitle } from './printing-workflow.mjs';
 import './cutter.css';
 
@@ -304,13 +305,10 @@ export function CutterWorkspace({onSessionExpired,onLogout,loggingOut,accessErro
   }
 
   return <div className="cutter-shell">
-    <header className="header cutter-header">
-      <div className="brand"><b>RITM /</b> Печать</div><span className="department-title">Резчик</span>
-      <span className="cutter-header-art" aria-hidden="true"/>
-      <div className="header-actions">{themeControl}
-        <button className="link" type="button" disabled={saving || loggingOut} onClick={onLogout}>{loggingOut ? 'Выходим…' : 'Выйти'}</button>
-      </div>
-    </header>
+    <PrintingHeader title="Резчик" className="cutter-header">
+      {themeControl}
+      <button className="link" type="button" disabled={saving || loggingOut} onClick={onLogout}>{loggingOut ? 'Выходим…' : 'Выйти'}</button>
+    </PrintingHeader>
     <main className="cutter-workspace">
       <ShipmentList supplies={data?.supplies ?? []} selected={supplyId} onSelect={setSupplyId}/>
       <section className="cutter-queue" aria-labelledby="cutter-queue-title">
@@ -334,9 +332,7 @@ export function CutterWorkspace({onSessionExpired,onLogout,loggingOut,accessErro
                 : (saving ? 'Записываем порезку…' : 'Журнал пока не подтвердил результат порезки.')}</p>
               {!saving && <button className="outline" type="button" disabled={loggingOut} onClick={() => save(pending)}>Проверить запись</button>}
             </div>}
-            <label className="cutter-search"><span className="sr-only">Название рулона</span>
-              <input type="search" placeholder="Название рулона" value={query} onChange={event => setQuery(event.target.value)}/>
-            </label>
+            <SearchField className="cutter-search" label="Название рулона" value={query} onChange={event => setQuery(event.target.value)}/>
             {rolls.length ? <RollTable key={stageId} rolls={rolls} stage={stage} selected={selected}
               blocked={blocked} onToggle={toggleRoll} onToggleAll={toggleVisible} onWork={work}/>
               : (!loadError || data) && <p className="cutter-empty quiet" role="status">{loading && !data ? 'Загружаем рулоны…'

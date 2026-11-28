@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { PrintExtension, ProductPhoto, showAmount } from './BatchWork.jsx';
 import { Meter } from './InlineWork.jsx';
+import { SearchField } from './PrintingChrome.jsx';
 import { localTotal, matchesRoll, normalize, rollSizeLabel, rollTitle, workRemaining } from './printing-workflow.mjs';
 
 const layouts = {available:'Есть макет', missing:'Нет макета', unknown:'Не проверено'};
@@ -77,8 +78,8 @@ export function RollJobFilters({groups, options, filters, onToggle, onReset, dis
           {label}{count > 0 && <span className="filter-count" aria-hidden="true">{count}</span>}
         </button>
         {opened === key && <div className="filter-options roll-filter-panel" id={panelId}>
-          {key === 'size' && options.size.length > 8 && <input type="search" aria-label="Найти размер"
-            placeholder="Найти размер" value={query} onChange={event => setQuery(event.target.value)}/>}
+          {key === 'size' && options.size.length > 8 && <SearchField label="Найти размер" className="size-search"
+            value={query} onChange={event => setQuery(event.target.value)}/>}
           {fields.map(([field,title]) => {
             const choices = availableChoices(options[field],filters[field]);
             if (!choices.length) {
@@ -143,8 +144,8 @@ export function ShipmentPicker({supplies, current, loading, stale, busy, onPick,
   return <section aria-labelledby="shipment-title">
     <div className="shipment-toolbar">
       <h2 id="shipment-title">Поставки</h2>
-      <input className="shipment-search" type="search" aria-label="Найти поставку" placeholder="Найти поставку"
-        value={query} onChange={event => setQuery(event.target.value)}/>
+      <SearchField label="Найти поставку" className="shipment-search" value={query}
+        onChange={event => setQuery(event.target.value)}/>
       <div className="segments shipment-tabs" aria-label="Статус поставки">
         <button type="button" aria-pressed={status === 'open'} onClick={() => setStatus('open')}>Открытые <strong>{open.length}</strong></button>
         <button type="button" aria-pressed={status === 'completed'} onClick={() => setStatus('completed')}>Завершённые <strong>{completed.length}</strong></button>
