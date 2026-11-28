@@ -275,9 +275,10 @@ export function CutterWorkspace({onSessionExpired,onLogout,loggingOut,accessErro
     }
   }
 
-  return <>
-    <header className="header">
+  return <div className="cutter-shell">
+    <header className="header cutter-header">
       <div className="brand"><b>RITM /</b> Печать</div><span className="department-title">Резчик</span>
+      <span className="cutter-header-art" aria-hidden="true"/>
       <div className="header-actions">{themeControl}
         <button className="link" type="button" disabled={saving || loggingOut} onClick={onLogout}>{loggingOut ? 'Выходим…' : 'Выйти'}</button>
       </div>
@@ -285,15 +286,15 @@ export function CutterWorkspace({onSessionExpired,onLogout,loggingOut,accessErro
     <main className="cutter-workspace">
       <ShipmentList supplies={data?.supplies ?? []} selected={supplyId} onSelect={setSupplyId}/>
       <section className="cutter-queue" aria-labelledby="cutter-queue-title">
-        <div className="cutter-queue-heading"><h1 id="cutter-queue-title">Очередь порезки</h1>
-          <button type="button" className="link" onClick={refresh} disabled={saving || loading}>Обновить</button>
-        </div>
-        <div className="segments" role="group" aria-label="Состояние рулонов">
-          <button type="button" aria-pressed={!isComplete} onClick={() => setComplete(false)}>К порезке</button>
-          <button type="button" aria-pressed={isComplete} onClick={() => setComplete(true)}>Завершённые</button>
-        </div>
         <div className="cutter-queue-content" data-show-selection={!isComplete && chosenRolls.length > 0}>
           <div className="cutter-queue-list">
+            <div className="cutter-queue-heading"><h1 id="cutter-queue-title">Очередь порезки</h1>
+              <button type="button" className="link" onClick={refresh} disabled={saving || loading}>Обновить</button>
+            </div>
+            <div className="segments cutter-tabs" role="group" aria-label="Состояние рулонов">
+              <button type="button" aria-pressed={!isComplete} onClick={() => setComplete(false)}>К порезке</button>
+              <button type="button" aria-pressed={isComplete} onClick={() => setComplete(true)}>Завершённые</button>
+            </div>
             {accessError && <p className="notice error" role="alert">{accessError}</p>}
             {loadError && <p className="notice error" role="alert">{loadError}</p>}
             {notice && <p className={'notice '+notice.type} role={notice.type === 'error' ? 'alert' : 'status'}>{notice.message}</p>}
@@ -315,5 +316,5 @@ export function CutterWorkspace({onSessionExpired,onLogout,loggingOut,accessErro
         </div>
       </section>
     </main>
-  </>;
+  </div>;
 }
