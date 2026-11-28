@@ -117,9 +117,9 @@ export function ShipmentPicker({supplies, current, loading, stale, busy, onPick,
   function item(supply) {
     const selected = supply.id === current?.id;
     const progress = supply.progress;
-    const complete = progress?.total > 0 && progress.printed === progress.total && progress.cut === progress.total;
+    const complete = progress?.total > 0 && progress.printed === progress.total && (isRoll || progress.cut === progress.total);
     const incompleteData = progress?.total > 0 && (progress.printKnown < progress.total ||
-      progress.cutKnown < progress.total || progress.cutAvailabilityUnknown > 0);
+      (!isRoll && (progress.cutKnown < progress.total || progress.cutAvailabilityUnknown > 0)));
     return <li key={supply.id}>
       <button className="shipment-row" type="button" aria-current={selected ? 'true' : undefined} disabled={busy}
         onClick={() => onPick(supply)}>
@@ -127,9 +127,9 @@ export function ShipmentPicker({supplies, current, loading, stale, busy, onPick,
         <span className="shipment-caret" aria-hidden="true"/>
         <span className="shipment-count">{showAmount(supply.count)} поз.</span>
         <ShipmentMeter label="Печать" total={supply.count} done={progress?.printed} known={progress?.printKnown}/>
-        <ShipmentMeter label="Порезка" total={supply.count} done={progress?.cut} known={progress?.cutKnown}/>
+        {!isRoll && <ShipmentMeter label="Порезка" total={supply.count} done={progress?.cut} known={progress?.cutKnown}/>}
         <span className="shipment-remaining">
-          {complete ? <strong className="shipment-done">Всё готово</strong> : <>
+          {complete ? <strong className="shipment-done">{isRoll ? 'Всё напечатано' : 'Всё готово'}</strong> : <>
             {!isRoll && progress?.canCut > 0 && <strong>Можно порезать {showAmount(progress.canCut)} поз.</strong>}
             {progress?.toPrint > 0 && <span>К печати {showAmount(progress.toPrint)} поз.</span>}
             {(!progress || incompleteData) && <small>Данные неполные</small>}
@@ -202,11 +202,11 @@ export function OtherShipmentMatches({result, busy, onOpen, isRoll}) {
                 <Meter label="Печать" value={hit.printed} plan={hit.plan}/>
                 <RemainingQuantity label="К печати" amount={workRemaining('print',hit.plan,hit.printed)}/>
               </span>
-              <span>
+              {!isRoll && <span>
                 <small className="quiet" aria-hidden="true">Порезка</small>
                 <Meter cut label="Порезка" value={hit.cut} plan={hit.plan}/>
-                {!isRoll && <RemainingQuantity label="Можно порезать" amount={hit.cutAvailable}/>}
-              </span>
+                <RemainingQuantity label="Можно порезать" amount={hit.cutAvailable}/>
+              </span>}
             </button>
           </li>)}
         </ul>
@@ -216,13 +216,13 @@ export function OtherShipmentMatches({result, busy, onOpen, isRoll}) {
 }
 
 export function JobQueue({rows, showChecks, selectionDisabled, chosen, eligible, activeId, onOpen, onChoose, recordsForRow, rollQuery, rollOperation, rollChoices, boxChoices, showTake, isBox, showRemaining, emptyMessage = 'По выбранным условиям нет артикулов.'}) {
-  const columns = showChecks ? 5 : 4;
+  const columns = 3 + Number(showChecks) + Number(isBox);
   return <table className="job-table" data-selectable={showChecks}>
     <colgroup>{showChecks && <col className="job-check"/>}<col/><col className="job-machine"/>
-      <col className="job-meter"/><col className="job-meter"/></colgroup>
+      <col className="job-meter"/>{isBox && <col className="job-meter"/>}</colgroup>
     <thead><tr>{showChecks && <th scope="col"><span className="sr-only">Выбор</span></th>}
       <th scope="col">Изделие</th><th scope="col" className="machine-cell">Станок</th>
-      <th scope="col" className="meter-cell">Печать</th><th scope="col" className="meter-cell">Порезка</th>
+      <th scope="col" className="meter-cell">Печать</th>{isBox && <th scope="col" className="meter-cell">Порезка</th>}
     </tr></thead>
     <tbody>
       {rows.map(row => {
@@ -232,16 +232,16 @@ export function JobQueue({rows, showChecks, selectionDisabled, chosen, eligible,
         const fact = (value,operation) => value == null ? null : value +
           records.reduce((sum,entry) => entry.operation === operation ? sum + entry.pieces : sum,0);
         const printed = fact(row.printed,'print');
-        const cut = fact(row.cut,'cut');
+        const cut = isBox ? fact(row.cut,'cut') : null;
         const taken = isBox ? fact(row.taken,'take') : null;
-        const ready = row.plan > 0 && printed >= row.plan && cut >= row.plan;
+        const ready = row.plan > 0 && printed >= row.plan && (!isBox || cut >= row.plan);
         const fullyTaken = row.machine && Number.isSafeInteger(row.plan) && row.plan > 0 && taken >= row.plan - 1e-8;
         const found = rollQuery.trim() ? row.rolls?.filter(roll => matchesRoll(roll,rollQuery)) : null;
         const rollAssigned = !isBox && row.plan > 0 && row.rolls?.length > 0 &&
           row.rolls.reduce((total,roll) => total + roll.quantity,0) >= row.plan;
         const needsRoll = rollOperation === 'print' && rollChoices?.get(row.id)?.needsAssignment;
         const blockReason = isBox ? boxChoices?.get(row.id)?.error :
-          ready ? 'Печать и порезка завершены.' :
+          ready ? 'Печать завершена.' :
           !Array.isArray(row.rolls) ? 'Список рулонов недоступен.' :
           !eligible.has(row.id) ? (rollOperation ? 'Артикул недоступен для выбранной операции.' :
             'Откройте артикул, чтобы проверить остаток по рулонам.') : undefined;
@@ -254,7 +254,7 @@ export function JobQueue({rows, showChecks, selectionDisabled, chosen, eligible,
             <span className="product-copy">
               <span className="product-heading">
                 <strong>{row.article}</strong><PrintExtension value={row.extension}/>
-                {ready ? <small className="job-state done">Готово</small> :
+                {ready ? <small className="job-state done">{isBox ? 'Готово' : 'Напечатано'}</small> :
                   needsRoll ? <small className="quiet">Нужно назначить рулон</small> : rollAssigned ?
                   <small className="quiet">Рулоны назначены</small> : taken > 0 &&
                   <small className="job-state">В работе · {showAmount(taken)} / {showAmount(row.plan)}</small>}
@@ -273,10 +273,10 @@ export function JobQueue({rows, showChecks, selectionDisabled, chosen, eligible,
             <Meter label="Печать" value={printed} plan={row.plan}/>
             {showRemaining && <RemainingQuantity label="К печати" amount={workRemaining('print',row.plan,printed)}/>}
           </td>
-          <td className="meter-cell">
+          {isBox && <td className="meter-cell">
             <Meter cut label="Порезка" value={cut} plan={row.plan}/>
-            {showRemaining && isBox && <RemainingQuantity label="Можно порезать" amount={workRemaining('cut',row.plan,printed,cut)}/>}
-          </td>
+            {showRemaining && <RemainingQuantity label="Можно порезать" amount={workRemaining('cut',row.plan,printed,cut)}/>}
+          </td>}
         </tr>;
       })}
       {!rows.length && <tr><td colSpan={columns} className="notice">{emptyMessage}</td></tr>}

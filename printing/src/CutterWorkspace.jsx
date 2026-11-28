@@ -6,6 +6,12 @@ import './cutter.css';
 const cutterUrl = '/api/printing-cutter';
 const pendingKey = 'ritm-printing-cutter-pending-v1';
 const refreshInterval = 30_000;
+const stages = {
+  ready: {label:'К порезке',region:'Рулоны к порезке',empty:'Рулонов к порезке пока нет.',action:'take',actionLabel:'Взять в порезку'},
+  inProgress: {label:'В порезке',region:'Рулоны в порезке',empty:'Рулонов в порезке пока нет.',action:'cut',actionLabel:'Порезал'},
+  completed: {label:'Завершённые',region:'Завершённые рулоны',empty:'Завершённых рулонов пока нет.'},
+};
+const stageEntries = Object.entries(stages);
 const completedFormat = new Intl.DateTimeFormat('ru-RU', {
   dateStyle:'short', timeStyle:'short', timeZone:'Europe/Moscow',
 });
@@ -13,7 +19,8 @@ const completedFormat = new Intl.DateTimeFormat('ru-RU', {
 function savedRequest() {
   try {
     const pending = JSON.parse(sessionStorage.getItem(pendingKey));
-    return typeof pending?.requestId === 'string' && Array.isArray(pending.rolls) && pending.rolls.length ? pending : null;
+    const supported = pending?.action === undefined || ['take','cut'].includes(pending.action);
+    return supported && typeof pending?.requestId === 'string' && Array.isArray(pending.rolls) && pending.rolls.length ? pending : null;
   } catch { return null; }
 }
 
@@ -25,7 +32,8 @@ function storeRequest(request) {
 }
 
 async function cutterRequest(signal, payload) {
-  const response = await fetch(cutterUrl,payload ? {
+  const url = payload?.action ? `${cutterUrl}/work` : cutterUrl;
+  const response = await fetch(url,payload ? {
     method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),
   } : {signal,cache:'no-store'});
   const result = await response.json().catch(() => null);
@@ -50,7 +58,8 @@ function ShipmentList({supplies, selected, onSelect}) {
   </aside>;
 }
 
-function RollRows({roll, isComplete, selected, blocked, onToggle, onCut}) {
+function RollRows({roll, stage, selected, blocked, onToggle, onWork}) {
+  const isComplete = !stage.action;
   const [expanded,setExpanded] = useState(false);
   const detailsId = useId();
   const title = rollTitle(roll);
@@ -69,8 +78,8 @@ function RollRows({roll, isComplete, selected, blocked, onToggle, onCut}) {
       <td className="cutter-number">{showAmount(isComplete ? roll.cut : roll.remaining)}</td>
       {isComplete ? <td className="cutter-time">{completed && Number.isFinite(+completed)
         ? <time dateTime={completed.toISOString()}>{completedFormat.format(completed)}</time> : '—'}</td>
-        : <td className="cutter-row-action"><button type="button" className="outline" aria-label={'Порезать рулон '+description}
-          onClick={() => onCut([roll])} disabled={blocked}>Порезать</button></td>}
+        : <td className="cutter-row-action"><button type="button" className="outline" aria-label={stage.actionLabel+' · '+description}
+          onClick={() => onWork([roll])} disabled={blocked}>{stage.actionLabel}</button></td>}
     </tr>
     {expanded && <tr className="cutter-detail-row"><td colSpan={isComplete ? 4 : 5}>
       <section className="cutter-composition" id={detailsId}>
@@ -88,7 +97,8 @@ function RollRows({roll, isComplete, selected, blocked, onToggle, onCut}) {
   </>;
 }
 
-function RollTable({rolls, isComplete, selected, blocked, onToggle, onToggleAll, onCut}) {
+function RollTable({rolls, stage, selected, blocked, onToggle, onToggleAll, onWork}) {
+  const isComplete = !stage.action;
   const selectAll = useRef(null);
   const selectedCount = rolls.reduce((total,roll) => total+Number(selected.has(roll.id)),0);
   const allSelected = selectedCount > 0 && selectedCount === rolls.length;
@@ -96,7 +106,7 @@ function RollTable({rolls, isComplete, selected, blocked, onToggle, onToggleAll,
     if (selectAll.current) selectAll.current.indeterminate = selectedCount > 0 && !allSelected;
   },[selectedCount,allSelected]);
 
-  return <div className="cutter-table-wrap" role="region" aria-label={isComplete ? 'Завершённые рулоны' : 'Рулоны к порезке'} tabIndex={0}>
+  return <div className="cutter-table-wrap" role="region" aria-label={stage.region} tabIndex={0}>
     <table className="cutter-table">
       <thead><tr>
         {!isComplete && <th scope="col" className="cutter-check-cell"><input type="checkbox" ref={selectAll}
@@ -105,13 +115,13 @@ function RollTable({rolls, isComplete, selected, blocked, onToggle, onToggleAll,
         <th scope="col" className="cutter-number">{isComplete ? 'Порезано, шт.' : 'К порезке, шт.'}</th>
         {isComplete ? <th scope="col" className="cutter-time">Завершён</th> : <th scope="col"><span className="sr-only">Действие</span></th>}
       </tr></thead>
-      <tbody>{rolls.map(roll => <RollRows key={roll.id} roll={roll} isComplete={isComplete} selected={selected.has(roll.id)}
-        blocked={blocked} onToggle={() => onToggle(roll)} onCut={onCut}/>)}</tbody>
+      <tbody>{rolls.map(roll => <RollRows key={roll.id} roll={roll} stage={stage} selected={selected.has(roll.id)}
+        blocked={blocked} onToggle={() => onToggle(roll)} onWork={onWork}/>)}</tbody>
     </table>
   </div>;
 }
 
-function SelectedRolls({rolls, blocked, onClear, onCut}) {
+function SelectedRolls({rolls, actionLabel, blocked, onClear, onWork}) {
   const pieces = rolls.reduce((total,roll) => total+roll.remaining,0);
   const tooMany = rolls.length > MAX_ROLLS;
   return <aside className="cutter-selection" aria-labelledby="cutter-selection-title">
@@ -123,29 +133,31 @@ function SelectedRolls({rolls, blocked, onClear, onCut}) {
     <div className="cutter-selection-footer">
       <p><span>Итого · {showAmount(rolls.length)} рул.</span><strong>{showAmount(pieces)} шт.</strong></p>
       {tooMany && <p className="error" role="alert">За один раз можно записать до {MAX_ROLLS} рулонов.</p>}
-      <button type="button" className="primary" disabled={blocked || tooMany} onClick={() => onCut(rolls)}>Записать порезку</button>
+      <button type="button" className="primary" disabled={blocked || tooMany} onClick={() => onWork(rolls)}>{actionLabel}</button>
       <button type="button" className="outline" disabled={blocked} onClick={onClear}>Снять выбор</button>
     </div>
   </aside>;
 }
 
-function removeRecorded(data, written) {
+function removeRecorded(data, written, action) {
   if (!data) return data;
-  const cutBySupply = new Map();
-  const ready = data.ready.filter(roll => {
+  const source = action === 'cut' ? 'inProgress' : 'ready';
+  const recordedBySupply = new Map();
+  const rolls = (data[source] ?? []).filter(roll => {
     if (!written.has(roll.id)) return true;
-    cutBySupply.set(roll.supplyId,(cutBySupply.get(roll.supplyId) ?? 0)+1);
+    recordedBySupply.set(roll.supplyId,(recordedBySupply.get(roll.supplyId) ?? 0)+1);
     return false;
   });
-  return {...data,ready,supplies:data.supplies.map(supply => ({
-    ...supply,remaining:supply.remaining-(cutBySupply.get(supply.id) ?? 0),
+  if (action === 'take') return {...data,[source]:rolls};
+  return {...data,[source]:rolls,supplies:data.supplies.map(supply => ({
+    ...supply,remaining:Math.max(0,supply.remaining-(recordedBySupply.get(supply.id) ?? 0)),
   }))};
 }
 
 export function CutterWorkspace({onSessionExpired,onLogout,loggingOut,accessError,themeControl}) {
   const [data,setData] = useState(null);
   const [supplyId,setSupplyId] = useState('');
-  const [isComplete,setComplete] = useState(false);
+  const [stageId,setStageId] = useState('ready');
   const [query,setQuery] = useState('');
   const [selected,setSelected] = useState(() => new Map());
   const [loading,setLoading] = useState(true);
@@ -153,6 +165,7 @@ export function CutterWorkspace({onSessionExpired,onLogout,loggingOut,accessErro
   const [notice,setNotice] = useState(null);
   const [pending,setPending] = useState(savedRequest);
   const [saving,setSaving] = useState(false);
+  const tabButtons = useRef({});
   const mounted = useRef(false);
   const writing = useRef(false);
   const reading = useRef(null);
@@ -166,7 +179,7 @@ export function CutterWorkspace({onSessionExpired,onLogout,loggingOut,accessErro
     try {
       const snapshot = await cutterRequest(controller.signal);
       if (controller.signal.aborted) return;
-      const current = new Map(snapshot.ready.map(roll => [roll.id,roll.revision]));
+      const current = new Map([...snapshot.ready,...(snapshot.inProgress ?? [])].map(roll => [roll.id,roll.revision]));
       setData(snapshot);
       setLoadError('');
       setSupplyId(value => snapshot.supplies.some(supply => supply.id === value) ? value : '');
@@ -201,9 +214,14 @@ export function CutterWorkspace({onSessionExpired,onLogout,loggingOut,accessErro
     };
   },[refresh]);
 
-  const rolls = useMemo(() => (isComplete ? data?.completed : data?.ready)?.filter(roll =>
-    (!supplyId || roll.supplyId === supplyId) && (!query.trim() || matchesRoll(roll,query))) ?? [],[data,isComplete,supplyId,query]);
-  const chosenRolls = useMemo(() => data?.ready.filter(roll => selected.get(roll.id) === roll.revision) ?? [],[data,selected]);
+  const stage = stages[stageId];
+  const scopedRolls = useMemo(() => Object.fromEntries(stageEntries.map(([key]) => [key,
+    data?.[key]?.filter(roll => !supplyId || roll.supplyId === supplyId) ?? [],
+  ])),[data,supplyId]);
+  const stageRolls = scopedRolls[stageId];
+  const rolls = useMemo(() => query.trim() ? stageRolls.filter(roll => matchesRoll(roll,query)) : stageRolls,[stageRolls,query]);
+  const chosenRolls = useMemo(() => stage.action
+    ? data?.[stageId]?.filter(roll => selected.get(roll.id) === roll.revision) ?? [] : [],[stage,stageId,data,selected]);
   const blocked = saving || loggingOut || !!pending;
 
   function toggleRoll(roll) {
@@ -235,17 +253,21 @@ export function CutterWorkspace({onSessionExpired,onLogout,loggingOut,accessErro
     setPending(request);
     storeRequest(request);
     let shouldRefresh = true;
+    let nextStage;
     try {
       const result = await cutterRequest(null,request);
       storeRequest(null);
       if (!mounted.current) return;
       setPending(null);
       const written = new Set(request.rolls.map(roll => roll.id));
-      setData(previous => removeRecorded(previous,written));
+      setData(previous => removeRecorded(previous,written,request.action));
       setSelected(previous => new Map([...previous].filter(([id]) => !written.has(id))));
+      const tookRolls = request.action === 'take';
+      const confirmed = tookRolls ? 'Взято в порезку' : 'Порезка записана';
       const summary = Number.isSafeInteger(result.recorded) && Number.isFinite(result.quantity)
-        ? `Порезка записана · ${showAmount(result.recorded)} рул. · ${showAmount(result.quantity)} шт.` : 'Порезка записана.';
+        ? `${confirmed} · ${showAmount(result.recorded)} рул. · ${showAmount(result.quantity)} шт.` : `${confirmed}.`;
       setNotice({type:'success',message:summary});
+      nextStage = tookRolls ? 'inProgress' : 'completed';
     } catch (failure) {
       const rejected = failure.status >= 400 && failure.status < 500 && ![401,408,429].includes(failure.status);
       if (rejected) storeRequest(null);
@@ -262,16 +284,22 @@ export function CutterWorkspace({onSessionExpired,onLogout,loggingOut,accessErro
       }
     } finally {
       writing.current = false;
-      if (mounted.current) {
-        setSaving(false);
-        if (shouldRefresh) refresh();
+      if (mounted.current && nextStage) {
+        await refresh();
+        if (mounted.current) {
+          setStageId(nextStage);
+          tabButtons.current[nextStage]?.focus();
+        }
+      } else if (mounted.current && shouldRefresh) {
+        refresh();
       }
+      if (mounted.current) setSaving(false);
     }
   }
 
-  function cut(rolls) {
-    if (!blocked && rolls.length && rolls.length <= MAX_ROLLS) {
-      save({requestId:crypto.randomUUID(),rolls:rolls.map(({id,revision}) => ({id,revision}))});
+  function work(rolls) {
+    if (!blocked && stage.action && rolls.length && rolls.length <= MAX_ROLLS) {
+      save({action:stage.action,requestId:crypto.randomUUID(),rolls:rolls.map(({id,revision}) => ({id,revision}))});
     }
   }
 
@@ -286,33 +314,36 @@ export function CutterWorkspace({onSessionExpired,onLogout,loggingOut,accessErro
     <main className="cutter-workspace">
       <ShipmentList supplies={data?.supplies ?? []} selected={supplyId} onSelect={setSupplyId}/>
       <section className="cutter-queue" aria-labelledby="cutter-queue-title">
-        <div className="cutter-queue-content" data-show-selection={!isComplete && chosenRolls.length > 0}>
+        <div className="cutter-queue-content" data-show-selection={chosenRolls.length > 0}>
           <div className="cutter-queue-list">
             <div className="cutter-queue-heading"><h1 id="cutter-queue-title">Очередь порезки</h1>
               <button type="button" className="link" onClick={refresh} disabled={saving || loading}>Обновить</button>
             </div>
             <div className="segments cutter-tabs" role="group" aria-label="Состояние рулонов">
-              <button type="button" aria-pressed={!isComplete} onClick={() => setComplete(false)}>К порезке</button>
-              <button type="button" aria-pressed={isComplete} onClick={() => setComplete(true)}>Завершённые</button>
+              {stageEntries.map(([key,item]) => <button type="button" key={key} aria-pressed={stageId === key}
+                ref={button => { tabButtons.current[key] = button; }} onClick={() => setStageId(key)}>
+                {item.label}{data && <> <span>{showAmount(scopedRolls[key].length)}</span></>}
+              </button>)}
             </div>
             {accessError && <p className="notice error" role="alert">{accessError}</p>}
             {loadError && <p className="notice error" role="alert">{loadError}</p>}
             {notice && <p className={'notice '+notice.type} role={notice.type === 'error' ? 'alert' : 'status'}>{notice.message}</p>}
             {pending && <div className="notice cutter-pending" role="status">
-              <p>{saving ? 'Записываем порезку…' : 'Журнал пока не подтвердил результат порезки.'}</p>
+              <p>{pending.action === 'take'
+                ? (saving ? 'Берём рулоны в порезку…' : 'Журнал пока не подтвердил взятие рулонов в порезку.')
+                : (saving ? 'Записываем порезку…' : 'Журнал пока не подтвердил результат порезки.')}</p>
               {!saving && <button className="outline" type="button" disabled={loggingOut} onClick={() => save(pending)}>Проверить запись</button>}
             </div>}
             <label className="cutter-search"><span className="sr-only">Название рулона</span>
               <input type="search" placeholder="Название рулона" value={query} onChange={event => setQuery(event.target.value)}/>
             </label>
-            {rolls.length ? <RollTable key={String(isComplete)} rolls={rolls} isComplete={isComplete} selected={selected}
-              blocked={blocked} onToggle={toggleRoll} onToggleAll={toggleVisible} onCut={cut}/>
+            {rolls.length ? <RollTable key={stageId} rolls={rolls} stage={stage} selected={selected}
+              blocked={blocked} onToggle={toggleRoll} onToggleAll={toggleVisible} onWork={work}/>
               : (!loadError || data) && <p className="cutter-empty quiet" role="status">{loading && !data ? 'Загружаем рулоны…'
-                : query.trim() ? 'Рулоны по этому названию не найдены.'
-                : isComplete ? 'Завершённых рулонов пока нет.' : 'Рулонов к порезке пока нет.'}</p>}
+                : query.trim() ? 'Рулоны по этому названию не найдены.' : stage.empty}</p>}
           </div>
-          {!isComplete && chosenRolls.length > 0 && <SelectedRolls rolls={chosenRolls} blocked={blocked} onCut={cut}
-            onClear={() => setSelected(new Map())}/>}
+          {chosenRolls.length > 0 && <SelectedRolls rolls={chosenRolls} actionLabel={stage.actionLabel} blocked={blocked} onWork={work}
+            onClear={() => toggleVisible(chosenRolls,false)}/>}
         </div>
       </section>
     </main>

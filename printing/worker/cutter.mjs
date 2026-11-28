@@ -71,14 +71,22 @@ function supplyRolls(supply) {
     });
     const quantity=items.reduce((sum,item)=>sum+item.quantity,0);
     const cut=items.reduce((sum,item)=>sum+item.cut,0);
-    const revision=digest(group.positions.map(({position:{row},roll})=>
+    const parts=group.positions.map(({position:{row},roll})=>
       [row.id,roll.id,roll.quantity,roll.printed,roll.cut]).sort((left,right)=>
-      compareText(left[0],right[0]) || compareText(left[1],right[1])));
+      compareText(left[0],right[0]) || compareText(left[1],right[1]));
+    const revision=digest([supply.id,key,parts]);
+    const outstanding=group.positions.filter(({roll})=>roll.cut<roll.quantity);
+    // A start applies to the exact printed composition the cutter took.
+    const start=outstanding[0]?.roll.cutterStart;
+    const inProgress=!completed && !!start?.at && outstanding.every(({roll})=>
+      roll.cutterStart?.revision===revision && roll.cutterStart.at===start.at && roll.cutterStart.id===start.id);
+    const stage=completed ? 'completed' : inProgress ? 'inProgress' : 'ready';
     const summary={
-      id:supply.id+'/'+digest(key),revision,name:group.name,number:group.number,
-      supplyId:supply.id,supplyName:supply.name,quantity,cut,remaining:quantity-cut,items,completedAt:null,
+      id:supply.id+'/'+digest(key),revision:inProgress ? digest([revision,start.id??start.at]) : revision,
+      name:group.name,number:group.number,supplyId:supply.id,supplyName:supply.name,
+      quantity,cut,remaining:quantity-cut,items,startedAt:inProgress ? start.at : null,completedAt:null,
     };
-    return [{summary,completed,positions:group.positions}];
+    return [{summary,stage,revision,positions:group.positions}];
   });
 }
 
@@ -120,20 +128,18 @@ async function decorateRollItems(db, supplies, rolls) {
 
 async function cutterFeed(db) {
   const data=await loadSupplies(db);
-  const supplies=[], ready=[], completed=[];
+  const supplies=[], byStage={ready:[],inProgress:[],completed:[]};
   for (const supply of data.values()) {
     const rolls=supplyRolls(supply);
     let remaining=0;
     for (const roll of rolls) {
-      if (roll.completed) completed.push(roll);
-      else {
-        ready.push(roll);
-        remaining++;
-      }
+      byStage[roll.stage].push(roll);
+      if (roll.stage!=='completed') remaining++;
     }
     if (supply.status==='open' || rolls.length) supplies.push({id:supply.id,name:supply.name,remaining});
   }
-  const [times]=await Promise.all([historicCutTimes(db,completed),decorateRollItems(db,data,[...ready,...completed])]);
+  const {ready,inProgress,completed}=byStage;
+  const [times]=await Promise.all([historicCutTimes(db,completed),decorateRollItems(db,data,[...ready,...inProgress,...completed])]);
   const history=completed.map(({summary,positions})=>{
     const timesForRoll=positions.map(({roll})=>
       roll.cutAt || times.get(JSON.stringify([summary.supplyId,roll.id]))).filter(Boolean);
@@ -141,7 +147,8 @@ async function cutterFeed(db) {
   });
   const byName=(left,right)=>compareText(left.name,right.name) || left.number-right.number;
   history.sort((left,right)=>compareText(right.completedAt??'',left.completedAt??'') || byName(left,right));
-  return {supplies,ready:ready.map(roll=>roll.summary).sort(byName),completed:history};
+  return {supplies,ready:ready.map(roll=>roll.summary).sort(byName),
+    inProgress:inProgress.map(roll=>roll.summary).sort(byName),completed:history};
 }
 
 function validInput(body) {
@@ -151,12 +158,18 @@ function validInput(body) {
     new Set(body.rolls.map(roll=>roll.id)).size===body.rolls.length;
 }
 
-function planCuts(selected, employee, at) {
+function planCutterWork(selected, {action,requestId}, employee, at) {
   const changes=new Map(), facts=[];
-  for (const {positions} of selected) {
+  for (const {positions,revision} of selected) {
+    const cutterStart={revision,at,id:requestId};
     for (const {position,roll} of positions) {
       if (roll.cut>=roll.quantity) continue;
       const current=changes.get(position.row.id)??position.row;
+      if (action==='take') {
+        const rolls=current.rolls.map(value=>value.id===roll.id ? {...value,cutterStart} : value);
+        changes.set(current.id,{...current,rolls});
+        continue;
+      }
       const {row,fact}=finishRollCut(current,roll,employee,at);
       changes.set(row.id,row);
       facts.push(fact);
@@ -167,7 +180,7 @@ function planCuts(selected, employee, at) {
   })),facts};
 }
 
-async function commitCuts(db, requestId, signature, at, result, plans) {
+async function commitCutterWork(db, requestId, signature, at, result, plans) {
   const token=randomUUID();
   const receipts=plans.map(({supply,facts},index)=>({
     supplyId:supply.id,id:index===0 ? requestId : requestId+':'+index,
@@ -213,44 +226,51 @@ async function commitCuts(db, requestId, signature, at, result, plans) {
   return reservation.meta.changes===1;
 }
 
-async function writeCuts(db, body, employee) {
-  const {requestId}=body;
+async function cutterWork(db, body, employee) {
+  const {action,requestId}=body;
   const selection=new Map(body.rolls.map(({id,revision})=>[id,revision]));
-  const signature=digest(['cutter',[...selection].sort()]);
+  const entries=[...selection].sort();
+  const signature=digest(action ? ['cutter',action,entries] : ['cutter',entries]);
+  const receipt=db.prepare('SELECT fingerprint,outcome FROM printing_receipts WHERE id=?').bind(requestId);
   const supplyIds=[...new Set([...selection.keys()].map(supplyOf))];
   for (let attempt=0;attempt<3;attempt++) {
-    const prior=await db.prepare('SELECT fingerprint,outcome FROM printing_receipts WHERE id=?').bind(requestId).first();
+    const prior=await receipt.first();
     if (prior) return prior.fingerprint===signature ? json(JSON.parse(prior.outcome)) :
       reject('Этот ID уже относится к другой записи.');
+    if (!action) return reject('Рабочее место обновилось. Обновите страницу и возьмите рулон в порезку.');
     const supplies=await loadSupplies(db,supplyIds);
     const at=new Date().toISOString();
     const plans=[];
     let selectedCount=0,quantity=0;
     for (const supply of supplies.values()) {
-      const selected=supplyRolls(supply).filter(({summary,completed})=>
-        !completed && summary.revision===selection.get(summary.id));
+      const stage=action==='take' ? 'ready' : 'inProgress';
+      const selected=supplyRolls(supply).filter(roll=>
+        roll.stage===stage && roll.summary.revision===selection.get(roll.summary.id));
       if (!selected.length) continue;
       selectedCount+=selected.length;
       quantity+=selected.reduce((sum,{summary})=>sum+summary.remaining,0);
-      plans.push({supply,...planCuts(selected,employee,at)});
+      plans.push({supply,...planCutterWork(selected,body,employee,at)});
     }
     if (selectedCount!==selection.size) {
       // An identical in-flight request may have completed while the positions were read.
-      const settled=await db.prepare('SELECT fingerprint,outcome FROM printing_receipts WHERE id=?').bind(requestId).first();
+      const settled=await receipt.first();
       if (settled?.fingerprint===signature) return json(JSON.parse(settled.outcome));
       break;
     }
-    const result={message:'Порезка записана.',recorded:selectedCount,quantity};
-    if (await commitCuts(db,requestId,signature,at,result,plans)) return json(result);
+    const result={message:action==='take' ? 'Рулоны взяты в порезку.' : 'Порезка записана.',
+      recorded:selectedCount,quantity};
+    if (await commitCutterWork(db,requestId,signature,at,result,plans)) return json(result);
   }
   return reject('Состав или статус рулонов изменился. Обновите очередь и выберите рулоны снова.');
 }
 
-export async function printingCutter(db, request, employee) {
-  if (request.method==='GET') return json(await cutterFeed(db));
+export async function printingCutter(db, request, employee, work) {
+  if (request.method==='GET' && !work) return json(await cutterFeed(db));
   if (request.method!=='POST') return reject('Метод недоступен.',405);
   if (!sameOriginJson(request)) return reject('Откройте рабочее место резчика.',403);
   const body=await readJson(request,260_000);
-  if (!validInput(body)) return reject('Проверьте выбранные рулоны.',400);
-  return writeCuts(db,body,employee);
+  if (!validInput(body) || (work ? !['take','cut'].includes(body.action) : body.action!==undefined)) {
+    return reject('Проверьте действие и выбранные рулоны.',400);
+  }
+  return cutterWork(db,body,employee);
 }

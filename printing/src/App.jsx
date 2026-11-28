@@ -683,7 +683,7 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
         <button className="link" type="button" disabled={busy || loggingOut} onClick={onLogout}>{loggingOut ? 'Выходим…' : 'Выйти'}</button>
       </div>
     </header>
-    <main className="print-main">
+    <main className="print-main" data-department={department}>
       {accessError && <p className="notice error" role="alert">{accessError}</p>}
       {pendingWork && <p className="notice" role="status">{busy ? 'Ждём подтверждение из журнала.' : 'Нужно проверить результат предыдущей записи.'}{' '}
         <button className="outline" disabled={busy || !working} onClick={retryWork}>Повторить тот же запрос</button></p>}

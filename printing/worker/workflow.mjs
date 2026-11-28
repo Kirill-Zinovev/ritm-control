@@ -7,6 +7,11 @@ const fields = {take:'taken',print:'printed',cut:'cut'};
 const number = value => Number.isFinite(value) && value >= 0 ? value : null;
 const sum = (rolls,key) => rolls.reduce((total,roll)=>total+roll[key],0);
 
+function clearCutterStart(roll) {
+  delete roll.cutterStart;
+  return roll;
+}
+
 export const workError = message => Object.assign(new Error(message),{workRejected:true});
 
 export function progressFacts(row, department) {
@@ -86,7 +91,7 @@ function recordRoll(position, operation, item, batch) {
   if (!(row.areaPerPiece>0) || number(row.areaPerPiece)==null) throw workError('Проверьте листы на изделие, ширину и высоту.');
   const remaining=batch ? rollBatchQuantity(row,roll,operation) : workRemaining(operation,roll.quantity,roll.printed,roll.cut);
   if (number(remaining)==null || item.quantity>remaining) throw workError('Количество превышает доступный остаток рулона.');
-  const nextRoll={...roll,[key]:roll[key]+item.quantity};
+  const nextRoll=clearCutterStart({...roll,[key]:roll[key]+item.quantity});
   if (operation==='print') nextRoll.printEmployee=employee;
   const next={...row,[key]:(row[key]??sum(row.rolls,key))+item.quantity,
     rolls:row.rolls.map(value=>value.id===roll.id?nextRoll:value)};
@@ -145,11 +150,12 @@ function correctionFacts(row, before, after, roll) {
 }
 
 function resetRollProgress(row, operation) {
-  const reset=operation==='print' ? {printed:0} : {cut:0};
+  const key=fields[operation];
+  const reset={[key]:0};
   const next={...row,...reset};
   const facts=correctionFacts(row,row,next);
   if (Array.isArray(row.rolls)) {
-    next.rolls=row.rolls.map(roll=>roll.legacyOnly ? roll : {...roll,...reset});
+    next.rolls=row.rolls.map(roll=>roll.legacyOnly || roll[key]===0 ? roll : clearCutterStart({...roll,...reset}));
     const rollFacts=row.rolls.flatMap((roll,index)=>correctionFacts(row,roll,next.rolls[index],roll));
     for (const entry of facts) {
       entry.rolls=rollFacts.filter(roll=>roll.operation===entry.operation)
@@ -171,7 +177,7 @@ function updatedRollTotal(row, rolls, field) {
 
 export function finishRollCut(row, roll, employee, at) {
   const pieces=roll.quantity-roll.cut;
-  const rolls=row.rolls.map(value=>value.id===roll.id ? {...value,cut:roll.quantity,cutAt:at} : value);
+  const rolls=row.rolls.map(value=>value.id===roll.id ? clearCutterStart({...value,cut:roll.quantity,cutAt:at}) : value);
   const recorded=updatedRollTotal(row,rolls,'cut') ?? (row.cut??0)+pieces;
   const cut=Math.max(row.cut??0,Math.min(recorded,row.printed??recorded));
   return {row:{...row,rolls,cut},fact:fact(row,'cut',employee,pieces,null,{roll})};
@@ -192,10 +198,14 @@ function editRoll(row, item) {
       throw workError('Укажите количество на рулоне не меньше выполненного объёма.');
     }
   }
-  const numberInGroup=normalize(name)===normalize(roll.name) ? roll.number :
+  const sameGroup=normalize(name)===normalize(roll.name);
+  const numberInGroup=sameGroup ? roll.number :
     1+row.rolls.reduce((max,value)=>value.id!==roll.id && normalize(value.name)===normalize(name)
       ? Math.max(max,Number(value.number)||1) : max,0);
   const nextRoll={...roll,...progress,name,quantity,number:numberInGroup};
+  if (!sameGroup || quantity!==roll.quantity || nextRoll.printed!==roll.printed || nextRoll.cut!==roll.cut) {
+    clearCutterStart(nextRoll);
+  }
   const rolls=row.rolls.map(value=>value.id===roll.id ? nextRoll : value);
   const next={...row,rolls,printed:updatedRollTotal(row,rolls,'printed'),cut:updatedRollTotal(row,rolls,'cut')};
   const facts=correctionFacts(row,roll,nextRoll,roll);

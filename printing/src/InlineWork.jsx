@@ -113,17 +113,15 @@ export function InlineWork({row, supply, isRoll, records, onSave, onCreate, onCo
         </div>
       </form>}
       {row.rolls?.length ? <div className="rolls">
-        <div className="roll-row roll-head"><span>Рулон</span><span>Печать</span><span>Порезка</span></div>
+        <div className="roll-row roll-head"><span>Рулон</span><span>Печать</span></div>
         {row.rolls.map(roll => {
           const printFact = roll.printed + localTotal(records, 'print', roll.id);
-          const cutFact = roll.cut + localTotal(records, 'cut', roll.id);
           return <div className={'roll-row'+(roll.id === current?.id ? ' selected' : '')} key={roll.id}>
             <label><input type="radio" name={'roll-'+row.id} checked={roll.id === current?.id}
               onChange={() => { setRollId(roll.id); selectOperation(''); }}/>
               {rollTitle(roll) || 'Без названия'}{roll.legacyOnly ? <small>История</small> : roll.local && <small>Локально</small>}
             </label>
             <Meter label="Печать рулона" plan={roll.quantity} value={printFact}/>
-            <Meter cut label="Порезка рулона" plan={roll.quantity} value={cutFact}/>
           </div>;
         })}
       </div> : <p>{row.rolls ? 'Рулоны ещё не назначены.' : 'Список рулонов недоступен в текущем чтении.'}</p>}

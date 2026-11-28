@@ -203,6 +203,7 @@
   min-width: 0;
 }
 .cutter-tabs { justify-self: start; }
+.cutter-tabs span { font-variant-numeric: tabular-nums; }
 .cutter-queue-list > .notice { margin: 0; }
 .cutter-pending { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .cutter-search {
@@ -241,6 +242,7 @@
   background: var(--paper);
 }
 .cutter-table-wrap {
+  position: relative;
   overflow-x: auto;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -353,4 +355,8 @@
   .cutter-shipments { border-inline-end: 0; border-block-end: 1px solid var(--line); }
   .cutter-shipments > nav { display: flex; overflow-x: auto; padding: 3px 3px 6px; }
   .cutter-shipment { flex: none; max-width: 75vw; }
+}
+@media (max-width: 440px) {
+  .cutter-tabs { justify-self: stretch; }
+  .cutter-shell .cutter-tabs button { flex: 1; padding-inline: 5px; font-size: .8125rem; }
 }

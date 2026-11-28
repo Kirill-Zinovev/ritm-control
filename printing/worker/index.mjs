@@ -29,6 +29,8 @@ async function serveAsset(env, request, url) {
 export default {
   async fetch(request,env,ctx) {
     const url=new URL(request.url);
+    const cutterWork=url.pathname==='/api/printing-cutter/work';
+    const cutterRoute=cutterWork || url.pathname==='/api/printing-cutter';
     if (url.pathname === databaseBackupPath) {
       const owner = await printingOwnerAccount(request, env.PRINTING_DB_BACKUP_OWNER_EMAIL_SHA256);
       return databaseBackup(request, env.DB, 'printing', owner);
@@ -40,15 +42,15 @@ export default {
       if (url.pathname==='/api/printing-access') return await printingAccess(db,request,env);
       if (url.pathname==='/api/printing-import') return await importPrinting(db,request,env);
       if (url.pathname==='/api/reporting/printing-work') return await printingWorkReport(db,request,env.PRINTING_KPI_READ_KEY);
-      if (!['/api/printing-workspace','/api/printing-write','/api/printing-cutter'].includes(url.pathname)) return json({message:'Маршрут недоступен.'},404);
+      if (!cutterRoute && !['/api/printing-workspace','/api/printing-write'].includes(url.pathname)) return json({message:'Маршрут недоступен.'},404);
       const session=await activeSession(db,request);
       if (!session) return json({message:'Войдите в свой участок по PIN.'},401);
-      if (url.pathname==='/api/printing-cutter') {
+      if (cutterRoute) {
         if (session.department!=='cutter') return json({rejected:true,message:'Войдите в рабочее место резчика по PIN.'},403);
         const cutter=cutterPinRecord(env);
         if (!cutter) return json({rejected:true,message:'PIN резчика ещё не настроен.'},503);
-        if (request.method==='GET') await refreshCatalog(db,env.PRINTING_CATALOG_READ_TOKEN,false,ctx).catch(()=>{});
-        return await printingCutter(db,request,cutter.employee);
+        if (!cutterWork && request.method==='GET') await refreshCatalog(db,env.PRINTING_CATALOG_READ_TOKEN,false,ctx).catch(()=>{});
+        return await printingCutter(db,request,cutter.employee,cutterWork);
       }
       if (session.department==='cutter') return json({rejected:true,message:'Откройте рабочее место резчика.'},403);
       if (url.pathname==='/api/printing-workspace') {
@@ -78,7 +80,7 @@ export default {
       return json(result.value,result.status);
     } catch (error) {
       console.error('Printing request failed',url.pathname,error.name);
-      if (url.pathname==='/api/printing-write' || (url.pathname==='/api/printing-cutter' && request.method==='POST')) {
+      if (url.pathname==='/api/printing-write' || (cutterRoute && request.method==='POST')) {
         return json({uncertain:true,message:'Журнал не подтвердил запись. Повторите тот же запрос.'},503);
       }
       return json({message:'Не удалось прочитать базу печати. Повторите попытку.'},503);

@@ -399,6 +399,7 @@ small { font-size: .85em; }
 .shipment-row[aria-current="true"] .shipment-caret { transform: rotate(45deg); }
 .shipment-count { grid-column: 1 / -1; color: var(--muted); font-size: 13px; }
 .shipment-meter { display: grid; gap: 3px; min-width: 0; }
+[data-department="roll"] .shipment-meter { grid-column: 1 / -1; }
 .shipment-row:not([aria-current]) .shipment-meter { display: flex; flex-wrap: wrap; align-items: baseline; gap: 1px 5px; }
 .shipment-row:not([aria-current]) .shipment-meter progress { display: none; }
 .shipment-ratio { font-size: 13px; font-variant-numeric: tabular-nums; }
@@ -451,6 +452,7 @@ small { font-size: .85em; }
   text-align: start;
 }
 .article-match:hover:not(:disabled) { background: var(--selected); }
+[data-department="roll"] .article-match { grid-template-columns: minmax(0, 1fr) minmax(62px, .28fr); }
 .article-match:focus-visible { outline-offset: -3px; }
 .match-product { display: grid; gap: 2px; overflow-wrap: anywhere; }
 .match-product strong { color: var(--accent-text); }
@@ -617,6 +619,7 @@ small { font-size: .85em; }
   font-weight: 700;
 }
 .roll-row.selected { background: var(--selected); }
+[data-department="roll"] .roll-row { grid-template-columns: minmax(62px, .85fr) minmax(0, 1.2fr); }
 .roll-row label { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-weight: 700; overflow-wrap: anywhere; }
 .roll-row label small { color: var(--muted); }
 .inline > p:not(.roll-balance) { margin-top: 12px; line-height: 1.45; }
@@ -748,3 +751,71 @@ small { font-size: .85em; }
   .work-submit { font-size: 16px; }
 }
 
+/* Shared palettes for roll printing and box workspaces. */
+:root[data-theme="light"]:has(.print-main) {
+  --canvas: #fbfdfc;
+  --surface: #f4f9f6;
+  --paper: #fff;
+  --ink: #132921;
+  --muted: #4b655d;
+  --accent: #087554;
+  --accent-hover: #065d44;
+  --accent-text: #086a4c;
+  --brand-mark: var(--accent);
+  --selected: #e0f7eb;
+  --selected-line: #7cae9a;
+  --selected-ink: #153a2d;
+  --line: #d5e5de;
+  --field-line: #779588;
+  --track: #cfdfd8;
+  --print: #087554;
+  --cut: #147479;
+  --hover-row: #eef8f3;
+  --hover-supply: #eef8f3;
+  --field-disabled: #5b7067;
+  --action-disabled: #e3ebe7;
+  --action-disabled-ink: #536960;
+  --notice-bg: #edf6f1;
+  --photo-bg: #edf6f1;
+  --layout-bg: #ebf2ef;
+  --scrollbar: #93ada2;
+  --overlay-shadow: #13292124;
+  --printing-action-ink: #fff;
+}
+
+:root[data-theme="dark"]:has(.print-main) {
+  --canvas: #10161c;
+  --surface: #171f26;
+  --paper: #1b242c;
+  --ink: #f2f7f6;
+  --muted: #afc0bf;
+  --accent: #9af1c9;
+  --accent-hover: #b6f7d8;
+  --accent-text: #a6ebce;
+  --brand-mark: var(--accent);
+  --selected: #203932;
+  --selected-line: #588f7b;
+  --selected-ink: #e8fff5;
+  --line: #34474f;
+  --field-line: #657b80;
+  --track: #34474f;
+  --print: #9af1c9;
+  --cut: #70d5df;
+  --hover-row: #25343d;
+  --hover-supply: #25343d;
+  --field-disabled: #a1b2b4;
+  --action-disabled: #2a363d;
+  --action-disabled-ink: #a7b7bb;
+  --notice-bg: #213139;
+  --photo-bg: #25343d;
+  --done-bg: #293b42;
+  --done-ink: #dcebe9;
+  --layout-bg: #29383f;
+  --scrollbar: #657b80;
+  --overlay-shadow: #05090c99;
+  --printing-action-ink: #132d24;
+}
+
+:root[data-theme] .print-main :is(.primary:not(:disabled), .segments button[aria-pressed="true"], .filter-count) {
+  color: var(--printing-action-ink);
+}

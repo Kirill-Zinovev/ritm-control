@@ -105,7 +105,9 @@ function host(t, {cutterConfigured=true}={}) {
 const list='/api/printing-workspace?department=';
 const write='/api/printing-write';
 const cutter='/api/printing-cutter';
+const cutterWork=cutter+'/work';
 const use = cookie => ({Cookie:cookie});
+const rollSelection = rolls => rolls.map(({id,revision})=>({id,revision}));
 
 test('roll operation selection includes unprinted articles awaiting rolls and keeps cutting separate', ()=>{
   const base={plan:50,areaPerPiece:0.063,cutEmployeeCode:'лукман'};
@@ -530,14 +532,14 @@ test('roll assignment and counted print are stored once with the automatic emplo
   assert.equal(journal[0].area,0.04);
 });
 
-test('batch print and cut handle several articles and rolls atomically', async t=>{
+test('batch print, cutter take and completion handle several articles and rolls atomically', async t=>{
   const h=host(t);
   await transferPrinting(snapshot(true),h.admin);
   const {cookie}=await h.login('roll');
   const cutterLogin=await h.login('cutter');
   assert.equal(cutterLogin.status,200);
   assert.equal(cutterLogin.value.cutterConfigured,true);
-  const cuttingAsCutter=body=>h.call(cutter,body,use(cutterLogin.cookie));
+  const cuttingAsCutter=body=>h.call(body ? cutterWork : cutter,body,use(cutterLogin.cookie));
   const send=body=>h.call(write,{department:'roll',supplyId:rollSupply,...body},use(cookie));
   const detail=()=>h.call(list+'roll&supply='+encodeURIComponent(rollSupply),null,use(cookie));
   const journal=()=>h.call(list+'roll&journal=1',null,use(cookie));
@@ -556,6 +558,7 @@ test('batch print and cut handle several articles and rolls atomically', async t
   const earlyPrint=await send({...printing,requestId:randomUUID(),items:[items[0]]});
   assert.equal(earlyPrint.status,200);
   assert.deepEqual((await cuttingAsCutter()).value.ready,[]);
+  assert.deepEqual((await cuttingAsCutter()).value.inProgress,[]);
   printing.items=items.slice(1);
   const print=await send(printing);
   assert.equal(print.status,200);
@@ -571,9 +574,34 @@ test('batch print and cut handle several articles and rolls atomically', async t
   assert.equal((await send(oldCutting)).status,403);
   assert.equal((await h.call(cutter,null,use(cookie))).status,403);
   assert.equal((await h.call(write,{department:'roll',supplyId:rollSupply,...printing},use(cutterLogin.cookie))).status,403);
-  const cutting={requestId:randomUUID(),rolls:ready.map(({id,revision})=>({id,revision}))};
-  const wrong=[cutting.rolls[0],{...cutting.rolls[1],revision:hash}];
-  assert.equal((await cuttingAsCutter({...cutting,rolls:wrong})).status,409);
+  const taking={action:'take',requestId:randomUUID(),rolls:rollSelection(ready)};
+  assert.equal((await h.call(cutterWork,taking,use(cookie))).status,403);
+  assert.equal((await h.call(cutterWork,null,use(cutterLogin.cookie))).status,405);
+  assert.equal((await h.call(cutterWork,{requestId:taking.requestId,rolls:taking.rolls},use(cutterLogin.cookie))).status,400);
+  assert.equal((await h.call(cutter,{requestId:taking.requestId,rolls:taking.rolls},use(cutterLogin.cookie))).status,409);
+  assert.equal((await cuttingAsCutter({...taking,action:'cut'})).status,409);
+  const wrong=[taking.rolls[0],{...taking.rolls[1],revision:hash}];
+  assert.equal((await cuttingAsCutter({...taking,rolls:wrong})).status,409);
+  assert.equal((await cuttingAsCutter()).value.ready.length,2);
+  assert.equal((await cuttingAsCutter()).value.inProgress.length,0);
+  const [taken,takenRetry]=await Promise.all([cuttingAsCutter(taking),cuttingAsCutter(taking)]);
+  assert.equal(taken.status,200);
+  assert.equal(takenRetry.status,200);
+  assert.deepEqual(taken.value,takenRetry.value);
+  assert.deepEqual([taken.value.recorded,taken.value.quantity],[2,5]);
+  const secondCutter=await h.login('cutter');
+  const active=(await h.call(cutter,null,use(secondCutter.cookie))).value;
+  assert.equal(active.supplies.find(supply=>supply.id===rollSupply).remaining,2);
+  assert.equal(active.ready.length,0);
+  assert.equal(active.completed.length,0);
+  assert.equal(active.inProgress.length,2);
+  assert.ok(active.inProgress.every(roll=>Number.isFinite(Date.parse(roll.startedAt))));
+  assert.notDeepEqual(rollSelection(active.inProgress),taking.rolls);
+  assert.equal((await journal()).value.work.length,3);
+  assert.deepEqual((await detail()).value.rows.map(row=>row.cut),[0,0]);
+  const cutting={action:'cut',requestId:randomUUID(),rolls:rollSelection(active.inProgress)};
+  assert.equal((await cuttingAsCutter({...cutting,requestId:taking.requestId})).status,409);
+  assert.equal((await cuttingAsCutter({...cutting,rolls:[cutting.rolls[0],{...cutting.rolls[1],revision:hash}]})).status,409);
   assert.deepEqual((await detail()).value.rows.map(row=>row.cut),[0,0]);
   const [cut,retried]=await Promise.all([cuttingAsCutter(cutting),cuttingAsCutter(cutting)]);
   assert.equal(cut.status,200);
@@ -588,6 +616,7 @@ test('batch print and cut handle several articles and rolls atomically', async t
   const completed=(await cuttingAsCutter()).value;
   assert.equal(completed.supplies.find(supply=>supply.id===rollSupply).remaining,0);
   assert.equal(completed.ready.length,0);
+  assert.equal(completed.inProgress.length,0);
   assert.equal(completed.completed.length,2);
   assert.ok(completed.completed.every(roll=>roll.remaining===0 && Number.isFinite(Date.parse(roll.completedAt))));
   const work=(await journal()).value.work;
@@ -621,13 +650,75 @@ test('cutter loads legacy history and records a selection across supplies with s
   assert.deepEqual(initial.completed.map(({name,completedAt})=>[name,completedAt]),[['п2',at]]);
   assert.equal(initial.ready.length,2);
   assert.notEqual(initial.ready[0].id,initial.ready[1].id);
-  const input={requestId:randomUUID(),rolls:initial.ready.map(({id,revision})=>({id,revision}))};
-  const result=await h.call(cutter,input,use(login.cookie));
+  const oldRequest={requestId:randomUUID(),rolls:[{
+    id:initial.completed[0].id,revision:fingerprint([['b',historical.id,1,1,0]]),
+  }]};
+  const oldResult={message:'Порезка записана.',recorded:1,quantity:1};
+  importCut.run(oldRequest.requestId,rollSupply,
+    fingerprint(['cutter',oldRequest.rolls.map(({id,revision})=>[id,revision]).sort()]),at,'[]',
+    JSON.stringify(oldResult),'[]','earlier-worker');
+  assert.deepEqual((await h.call(cutter,oldRequest,use(login.cookie))).value,oldResult);
+  assert.equal((await h.call(cutter,{...oldRequest,rolls:rollSelection(initial.ready)},use(login.cookie))).status,409);
+  assert.deepEqual((await read()).value.supplies.map(s=>s.remaining),[1,1]);
+  const take=await h.call(cutterWork,{action:'take',requestId:randomUUID(),rolls:rollSelection(initial.ready)},use(login.cookie));
+  assert.equal(take.status,200);
+  const activeFeed=(await read()).value;
+  assert.deepEqual(activeFeed.supplies.map(s=>s.remaining),[1,1]);
+  assert.equal(activeFeed.ready.length,0);
+  assert.equal(activeFeed.inProgress.length,2);
+  const input={action:'cut',requestId:randomUUID(),rolls:rollSelection(activeFeed.inProgress)};
+  const result=await h.call(cutterWork,input,use(login.cookie));
   assert.equal(result.status,200);
   assert.deepEqual([result.value.recorded,result.value.quantity],[2,2]);
   const combined=h.sql.prepare('SELECT id,supply_id FROM printing_receipts WHERE id=? OR id=? ORDER BY id').all(input.requestId,input.requestId+':1');
   assert.deepEqual(combined.map(row=>row.supply_id),[rollSupply,other]);
   assert.deepEqual((await read()).value.supplies.map(s=>s.remaining),[0,0]);
+});
+
+test('cutter must take a changed roll composition again before completion', async t=>{
+  const h=host(t);
+  await transferPrinting(snapshot(true),h.admin);
+  const printedRoll={name:'д7',number:1,quantity:1,printed:1,cut:0};
+  const amend=h.sql.prepare('UPDATE printing_positions SET payload=?,plan=1,printed=1,cut=0,cut_available=1,revision=revision+1 WHERE supply_id=? AND row_id=?');
+  const row=id=>({id,article:'SKU-'+id,plan:1,printed:1,cut:0,rolls:[{...printedRoll,id:'roll-'+id}]});
+  amend.run(JSON.stringify(row('b')),rollSupply,'b');
+  const {cookie}=await h.login('cutter');
+  const read=async()=>(await h.call(cutter,null,use(cookie))).value;
+  const send=(action,rolls)=>h.call(cutterWork,{action,requestId:randomUUID(),rolls:rollSelection(rolls)},use(cookie));
+  assert.equal((await send('take',(await read()).ready)).status,200);
+  const first=(await read()).inProgress;
+  assert.equal(first[0].items.length,1);
+  amend.run(JSON.stringify(row('c')),rollSupply,'c');
+  assert.equal((await send('cut',first)).status,409);
+  const updated=await read();
+  assert.equal(updated.inProgress.length,0);
+  assert.equal(updated.ready[0].items.length,2);
+  assert.equal((await send('cut',updated.ready)).status,409);
+  assert.equal((await send('take',updated.ready)).status,200);
+  let active=await read();
+  assert.equal(active.inProgress[0].items.length,2);
+
+  // Returning to a previously taken composition must still require a new take.
+  const printer=await h.login('roll');
+  const detail=async()=>(await h.call(list+'roll&supply='+encodeURIComponent(rollSupply),null,use(printer.cookie))).value;
+  for (const name of ['д8','д7']) {
+    const current=(await detail()).rows.find(row=>row.id==='b');
+    const renamed=await h.call(write,{department:'roll',supplyId:rollSupply,command:'correct',requestId:randomUUID(),
+      items:[{rowId:'b',rollId:'roll-b',revision:current.workRevision,name}]},use(printer.cookie));
+    assert.equal(renamed.status,200);
+  }
+  assert.equal((await send('cut',active.inProgress)).status,409);
+  const reopened=await read();
+  assert.equal(reopened.inProgress.length,0);
+  assert.equal(reopened.ready[0].items.length,2);
+  assert.equal((await send('take',reopened.ready)).status,200);
+  const previousRevision=active.inProgress[0].revision;
+  active=await read();
+  assert.notEqual(active.inProgress[0].revision,previousRevision);
+  const cut=await send('cut',active.inProgress);
+  assert.equal(cut.status,200);
+  assert.deepEqual([cut.value.recorded,cut.value.quantity],[1,2]);
+  assert.ok((await detail()).rows.every(row=>row.rolls.every(roll=>!roll.cutterStart)));
 });
 
 test('cutter shows catalog names for ready and completed rolls in the matching market and shop', async t=>{
