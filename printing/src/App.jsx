@@ -498,6 +498,7 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
         throw new Error(reply.message || 'Журнал отклонил запись.');
       }
       workGeneration.current++;
+      if (isRoll && request.supplyId === id) setChosenSupply(id);
       setLoaded(current => {
         if (current?.id !== request.supplyId) return current;
         const patches = new Map((reply.patches || []).map(patch => [patch.id,patch]));

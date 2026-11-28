@@ -431,10 +431,13 @@ test('Box corrections reopen completed work, preserve history and reject stale t
   const {cookie}=await h.login('box');
   const send=(command,items,requestId)=>h.call(write,{department:'box',supplyId:boxSupply,command,items,requestId},use(cookie));
   const record=action=>send('work',[{rowId:'a',requestId:randomUUID(),action,unit:'sheets',employeeId:'e1',fingerprint:hash,quantity:1}]);
-  assert.equal((await record('print')).value.results[0].workRevision,1);
-  assert.equal((await record('cut')).value.results[0].workRevision,2);
   const feed=list+'box&supply='+encodeURIComponent(boxSupply);
+  assert.equal((await record('print')).value.results[0].workRevision,1);
+  assert.equal((await h.call(list+'box',null,use(cookie))).value.supplies[0].status,'open');
+  assert.equal((await h.call(feed,null,use(cookie))).value.writeReady,true);
+  assert.equal((await record('cut')).value.results[0].workRevision,2);
   const complete=await h.call(feed,null,use(cookie));
+  assert.equal((await h.call(list+'box',null,use(cookie))).value.supplies[0].status,'completed');
   assert.equal(complete.value.writeReady,false);
   assert.equal(complete.value.correctionReady,true);
   assert.equal(complete.value.rows[0].workRevision,2);
@@ -542,6 +545,7 @@ test('batch print, cutter take and completion handle several articles and rolls 
   const cuttingAsCutter=body=>h.call(body ? cutterWork : cutter,body,use(cutterLogin.cookie));
   const send=body=>h.call(write,{department:'roll',supplyId:rollSupply,...body},use(cookie));
   const detail=()=>h.call(list+'roll&supply='+encodeURIComponent(rollSupply),null,use(cookie));
+  const rollSummary=async ()=>(await h.call(list+'roll',null,use(cookie))).value.supplies[0];
   const journal=()=>h.call(list+'roll&journal=1',null,use(cookie));
   const assigned=await send({command:'create',requestId:randomUUID(),items:[
     {rowId:'b',name:'д3',quantity:1,count:2,expectedPlan:2,expectedAllocated:0},
@@ -557,12 +561,20 @@ test('batch print, cutter take and completion handle several articles and rolls 
   assert.equal(duplicate.status,409);
   const earlyPrint=await send({...printing,requestId:randomUUID(),items:[items[0]]});
   assert.equal(earlyPrint.status,200);
+  assert.equal((await rollSummary()).status,'open');
+  assert.equal((await detail()).value.writeReady,true);
   assert.deepEqual((await cuttingAsCutter()).value.ready,[]);
   assert.deepEqual((await cuttingAsCutter()).value.inProgress,[]);
   printing.items=items.slice(1);
   const print=await send(printing);
   assert.equal(print.status,200);
   assert.deepEqual(print.value.patches.map(row=>row.printed),[2,3]);
+  const printedSupply=await rollSummary();
+  assert.equal(printedSupply.status,'completed');
+  assert.equal(printedSupply.progress.cut,0);
+  const printedDetail=(await detail()).value;
+  assert.equal(printedDetail.writeReady,false);
+  assert.equal(printedDetail.correctionReady,true);
   assert.equal((await send(printing)).value.confirmed,2);
   assert.equal((await journal()).value.work.length,3);
 
