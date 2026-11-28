@@ -179,6 +179,27 @@ test('imports position state and existing receipts, preserves shop scope, and bl
   assert.equal((await h.call(list+'box&journal=1',null,use(login.cookie))).value.work.length,1);
 });
 
+test('fully printed imported roll supplies appear as completed even with an unconfirmed source status', async t=>{
+  const h=host(t);
+  await transferPrinting(snapshot(true),h.admin);
+  h.sql.prepare("UPDATE printing_supplies SET status='unknown' WHERE id=?").run(rollSupply);
+  const setPrinted=h.sql.prepare(`UPDATE printing_positions
+    SET printed=?,payload=json_set(payload,'$.printed',?) WHERE supply_id=? AND row_id=?`);
+  setPrinted.run(2,2,rollSupply,'b');
+  setPrinted.run(null,null,rollSupply,'c');
+  const {cookie}=await h.login('roll');
+  const summary=async()=> (await h.call(list+'roll',null,use(cookie))).value.supplies[0];
+  assert.equal((await summary()).status,'unknown');
+
+  setPrinted.run(3,3,rollSupply,'c');
+  const printed=await summary();
+  assert.equal(printed.status,'completed');
+  assert.deepEqual([printed.progress.printed,printed.progress.total,printed.progress.cut],[2,2,0]);
+  const detail=await h.call(list+'roll&supply='+encodeURIComponent(rollSupply),null,use(cookie));
+  assert.equal(detail.value.writeReady,false);
+  assert.equal(h.sql.prepare('SELECT status FROM printing_supplies WHERE id=?').get(rollSupply).status,'unknown');
+});
+
 test('roll sizes group equivalent separators without mixing units or orientation', ()=>{
   assert.equal(rollSizeLabel(' 40х60 мм '),'40 × 60 мм');
   assert.equal(rollSizeLabel('40 X 60  мм'),rollSizeLabel('40×60 мм'));

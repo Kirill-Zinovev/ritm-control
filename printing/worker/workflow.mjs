@@ -24,8 +24,8 @@ export function progressFacts(row, department) {
 
 export function summarize(group, positions) {
   const progress=summarizeShipment(positions);
-  const completed=group.status==='open' && progress.total>0 &&
-    progress.printed===progress.total && (group.department==='roll' || progress.cut===progress.total);
+  const completed=progress.total>0 && progress.printed===progress.total &&
+    (group.department==='roll' || (group.status==='open' && progress.cut===progress.total));
   return {
     id:group.id, name:group.name, department:group.department, sourceUrl:'',
     status:completed?'completed':group.status, count:progress.total, progress,
