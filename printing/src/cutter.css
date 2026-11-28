@@ -229,7 +229,7 @@
   transform: rotate(45deg);
   transform-origin: left;
 }
-.cutter-shell .cutter-search input {
+.cutter-shell .cutter-search input[type="search"] {
   width: 100%;
   min-height: 46px;
   padding-inline-start: 40px;
