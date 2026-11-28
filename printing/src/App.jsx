@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { BoxBatchDock, CopyBoxSelection, PrintExtension, ProductPhoto, RollAllocation, RollBatchWork, SelectionBar, TakeFields, showAmount } from './BatchWork.jsx';
 import { InlineWork } from './InlineWork.jsx';
-import { ArticleSummary, JobFilters, JobQueue, OtherShipmentMatches, ShipmentPicker } from './WorkspaceViews.jsx';
+import { ArticleSummary, JobFilters, JobQueue, OtherShipmentMatches, RollJobFilters, ShipmentPicker } from './WorkspaceViews.jsx';
+import { buildJobFilterIndex, filterJobRows, selectedJobRows } from './job-filters.mjs';
 import { printingDepartments } from './printing-departments.mjs';
 import { submitBoxBatch } from './submit-box-batch.mjs';
 import { BOX_GATEWAY_BATCH } from './workspace-write.mjs';
@@ -12,11 +13,23 @@ import { MAX_ROLLS, boxTakeBlockReason, boxWorkEntry, isXerox, matchesArticle, m
 const layouts = {available:'Есть макет',missing:'Нет макета',unknown:'Не проверено'};
 const unknown = 'Не указано';
 const readiness = row => row.printed == null ? 'Не подтверждена' : row.printed >= row.plan ? 'Готово' : row.printed ? 'В работе' : 'Не начата';
-const groups = [
-  ['material','Материал',row=>row.material||unknown],
-  ['layout','Наличие макета',row=>layouts[row.layout]||layouts.unknown],
-  ['extension','Расширение печати',row=>row.extension||unknown],
-  ['readiness','Готовность печати',readiness],
+const materialGroup = ['material','Материал',row => row.material || unknown];
+const readinessGroup = ['readiness','Готовность печати',readiness];
+const layoutLabel = row => layouts[row.layout] || layouts.unknown;
+const extensionLabel = row => row.extension || unknown;
+const boxGroups = [
+  materialGroup,
+  ['layout','Наличие макета',layoutLabel],
+  ['extension','Расширение печати',extensionLabel],
+  readinessGroup,
+];
+const rollGroups = [
+  ['size','Размеры',row => rollSizeLabel(row.size)],
+  ['machine','Станок',row => row.machine || unknown],
+  ['layout','Макет',layoutLabel],
+  ['extension','Расширение',extensionLabel],
+  materialGroup,
+  readinessGroup,
 ];
 const workKey = 'ritm-printing-local-work-v1';
 const rollKey = 'ritm-printing-local-rolls-v1';
@@ -99,7 +112,6 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
   const [searchResults, setSearchResults] = useState(null);
   const [rollQuery, setRollQuery] = useState('');
   const [machine, setMachine] = useState('');
-  const [rollSize, setRollSize] = useState('');
   const [filters, setFilters] = useState({});
   const [work, setWork] = useState(() => initialLocal(workKey));
   const [localRolls, setLocalRolls] = useState(() => initialLocal(rollKey));
@@ -274,42 +286,39 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
   const boxCorrections = !isRoll && activeBoxMode === 'correct' && canCorrect;
   const boxAction = showTake ? 'take' : boxOperation;
   const boxSubmitLabel = showTake ? 'Взять в работу' : boxOperation === 'cut' ? 'Записать порезку' : 'Записать печать';
-  const sizes = isRoll ? [...new Set(rows.map(row => rollSizeLabel(row.size)).filter(Boolean))]
-    .sort((a,b) => a.localeCompare(b,'ru',{numeric:true})) : empty;
-  const selectedSize = sizes.includes(rollSize) ? rollSize : '';
-  const matchingRows = rows.filter(row => {
-    if (selectedSize && rollSizeLabel(row.size) !== selectedSize) return false;
+  const groups = isRoll ? rollGroups : boxGroups;
+  const filterIndex = useMemo(() => buildJobFilterIndex(rows,groups),[rows,groups]);
+  const matchingRows = useMemo(() => filterJobRows(filterIndex,filters,row => {
     if (machine && row.machine !== machine) return false;
     if (keyword && !matchesArticle(row,keyword)) return false;
-    if (isRoll && rollQuery.trim() && !row.rolls?.some(roll => matchesRoll(roll,rollQuery))) return false;
-    return groups.every(([key,,value]) => !filters[key]?.length || filters[key].includes(value(row)));
-  });
-  const machines = [...new Set(rows.map(row => row.machine).filter(Boolean))].sort((a,b) => a.localeCompare(b,'ru'));
-  const boxChoices = showTake || showBoxWork ? new Map(matchingRows.map(row => {
+    return !isRoll || !rollQuery.trim() || row.rolls?.some(roll => matchesRoll(roll,rollQuery));
+  }),[filterIndex,filters,machine,keyword,isRoll,rollQuery]);
+  const machines = useMemo(() => isRoll ? empty : [...new Set(rows.map(row => row.machine).filter(Boolean))]
+    .sort((a,b) => a.localeCompare(b,'ru')),[isRoll,rows]);
+
+  const boxChoices = useMemo(() => showTake || showBoxWork ? new Map(matchingRows.map(row => {
     const records = rowRecords(draftWork,id,row.id);
     return [row.id,showTake ? {error:boxTakeBlockReason(row,records,working)} :
       boxWorkEntry(row,records,boxOperation,working)];
-  })) : null;
-  const rollChoices = editable && isRoll
-    ? new Map(matchingRows.map(row => [row.id,rollWorkChoice(row,rollQuery,working)])) : null;
+  })) : null,[showTake,showBoxWork,matchingRows,draftWork,id,working,boxOperation]);
+  const rollChoices = useMemo(() => editable && isRoll
+    ? new Map(rows.map(row => [row.id,rollWorkChoice(row,rollQuery,working)])) : null,
+    [editable,isRoll,rows,rollQuery,working]);
   const selectable = !!(boxChoices || rollChoices);
-  const eligible = new Set((selectable ? matchingRows : [])
-    .filter(row => {
-      if (!isRoll) return !boxChoices.get(row.id).error;
-      return rollChoiceMatches(rollChoices.get(row.id),rollOperation);
-    })
-    .map(row => row.id));
+  const eligible = useMemo(() => new Set((selectable ? matchingRows : [])
+    .filter(row => isRoll ? rollChoiceMatches(rollChoices.get(row.id),rollOperation) : !boxChoices.get(row.id).error)
+    .map(row => row.id)),[selectable,matchingRows,isRoll,rollChoices,rollOperation,boxChoices]);
   const queueOperation = showBoxWork ? boxOperation : rollChoices ? rollOperation : '';
-  const visible = boxChoices || queueOperation ? matchingRows.filter(row => eligible.has(row.id)) : matchingRows;
+  const visible = useMemo(() => boxChoices || queueOperation ? matchingRows.filter(row => eligible.has(row.id)) : matchingRows,
+    [boxChoices,queueOperation,matchingRows,eligible]);
   const emptyQueue = showTake ? 'Нет доступных артикулов для взятия в работу.' : queueOperation
     ? (queueOperation === 'cut' ? 'Нет доступного остатка для порезки.' : 'Нет доступного остатка для печати.') : undefined;
-  const selected = visible.filter(row => checked.has(row.id) && eligible.has(row.id));
+  const selected = selectedJobRows(visible,checked,eligible);
   const activeRow = rows.find(row => row.id === articleId);
   const recordsForRow = rowId => rowRecords(draftWork,id,rowId);
   const blocked = !!pendingWork || busy;
   const boxBatch = !!boxChoices && selected.length > 0 && batchView;
-  const rollSelection = rollChoices
-    ? [...rollChoices.values()].filter(choice => checked.has(choice.row.id) && rollChoiceMatches(choice)) : empty;
+  const rollSelection = rollChoices ? selected.map(row => rollChoices.get(row.id)) : empty;
   const selectedRollOperation = rollOperation || (rollSelection.some(choice => choice.cut.length) ? 'cut' : 'print');
   const rollWorkSelection = rollSelection.filter(choice => rollChoiceMatches(choice,selectedRollOperation));
   const assignmentSelection = rollOperation === 'cut' ? empty : rollOperation ? rollWorkSelection : rollSelection;
@@ -350,7 +359,6 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
     setArticleId('');
     setDetailOpen(false);
     setMachine('');
-    setRollSize('');
     setFilters({});
     if (!keepQuery) setQuery('');
     setRollQuery('');
@@ -424,8 +432,17 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
     });
   }
 
-  function toggleFilter(key,value) {
+  function resetJobFilters(key) {
+    if (busy) return;
     clearSelection();
+    setFilters(previous => key ? {...previous,[key]:[]} : {});
+    queuePane.current?.scrollTo(0,0);
+  }
+
+  function toggleFilter(key,value) {
+    if (busy) return;
+    clearSelection();
+    queuePane.current?.scrollTo(0,0);
     setFilters(previous => {
       const options = previous[key] || [];
       return {...previous,[key]:options.includes(value) ? options.filter(option => option !== value) : [...options,value]};
@@ -713,26 +730,18 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
                         setQuery(event.target.value);
                         queuePane.current?.scrollTo(0,0);
                       }}/>
-                    {details && <div className="queue-filters">
-                      <select aria-label="Станок" value={machine} disabled={busy}
-                        onChange={event => { clearSelection();setMachine(event.target.value); }}>
-                        <option value="">Все станки</option>
-                        {machines.map(option => <option key={option}>{option}</option>)}
-                      </select>
-                      {isRoll && <select aria-label="Размер" value={selectedSize} disabled={busy || !sizes.length}
-                        onChange={event => {
-                          clearSelection();
-                          setRollSize(event.target.value);
-                          queuePane.current?.scrollTo(0,0);
-                        }}>
-                        <option value="">{!sizes.length && loadedDetails?.catalog?.refreshing
-                          ? (loadedDetails.catalog.retryAfterMs ? 'Повтор загрузки размеров…' : 'Размеры загружаются…')
-                          : 'Все размеры'}</option>
-                        {sizes.map(size => <option key={size} value={size}>{size}</option>)}
-                      </select>}
-                      <JobFilters groups={groups} rows={rows} filters={filters} onToggle={toggleFilter}
-                        onReset={() => { clearSelection();setFilters({}); }}/>
-                    </div>}
+                    {details && (isRoll ?
+                      <RollJobFilters key={id} groups={groups} options={filterIndex.options} filters={filters}
+                        onToggle={toggleFilter} onReset={resetJobFilters} disabled={busy} catalog={loadedDetails?.catalog}/> :
+                      <div className="queue-filters">
+                        <select aria-label="Станок" value={machine} disabled={busy}
+                          onChange={event => { clearSelection();setMachine(event.target.value); }}>
+                          <option value="">Все станки</option>
+                          {machines.map(option => <option key={option}>{option}</option>)}
+                        </select>
+                        <JobFilters groups={groups} options={filterIndex.options} filters={filters} onToggle={toggleFilter}
+                          onReset={resetJobFilters} disabled={busy}/>
+                      </div>)}
                 </div>}
                   {rollChoices && <div className="queue-mode-controls">
                     <div className="segments" role="group" aria-label="Режим списка рулонной печати">

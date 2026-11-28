@@ -272,6 +272,32 @@ small { font-size: .85em; }
 .filter-options legend { font-weight: 700; }
 .filter-options label { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
 
+.roll-filter-bar { position: relative; flex: 1 0 100%; min-width: 0; gap: 6px; }
+.roll-filter-button { display: inline-flex; align-items: center; gap: 6px; padding-inline: 11px; font-size: 14px; }
+.roll-filter-button[data-active="true"], .roll-filter-button[aria-expanded="true"] {
+  background: var(--selected);
+  border-color: var(--accent-text);
+}
+.filter-count {
+  min-width: 21px;
+  padding: 1px 4px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: white;
+  font-size: 14px;
+  font-weight: 650;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.filter-options.roll-filter-panel { inset-inline: 0 auto; width: min(320px, 100%); }
+.roll-filter-panel input[type="search"] { width: 100%; margin-bottom: 10px; }
+.roll-filter-panel fieldset { margin: 0; }
+.roll-filter-panel fieldset + fieldset { margin-top: 12px; }
+.roll-filter-panel label { min-height: 37px; overflow-wrap: anywhere; }
+.roll-filter-panel p { padding-block: 5px; }
+.roll-filter-panel .link { margin-top: 7px; }
+.reset-roll-filters { font-size: 14px; }
+
 .printing-workspace {
   --shipment-column: 0px;
   --detail-column: 0px;

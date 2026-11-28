@@ -9,6 +9,7 @@ import { refreshCatalog } from '../worker/catalog.mjs';
 import { correctionPlan, progressFacts } from '../worker/workflow.mjs';
 import { transferPrinting } from '../scripts/import-snapshot.mjs';
 import { boxSelectionText, boxTakeBlockReason, boxWorkEntry, rollEmployee, rollSizeLabel, takeEntry } from '../src/printing-workflow.mjs';
+import { buildJobFilterIndex, filterJobRows, selectedJobRows } from '../src/job-filters.mjs';
 import { rollBatchEntries, rollChoiceMatches, rollWorkChoice } from '../src/roll-batch-work.mjs';
 
 const boxSupply='fixture-workspace-box-0001:1';
@@ -159,6 +160,34 @@ test('roll sizes group equivalent separators without mixing units or orientation
   assert.notEqual(rollSizeLabel('40×60 мм'),rollSizeLabel('40×60 см'));
   assert.notEqual(rollSizeLabel('40×60 мм'),rollSizeLabel('60×40 мм'));
   assert.equal(rollSizeLabel(undefined),'');
+});
+
+test('multiple sizes combine with machine, layout and extension and scope bulk selection', ()=>{
+  const rows = [
+    {id:'a',size:'40х60 мм',machine:'УФ',layout:'available',extension:'PDF'},
+    {id:'b',size:'75×100 мм',machine:'УФ',layout:'available',extension:'PDF'},
+    {id:'c',size:'75 X 100 мм',machine:'Латекс',layout:'available',extension:'PDF'},
+    {id:'d',size:'40×60 мм',machine:'УФ',layout:'missing',extension:'PDF'},
+    {id:'e',size:'40×60 мм',machine:'УФ',layout:'available',extension:'TIFF'},
+    {id:'f',size:'100×200 мм',machine:'УФ',layout:'available',extension:'PDF'},
+    {id:'g',machine:'УФ',layout:'available',extension:'PDF'},
+  ];
+  const groups = [
+    ['size','Размеры',row=>rollSizeLabel(row.size)],
+    ['machine','Станок',row=>row.machine],['layout','Макет',row=>row.layout],
+    ['extension','Расширение',row=>row.extension],
+  ];
+  const indexed = buildJobFilterIndex(rows,groups);
+  assert.deepEqual(indexed.options.size,['40 × 60 мм','75 × 100 мм','100 × 200 мм']);
+  const filters={size:['40 × 60 мм','75 × 100 мм'],machine:['УФ'],layout:['available'],extension:['PDF']};
+  const matching = filterJobRows(indexed,filters,()=>true);
+  assert.deepEqual(matching.map(row=>row.id),['a','b']);
+  assert.deepEqual(filterJobRows(indexed,{...filters,size:['75 × 100 мм']},()=>true).map(row=>row.id),['b']);
+  assert.deepEqual(filterJobRows(indexed,filters,row=>row.id!=='a').map(row=>row.id),['b']);
+  assert.deepEqual(filterJobRows(indexed,{},()=>true),rows);
+  const refreshed = buildJobFilterIndex(rows.slice(2),groups);
+  assert.deepEqual(filterJobRows(refreshed,{...filters,size:['75 × 100 мм']},()=>true),[]);
+  assert.deepEqual(selectedJobRows(matching,new Set(rows.map(row=>row.id)),new Set(['a','c','f'])).map(row=>row.id),['a']);
 });
 
 test('catalog upgrade refreshes sizes and keeps the existing market and store scope', async t=>{

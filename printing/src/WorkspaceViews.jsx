@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { PrintExtension, ProductPhoto, showAmount } from './BatchWork.jsx';
 import { Meter } from './InlineWork.jsx';
 import { localTotal, matchesRoll, normalize, rollSizeLabel, rollTitle, workRemaining } from './printing-workflow.mjs';
@@ -6,20 +6,101 @@ import { rollCutAvailable } from './shipment-progress.mjs';
 
 const layouts = {available:'Есть макет', missing:'Нет макета', unknown:'Не проверено'};
 
-export function JobFilters({groups, rows, filters, onToggle, onReset}) {
+const quickFilters = new Set(['size','machine','layout','extension']);
+const sizeSearchKey = value => normalize(value).replace(/\s+/gu,'').replace(/[xх]/gu,'×');
+
+function availableChoices(options = [], selected = []) {
+  return [...new Set([...options,...selected])];
+}
+
+function FilterChoices({label, options, selected = [], onToggle, disabled}) {
+  const chosen = new Set(selected);
+  return <fieldset disabled={disabled}>
+    <legend>{label}</legend>
+    {options.map(option => <label key={option}>
+      <input type="checkbox" checked={chosen.has(option)} onChange={() => onToggle(option)}/>
+      <span>{option}</span>
+    </label>)}
+  </fieldset>;
+}
+
+export function JobFilters({groups, options, filters, onToggle, onReset, disabled}) {
   const count = Object.values(filters).reduce((total, values) => total + values.length, 0);
   return <details className="filter-menu">
     <summary className="outline">Фильтры{count ? ' · '+count : ''}</summary>
     <div className="filter-options">
-      {groups.map(([key,label,value]) => <fieldset key={key}>
-        <legend>{label}</legend>
-        {[...new Set(rows.map(value))].sort((a,b) => a.localeCompare(b,'ru')).map(option => <label key={option}>
-          <input type="checkbox" checked={filters[key]?.includes(option) || false} onChange={() => onToggle(key,option)}/>{option}
-        </label>)}
-      </fieldset>)}
-      {count > 0 && <button className="link" type="button" onClick={onReset}>Сбросить фильтры</button>}
+      {groups.map(([key,label]) => <FilterChoices key={key} label={label}
+        options={availableChoices(options[key],filters[key])} selected={filters[key]}
+        disabled={disabled} onToggle={option => onToggle(key,option)}/>)}
+      {count > 0 && <button className="link" type="button" disabled={disabled}
+        onClick={() => onReset()}>Сбросить фильтры</button>}
     </div>
   </details>;
+}
+
+export function RollJobFilters({groups, options, filters, onToggle, onReset, disabled, catalog}) {
+  const [opened,setOpened] = useState('');
+  const [query,setQuery] = useState('');
+  const menu = useRef(null);
+  const trigger = useRef(null);
+  const panelId = useId();
+  const controls = groups.filter(([key]) => quickFilters.has(key)).map(group => [group[0],group[1],[group]]);
+  controls.push(['more','Ещё',groups.filter(([key]) => !quickFilters.has(key))]);
+  const active = Object.values(filters).some(values => values.length);
+
+  useEffect(() => {
+    if (!opened) return;
+    function closeOutside(event) {
+      if (!menu.current?.contains(event.target)) setOpened('');
+    }
+    document.addEventListener('pointerdown',closeOutside,true);
+    return () => document.removeEventListener('pointerdown',closeOutside,true);
+  },[opened]);
+
+  return <div className="queue-filters roll-filter-bar" role="group" aria-label="Фильтры рулонной печати" ref={menu}
+    onKeyDown={event => {
+      if (!opened || event.key !== 'Escape') return;
+      event.preventDefault();
+      setOpened('');
+      trigger.current?.focus();
+    }}>
+    {controls.map(([key,label,fields]) => {
+      const count = fields.reduce((sum,[field]) => sum+(filters[field]?.length || 0),0);
+      return <React.Fragment key={key}>
+        <button className="outline roll-filter-button" type="button" disabled={disabled}
+          data-active={count > 0} aria-expanded={opened === key} aria-controls={opened === key ? panelId : undefined}
+          aria-label={count ? label+', выбрано '+count : label}
+          onClick={event => {
+            trigger.current = event.currentTarget;
+            setQuery('');
+            setOpened(previous => previous === key ? '' : key);
+          }}>
+          {label}{count > 0 && <span className="filter-count" aria-hidden="true">{count}</span>}
+        </button>
+        {opened === key && <div className="filter-options roll-filter-panel" id={panelId}>
+          {key === 'size' && options.size.length > 8 && <input type="search" aria-label="Найти размер"
+            placeholder="Найти размер" value={query} onChange={event => setQuery(event.target.value)}/>}
+          {fields.map(([field,title]) => {
+            const choices = availableChoices(options[field],filters[field]);
+            if (!choices.length) {
+              return <p className="quiet" key={field} role="status">{field === 'size' && catalog?.refreshing
+                ? (catalog.retryAfterMs ? 'Повтор загрузки размеров…' : 'Размеры загружаются…')
+                : 'Значения для этой поставки пока недоступны.'}</p>;
+            }
+            const needle = sizeSearchKey(query);
+            const visible = field === 'size' && needle ? choices.filter(option => sizeSearchKey(option).includes(needle)) : choices;
+            return visible.length ? <FilterChoices key={field} label={title} options={visible}
+              selected={filters[field]} disabled={disabled} onToggle={option => onToggle(field,option)}/>
+              : <p className="quiet" key={field} role="status">Размеры не найдены.</p>;
+          })}
+          {key !== 'more' && count > 0 && <button className="link" type="button"
+            disabled={disabled} onClick={() => onReset(key)}>Снять выбор</button>}
+        </div>}
+      </React.Fragment>;
+    })}
+    {active && <button className="link reset-roll-filters" type="button"
+      disabled={disabled} onClick={() => onReset()}>Сбросить фильтры</button>}
+  </div>;
 }
 
 export function ShipmentPicker({supplies, current, loading, stale, busy, onPick}) {
