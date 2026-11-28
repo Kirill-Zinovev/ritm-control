@@ -2,6 +2,7 @@ const origin = 'https://assembly-v2.zinovevkirill234.chatgpt.site';
 const pageSize = 30;
 const age = 60 * 60_000;
 const earlyRefresh = 5 * 60_000;
+const catalogFormat = 2;
 let session = {};
 
 const clean = value => typeof value==='string' && !value.trim().startsWith('#') ? value.trim() : '';
@@ -27,7 +28,7 @@ function validPhoto(value) {
 export async function decorateRows(db, group, rows) {
   if (!group.market || !rows.length) return rows;
   const keys=[...new Set(rows.map(row=>skuKey(group.market,row.article)))];
-  const {results}=await db.prepare(`SELECT sku,sku_key,store,name,extension,photo FROM printing_catalog_cards
+  const {results}=await db.prepare(`SELECT sku,sku_key,store,name,extension,photo,size FROM printing_catalog_cards
     WHERE market=? AND sku_key IN (SELECT value FROM json_each(?))`).bind(group.market,JSON.stringify(keys)).all();
   const index=new Map();
   for (const row of results) {
@@ -42,7 +43,8 @@ export async function decorateRows(db, group, rows) {
     if (!store && new Set(scoped.map(card=>card.store)).size>1) return row;
     const exact=scoped.filter(card=>card.sku===sku(row.article));
     const card=exact.length===1 ? exact[0] : scoped.length===1 ? scoped[0] : null;
-    return card ? {...row,name:card.name||row.name,photo:validPhoto(card.photo)||row.photo,extension:row.extension||card.extension} : row;
+    return card ? {...row,name:card.name||row.name,photo:validPhoto(card.photo)||row.photo,
+      extension:row.extension||card.extension,size:clean(card.size)} : row;
   });
 }
 
@@ -89,32 +91,39 @@ async function catalogPage(token, market, page) {
       throw new Error('Assembly catalog card invalid');
     }
     return [item.id,market,article,skuKey(market,article),clean(item.store),clean(item.name),
-      clean(item.printExtension),validPhoto(item.photoUrl),clean(item.photoId),id];
+      clean(item.printExtension),validPhoto(item.photoUrl),clean(item.photoId),id,clean(item.size)];
   });
   return {id,total,cards};
 }
 
 const stateSql='SELECT * FROM printing_catalog_sync WHERE singleton=1';
 const upsertCards=`
-  INSERT INTO printing_catalog_cards(id,market,sku,sku_key,store,name,extension,photo,photo_id,import_id)
+  INSERT INTO printing_catalog_cards(id,market,sku,sku_key,store,name,extension,photo,photo_id,import_id,size)
   SELECT json_extract(value,'$[0]'),json_extract(value,'$[1]'),json_extract(value,'$[2]'),
     json_extract(value,'$[3]'),json_extract(value,'$[4]'),json_extract(value,'$[5]'),
-    json_extract(value,'$[6]'),json_extract(value,'$[7]'),json_extract(value,'$[8]'),json_extract(value,'$[9]')
+    json_extract(value,'$[6]'),json_extract(value,'$[7]'),json_extract(value,'$[8]'),json_extract(value,'$[9]'),json_extract(value,'$[10]')
   FROM json_each(?) WHERE EXISTS (SELECT 1 FROM printing_catalog_sync WHERE lease_until=?)
   ON CONFLICT(id) DO UPDATE SET market=excluded.market,sku=excluded.sku,sku_key=excluded.sku_key,
-    store=excluded.store,name=excluded.name,extension=excluded.extension,
+    store=excluded.store,name=excluded.name,extension=excluded.extension,size=excluded.size,
     photo=CASE WHEN excluded.photo<>'' THEN excluded.photo
       WHEN printing_catalog_cards.photo_id=excluded.photo_id AND printing_catalog_cards.import_id=excluded.import_id
       THEN printing_catalog_cards.photo ELSE '' END,photo_id=excluded.photo_id,import_id=excluded.import_id`;
 
 async function advanceCatalog(db, token, initial) {
   const begun=Date.now(), lease=begun+26_000;
-  const locked=await db.prepare('UPDATE printing_catalog_sync SET lease_until=? WHERE singleton=1 AND lease_until<=? AND retry_at<=? AND page=? AND market_offset=? AND updated_at IS ?')
-    .bind(lease,begun,begun,initial.page,initial.market_offset,initial.updated_at).run();
+  // Restart the catalog cursor once to backfill sizes on existing cards.
+  const upgrade=initial.format_version<catalogFormat;
+  const cursor=upgrade ? {page:0,market_offset:0,import_id:'',total:0,updated_at:null} : initial;
+  const locked=await db.prepare(`UPDATE printing_catalog_sync SET lease_until=?,format_version=?,
+    page=?,market_offset=?,import_id=?,total=?,updated_at=?
+    WHERE singleton=1 AND lease_until<=? AND retry_at<=? AND page=? AND market_offset=?
+      AND updated_at IS ? AND format_version=?`)
+    .bind(lease,upgrade ? catalogFormat : initial.format_version,cursor.page,cursor.market_offset,cursor.import_id,cursor.total,cursor.updated_at,
+      begun,begun,initial.page,initial.market_offset,initial.updated_at,initial.format_version).run();
   if (locked.meta.changes!==1) return;
   try {
     const {results}=await db.prepare("SELECT DISTINCT market FROM printing_supplies WHERE market IN ('OZON','WB') ORDER BY market").all();
-    let {page,market_offset:offset,import_id:previous,total:previousTotal}=initial;
+    let {page,market_offset:offset,import_id:previous,total:previousTotal}=cursor;
     for (let i=0; i<3 && offset<results.length && Date.now()-begun<15_000; i++) {
       const market=results[offset].market;
       const current=await catalogPage(token,market,page);
@@ -152,7 +161,7 @@ export async function refreshCatalog(db, token, fresh, ctx) {
   if (!state) return {refreshing:false};
   const now=Date.now();
   const elapsed=state.updated_at ? now-Date.parse(state.updated_at) : Infinity;
-  const due=state.page>0 || state.market_offset>0 || elapsed>age || (fresh && elapsed>earlyRefresh);
+  const due=state.format_version<catalogFormat || state.page>0 || state.market_offset>0 || elapsed>age || (fresh && elapsed>earlyRefresh);
   if (!due || state.retry_at>now) return {refreshing:false,updatedAt:state.updated_at};
   if (state.lease_until<=now) ctx.waitUntil(advanceCatalog(db,token,state).catch(()=>{}));
   return {refreshing:true,updatedAt:state.updated_at};

@@ -5,9 +5,10 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import worker from '../worker/index.mjs';
 import { fingerprint } from '../worker/import-data.mjs';
+import { refreshCatalog } from '../worker/catalog.mjs';
 import { correctionPlan, progressFacts } from '../worker/workflow.mjs';
 import { transferPrinting } from '../scripts/import-snapshot.mjs';
-import { boxSelectionText, boxTakeBlockReason, boxWorkEntry, rollEmployee, takeEntry } from '../src/printing-workflow.mjs';
+import { boxSelectionText, boxTakeBlockReason, boxWorkEntry, rollEmployee, rollSizeLabel, takeEntry } from '../src/printing-workflow.mjs';
 import { rollBatchEntries, rollChoiceMatches, rollWorkChoice } from '../src/roll-batch-work.mjs';
 
 const boxSupply='fixture-workspace-box-0001:1';
@@ -73,7 +74,10 @@ function snapshot(extraRoll = false) {
 function host(t) {
   const sql=new DatabaseSync(':memory:');
   t.after(()=>sql.close());
-  sql.exec(readFileSync(new URL('../drizzle/0000_printing.sql',import.meta.url),'utf8'));
+  const migrations = JSON.parse(readFileSync(new URL('../drizzle/meta/_journal.json',import.meta.url),'utf8'));
+  for (const {tag} of migrations.entries) {
+    sql.exec(readFileSync(new URL('../drizzle/'+tag+'.sql',import.meta.url),'utf8'));
+  }
   const configs={box:'2580',roll:'1479'};
   const pins=Object.fromEntries(Object.entries(configs).map(([key,pin])=>{
     const salt='d'.repeat(32);
@@ -147,6 +151,54 @@ test('imports position state and existing receipts, preserves shop scope, and bl
   const replay=await h.call(write,{department:'box',supplyId:boxSupply,command:'work',items:[data.old[1]]},use(login.cookie));
   assert.equal(replay.value.results[0].repeated,true);
   assert.equal((await h.call(list+'box&journal=1',null,use(login.cookie))).value.work.length,1);
+});
+
+test('roll sizes group equivalent separators without mixing units or orientation', ()=>{
+  assert.equal(rollSizeLabel(' 40х60 мм '),'40 × 60 мм');
+  assert.equal(rollSizeLabel('40 X 60  мм'),rollSizeLabel('40×60 мм'));
+  assert.notEqual(rollSizeLabel('40×60 мм'),rollSizeLabel('40×60 см'));
+  assert.notEqual(rollSizeLabel('40×60 мм'),rollSizeLabel('60×40 мм'));
+  assert.equal(rollSizeLabel(undefined),'');
+});
+
+test('catalog upgrade refreshes sizes and keeps the existing market and store scope', async t=>{
+  const h=host(t);
+  await transferPrinting(snapshot(true),h.admin);
+  const {cookie}=await h.login('roll');
+  const route=list+'roll&supply='+encodeURIComponent(rollSupply);
+  assert.equal((await h.call(route,null,use(cookie))).value.rows[0].size,undefined);
+
+  const position=h.sql.prepare('SELECT payload FROM printing_positions WHERE supply_id=? AND row_id=?');
+  const stored=JSON.parse(position.get(rollSupply,'b').payload);
+  h.sql.prepare('UPDATE printing_positions SET payload=? WHERE supply_id=? AND row_id=?')
+    .run(JSON.stringify({...stored,catalogStore:'2'}),rollSupply,'b');
+  h.sql.prepare('UPDATE printing_catalog_sync SET page=7,updated_at=? WHERE singleton=1')
+    .run(new Date().toISOString());
+
+  const cards=[
+    ['b-1','SKU-B','1','90×100 мм'],['b-2','SKU-B','2',' 40х60 мм '],
+    ['c-1','SKU-C','1','10×20 мм'],['c-2','SKU-C','2','30×40 мм'],
+  ].map(([id,sku,store,size])=>({id,sku,store,size,market:'OZON',importId:'fixture-catalog'}));
+  const pages=[];
+  t.mock.method(globalThis,'fetch',async url=>{
+    const target=new URL(url);
+    if (target.pathname==='/api/access/collector') {
+      return new Response(null,{headers:{'set-cookie':'__Host-av2-workplace=fixture; Secure; Path=/'}});
+    }
+    assert.equal(target.pathname,'/api/catalog');
+    pages.push(target.searchParams.get('page'));
+    return Response.json({active:{id:'fixture-catalog'},page:0,total:cards.length,items:cards});
+  });
+  const jobs=[];
+  const state=await refreshCatalog(binding(h.sql),'f'.repeat(64),false,{waitUntil:job=>jobs.push(job)});
+  assert.equal(state.refreshing,true);
+  await Promise.all(jobs);
+  assert.deepEqual(pages,['0']);
+  assert.equal(h.sql.prepare('SELECT format_version FROM printing_catalog_sync').get().format_version,2);
+
+  const result=await h.call(route,null,use(cookie));
+  assert.equal(result.status,200);
+  assert.deepEqual(result.value.rows.map(({id,size})=>[id,size]),[['b','40х60 мм'],['c',undefined]]);
 });
 
 test('article search shows current progress from other supplies in the signed-in department', async t=>{

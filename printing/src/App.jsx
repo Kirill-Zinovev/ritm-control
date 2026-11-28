@@ -7,7 +7,7 @@ import { submitBoxBatch } from './submit-box-batch.mjs';
 import { BOX_GATEWAY_BATCH } from './workspace-write.mjs';
 import { rollCutAvailable, summarizeShipment } from './shipment-progress.mjs';
 import { rollChoiceMatches, rollWorkChoice } from './roll-batch-work.mjs';
-import { MAX_ROLLS, boxTakeBlockReason, boxWorkEntry, isXerox, matchesArticle, matchesRoll, newRolls, normalize, operationNames, rollDraft, rollEmployee, takeEntry, unitFactor, workRemaining } from './printing-workflow.mjs';
+import { MAX_ROLLS, boxTakeBlockReason, boxWorkEntry, isXerox, matchesArticle, matchesRoll, newRolls, normalize, operationNames, rollDraft, rollEmployee, rollSizeLabel, takeEntry, unitFactor, workRemaining } from './printing-workflow.mjs';
 
 const layouts = {available:'Есть макет',missing:'Нет макета',unknown:'Не проверено'};
 const unknown = 'Не указано';
@@ -99,6 +99,7 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
   const [searchResults, setSearchResults] = useState(null);
   const [rollQuery, setRollQuery] = useState('');
   const [machine, setMachine] = useState('');
+  const [rollSize, setRollSize] = useState('');
   const [filters, setFilters] = useState({});
   const [work, setWork] = useState(() => initialLocal(workKey));
   const [localRolls, setLocalRolls] = useState(() => initialLocal(rollKey));
@@ -272,7 +273,11 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
   const boxCorrections = !isRoll && activeBoxMode === 'correct' && canCorrect;
   const boxAction = showTake ? 'take' : boxOperation;
   const boxSubmitLabel = showTake ? 'Взять в работу' : boxOperation === 'cut' ? 'Записать порезку' : 'Записать печать';
+  const sizes = isRoll ? [...new Set(rows.map(row => rollSizeLabel(row.size)).filter(Boolean))]
+    .sort((a,b) => a.localeCompare(b,'ru',{numeric:true})) : empty;
+  const selectedSize = sizes.includes(rollSize) ? rollSize : '';
   const matchingRows = rows.filter(row => {
+    if (selectedSize && rollSizeLabel(row.size) !== selectedSize) return false;
     if (machine && row.machine !== machine) return false;
     if (keyword && !matchesArticle(row,keyword)) return false;
     if (isRoll && rollQuery.trim() && !row.rolls?.some(roll => matchesRoll(roll,rollQuery))) return false;
@@ -344,6 +349,7 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
     setArticleId('');
     setDetailOpen(false);
     setMachine('');
+    setRollSize('');
     setFilters({});
     if (!keepQuery) setQuery('');
     setRollQuery('');
@@ -712,6 +718,16 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
                         <option value="">Все станки</option>
                         {machines.map(option => <option key={option}>{option}</option>)}
                       </select>
+                      {isRoll && <select aria-label="Размер" value={selectedSize} disabled={busy || !sizes.length}
+                        onChange={event => {
+                          clearSelection();
+                          setRollSize(event.target.value);
+                          queuePane.current?.scrollTo(0,0);
+                        }}>
+                        <option value="">{!sizes.length && loadedDetails?.catalog?.refreshing
+                          ? 'Размеры загружаются…' : 'Все размеры'}</option>
+                        {sizes.map(size => <option key={size} value={size}>{size}</option>)}
+                      </select>}
                       <JobFilters groups={groups} rows={rows} filters={filters} onToggle={toggleFilter}
                         onReset={() => { clearSelection();setFilters({}); }}/>
                     </div>}

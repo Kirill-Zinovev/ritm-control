@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { PrintExtension, ProductPhoto, showAmount } from './BatchWork.jsx';
 import { Meter } from './InlineWork.jsx';
-import { localTotal, matchesRoll, normalize, rollTitle, workRemaining } from './printing-workflow.mjs';
+import { localTotal, matchesRoll, normalize, rollSizeLabel, rollTitle, workRemaining } from './printing-workflow.mjs';
 import { rollCutAvailable } from './shipment-progress.mjs';
 
 const layouts = {available:'Есть макет', missing:'Нет макета', unknown:'Не проверено'};
@@ -147,6 +147,7 @@ export function JobQueue({rows, showChecks, selectionDisabled, chosen, eligible,
     <tbody>
       {rows.map(row => {
         const active = activeId === row.id;
+        const size = !isBox && rollSizeLabel(row.size);
         const records = recordsForRow(row.id);
         const fact = (value,operation) => value == null ? null : value +
           records.reduce((sum,entry) => entry.operation === operation ? sum + entry.pieces : sum,0);
@@ -179,11 +180,15 @@ export function JobQueue({rows, showChecks, selectionDisabled, chosen, eligible,
                   <small className="job-state">В работе · {showAmount(taken)} / {showAmount(row.plan)}</small>}
               </span>
               {row.name && <small className="product-name" title={row.name}>{row.name}</small>}
+              {size && <small className="job-size mobile-job-size">Размер {size}</small>}
               {showTake && blockReason && !fullyTaken && <small className="quiet">{blockReason}</small>}
               {found?.length > 0 && <small className="roll-match">Рулоны: {found.map(rollTitle).join(', ')}</small>}
             </span>
           </button></td>
-          <td className="machine-cell">{row.machine || '—'}</td>
+          <td className="machine-cell">
+            {row.machine || '—'}
+            {size && <small className="job-size">Размер {size}</small>}
+          </td>
           <td className="meter-cell">
             <Meter label="Печать" value={printed} plan={row.plan}/>
             {showRemaining && <RemainingQuantity label="К печати" amount={workRemaining('print',row.plan,printed)}/>}
@@ -203,6 +208,7 @@ export function JobQueue({rows, showChecks, selectionDisabled, chosen, eligible,
 
 export function ArticleSummary({row, records, isRoll}) {
   const specs = [row.machine,row.material].filter(Boolean);
+  const size = isRoll && rollSizeLabel(row.size);
   return <>
     <div className="article-summary">
       <ProductPhoto key={row.photo} url={row.photo} loading="eager"/>
@@ -211,6 +217,7 @@ export function ArticleSummary({row, records, isRoll}) {
         {row.name && <p className="article-name">{row.name}</p>}
         <div className="article-specs">
           {specs.length > 0 && <strong>{specs.join(' · ')}</strong>}
+          {size && <span>Размер <strong>{size}</strong></span>}
           {row.layoutUrl ? <a className="layout available" href={row.layoutUrl} target="_blank" rel="noreferrer">Открыть макет</a> :
             <span className={'layout '+row.layout}>{layouts[row.layout] || layouts.unknown}</span>}
           <span>План <strong>{showAmount(row.plan)} шт.</strong></span>

@@ -476,6 +476,8 @@ small { font-size: .85em; }
 .job-table th { border-top: 1px solid var(--line); font-size: 14px; }
 .job-table tbody tr:not(.selected):hover td { background: var(--hover-row); }
 .job-table td.machine-cell { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.job-size { display: block; color: var(--muted); font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
+.mobile-job-size { display: none; }
 .job-table .check-cell { padding-inline: 5px 3px; }
 .job-table tr.selected td { background: var(--selected); }
 .job-table tr.selected .product strong { color: var(--selected-ink); }
@@ -706,6 +708,7 @@ small { font-size: .85em; }
   .filter-menu { position: static; }
   .filter-options { inset-inline-end: 0; width: min(280px, 100%); }
   .job-table .machine-cell, .job-machine { display: none; }
+  .mobile-job-size { display: block; }
   .job-meter { width: 18%; }
   .product { gap: 6px; }
   .job-table .photo { width: 37px; height: 37px; }

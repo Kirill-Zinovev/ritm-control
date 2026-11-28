@@ -1,6 +1,11 @@
 const EPSILON = 1e-8;
 export const MAX_ROLLS = 500;
 export const normalize = value => String(value ?? '').trim().toLocaleLowerCase('ru');
+export function rollSizeLabel(value) {
+  return typeof value === 'string' ? value.trim().replace(/\s+/gu,' ')
+    .replace(/(\d)\s*[xх×]\s*(?=\d)/giu,'$1 × ') : '';
+}
+
 export const operationNames = {take:'В работу',print:'Печать',cut:'Порезка'};
 
 export function matchesArticle(row, query) {
