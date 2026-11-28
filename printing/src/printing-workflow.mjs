@@ -33,10 +33,12 @@ export function rollTitle(roll) {
 }
 
 export function matchesRoll(roll, query) {
-  const value = normalize(query).replace(/\s+/gu, '');
+  const value = normalize(query);
   if (!value) return false;
-  const title = normalize(rollTitle(roll)).replace(/\s+/gu, '');
-  return title.includes(value);
+  if (normalize(roll.name) === value) return true;
+  const spacingAroundNumber = /\s*№\s*/gu;
+  return value.includes('№') &&
+    normalize(rollTitle(roll)).replace(spacingAroundNumber,'№') === value.replace(spacingAroundNumber,'№');
 }
 
 export const isXerox = row => /^(xerox|ксерокс|x|х)$/iu.test(normalize(row.machine));

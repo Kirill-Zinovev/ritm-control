@@ -8,7 +8,7 @@ import { fingerprint } from '../worker/import-data.mjs';
 import { refreshCatalog } from '../worker/catalog.mjs';
 import { correctionPlan, progressFacts } from '../worker/workflow.mjs';
 import { transferPrinting } from '../scripts/import-snapshot.mjs';
-import { boxSelectionText, boxTakeBlockReason, boxWorkEntry, rollEmployee, rollSizeLabel, takeEntry } from '../src/printing-workflow.mjs';
+import { boxSelectionText, boxTakeBlockReason, boxWorkEntry, matchesRoll, rollEmployee, rollSizeLabel, takeEntry } from '../src/printing-workflow.mjs';
 import { buildJobFilterIndex, filterJobRows, selectedJobRows } from '../src/job-filters.mjs';
 import { rollBatchEntries, rollChoiceMatches, rollWorkChoice } from '../src/roll-batch-work.mjs';
 
@@ -124,6 +124,27 @@ test('roll operation selection includes unprinted articles awaiting rolls and ke
   assert.equal(readyForPrint.unassigned,0);
   assert.equal(rollChoiceMatches(readyForPrint,'print'),true);
   assert.equal(rollChoiceMatches(rollWorkChoice(assigned,'а5',true),'print'),false);
+});
+
+test('roll search and batch operations match complete names without regard to case', ()=>{
+  const base={quantity:20,printed:10,cut:0};
+  const rolls=[
+    {...base,id:'exact',name:'Д1'},
+    {...base,id:'prefix',name:'д11'},
+    {...base,id:'suffix',name:'ад1'},
+    {...base,id:'numbered',name:'д1',number:2},
+    {...base,id:'spaced',name:'д 1'},
+  ];
+  const row={id:'a',plan:100,printed:50,cut:0,areaPerPiece:0.03,cutEmployeeCode:'лукман',rolls};
+  assert.deepEqual(rolls.filter(roll=>matchesRoll(roll,' д1 ')).map(roll=>roll.id),['exact','numbered']);
+  assert.deepEqual(rolls.filter(roll=>matchesRoll(roll,'Д1 №2')).map(roll=>roll.id),['numbered']);
+  assert.deepEqual(rolls.filter(roll=>matchesRoll(roll,'д1№2')).map(roll=>roll.id),['numbered']);
+  assert.equal(matchesRoll(rolls[0],'д'),false);
+  assert.equal(matchesRoll(rolls[0],'  '),false);
+  for (const operation of ['print','cut']) {
+    assert.deepEqual(rollBatchEntries(row,operation,'д1').map(entry=>entry.rollId),['exact','numbered']);
+    assert.deepEqual(rollBatchEntries(row,operation,'Д11').map(entry=>entry.rollId),['prefix']);
+  }
 });
 
 test('direct Box and Roll URLs serve the app without a redirect to the home URL', async ()=>{
