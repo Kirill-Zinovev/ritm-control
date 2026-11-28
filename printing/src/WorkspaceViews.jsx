@@ -113,7 +113,7 @@ export function ShipmentPicker({supplies, current, loading, stale, busy, onPick,
   const open = supplies.filter(item => item.status === 'open');
   const completed = supplies.filter(item => item.status === 'completed');
   const visible = (status === 'open' ? open : completed).filter(matches);
-  const unconfirmed = status === 'open' ? supplies.filter(item => item.status === 'unknown' && matches(item)) : [];
+  const unconfirmed = !isRoll && status === 'open' ? supplies.filter(item => item.status === 'unknown' && matches(item)) : [];
 
   function item(supply) {
     const selected = supply.id === current?.id;
