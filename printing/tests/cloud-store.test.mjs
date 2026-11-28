@@ -201,6 +201,45 @@ test('catalog upgrade refreshes sizes and keeps the existing market and store sc
   assert.deepEqual(result.value.rows.map(({id,size})=>[id,size]),[['b','40х60 мм'],['c',undefined]]);
 });
 
+test('catalog retry remains pending during backoff and resumes after a temporary upstream error', async t=>{
+  const h=host(t);
+  await transferPrinting(snapshot(),h.admin);
+  const jobs=[], log=[];
+  const ctx={waitUntil:job=>jobs.push(job)};
+  const db=binding(h.sql);
+  let unavailable=true, calls=0;
+  t.mock.method(console,'error',(...args)=>log.push(args));
+  t.mock.method(globalThis,'fetch',async (url,init)=>{
+    calls++;
+    assert.equal(init.redirect,'manual');
+    const path=new URL(url).pathname;
+    if (path==='/api/access/collector') {
+      return unavailable ? new Response(null,{status:503}) :
+        new Response(null,{headers:{'set-cookie':'__Host-av2-workplace=fixture; Secure; Path=/'}});
+    }
+    assert.equal(path,'/api/catalog');
+    return Response.json({active:{id:'fixture-catalog'},page:0,total:1,
+      items:[{id:'sku-b',sku:'SKU-B',store:'2',market:'OZON',importId:'fixture-catalog',size:'40×60 мм'}]});
+  });
+
+  const token='b'.repeat(64);
+  assert.equal((await refreshCatalog(db,token,false,ctx)).refreshing,true);
+  await Promise.all(jobs.splice(0));
+  assert.deepEqual(log,[['Printing catalog sync paused',{stage:'collector_http',status:503}]]);
+  const paused=await refreshCatalog(db,token,false,ctx);
+  assert.equal(paused.refreshing,true);
+  assert.ok(paused.retryAfterMs>0 && paused.retryAfterMs<=30_000);
+  assert.equal(jobs.length,0);
+  assert.equal(calls,1);
+
+  unavailable=false;
+  h.sql.prepare('UPDATE printing_catalog_sync SET retry_at=0 WHERE singleton=1').run();
+  assert.equal((await refreshCatalog(db,token,false,ctx)).refreshing,true);
+  await Promise.all(jobs.splice(0));
+  assert.equal(h.sql.prepare('SELECT size FROM printing_catalog_cards WHERE sku_key=?').get('SKU-B').size,'40×60 мм');
+  assert.equal((await refreshCatalog(db,token,false,ctx)).refreshing,false);
+});
+
 test('article search shows current progress from other supplies in the signed-in department', async t=>{
   const h=host(t), data=snapshot();
   const otherBox='fixture-workspace-box-0002:3';

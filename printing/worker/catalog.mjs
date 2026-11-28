@@ -5,6 +5,14 @@ const earlyRefresh = 5 * 60_000;
 const catalogFormat = 2;
 let session = {};
 
+class CatalogSyncError extends Error {
+  constructor(stage, status) {
+    super(stage);
+    this.stage = stage;
+    this.status = status;
+  }
+}
+
 const clean = value => typeof value==='string' && !value.trim().startsWith('#') ? value.trim() : '';
 const sku = value => clean(value).normalize('NFC').toLocaleUpperCase('ru-RU');
 export const skuKey = (market,value) => market==='OZON' ? sku(value).replace(/\(OZ\)$/u,'') : sku(value);
@@ -48,8 +56,12 @@ export async function decorateRows(db, group, rows) {
   });
 }
 
-async function remote(path,init) {
-  return fetch(origin+path,{...init,redirect:'error',signal:AbortSignal.timeout(6500)});
+async function remote(path,init,stage) {
+  try {
+    return await fetch(origin+path,{...init,redirect:'manual',signal:AbortSignal.timeout(6500)});
+  } catch (error) {
+    throw new CatalogSyncError(stage+(error?.name==='TimeoutError' ? '_timeout' : '_transport'));
+  }
 }
 
 function readSession(token) {
@@ -58,11 +70,13 @@ function readSession(token) {
   if (!current.pending) {
     current.pending=remote('/api/access/collector',{
       method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token}),
-    }).then(async response=>{
-      const cookie=(response.headers.getSetCookie?.()??[response.headers.get('Set-Cookie')??''])
+    },'collector').then(async response=>{
+      const cookies=response.headers.getSetCookie?.();
+      const cookie=(cookies?.length ? cookies : [response.headers.get('Set-Cookie')??''])
         .map(value=>value.split(';',1)[0]).find(value=>value.startsWith('__Host-av2-workplace='));
-      await response.body?.cancel();
-      if (!response.ok || !cookie) throw new Error('Assembly catalog authorization failed');
+      await response.body?.cancel().catch(()=>{});
+      if (!response.ok) throw new CatalogSyncError('collector_http',response.status);
+      if (!cookie) throw new CatalogSyncError('collector_cookie',response.status);
       return cookie;
     }).catch(error=>{current.pending=undefined;throw error;});
   }
@@ -71,24 +85,27 @@ function readSession(token) {
 
 async function catalogPage(token, market, page) {
   const path='/api/catalog?'+new URLSearchParams({market,page});
-  let response=await remote(path,{headers:{cookie:await readSession(token)}});
+  let response=await remote(path,{headers:{cookie:await readSession(token)}},'catalog');
   if (response.status===401) {
     await response.body?.cancel();
     session={};
-    response=await remote(path,{headers:{cookie:await readSession(token)}});
+    response=await remote(path,{headers:{cookie:await readSession(token)}},'catalog');
   }
-  if (!response.ok) { await response.body?.cancel(); throw new Error('Assembly catalog page unavailable'); }
-  const value=await response.json();
-  const id=value.active?.id;
-  const total=value.total;
+  if (!response.ok) {
+    await response.body?.cancel().catch(()=>{});
+    throw new CatalogSyncError('catalog_http',response.status);
+  }
+  const value=await response.json().catch(()=>{ throw new CatalogSyncError('catalog_json',response.status); });
+  const id=value?.active?.id;
+  const total=value?.total;
   if (typeof id!=='string' || !id || !Number.isSafeInteger(total) || total<0 || total>300000 ||
       value.page!==Math.min(page,Math.max(0,Math.ceil(total/pageSize)-1)) || !Array.isArray(value.items)) {
-    throw new Error('Assembly catalog page invalid');
+    throw new CatalogSyncError('catalog_page');
   }
   const cards=value.items.map(item=>{
     const article=sku(item.sku);
     if (item.market!==market || item.importId!==id || typeof item.id!=='string' || !article) {
-      throw new Error('Assembly catalog card invalid');
+      throw new CatalogSyncError('catalog_card');
     }
     return [item.id,market,article,skuKey(market,article),clean(item.store),clean(item.name),
       clean(item.printExtension),validPhoto(item.photoUrl),clean(item.photoId),id,clean(item.size)];
@@ -149,7 +166,9 @@ async function advanceCatalog(db, token, initial) {
       previousTotal=finished?0:current.total;
     }
     await db.prepare('UPDATE printing_catalog_sync SET lease_until=0,retry_at=0 WHERE lease_until=?').bind(lease).run();
-  } catch {
+  } catch (error) {
+    const details=error instanceof CatalogSyncError ? {stage:error.stage,status:error.status} : {stage:'catalog_storage'};
+    console.error('Printing catalog sync paused',details);
     await db.prepare('UPDATE printing_catalog_sync SET lease_until=0,retry_at=? WHERE lease_until=?')
       .bind(Date.now()+30_000,lease).run();
   }
@@ -162,7 +181,10 @@ export async function refreshCatalog(db, token, fresh, ctx) {
   const now=Date.now();
   const elapsed=state.updated_at ? now-Date.parse(state.updated_at) : Infinity;
   const due=state.format_version<catalogFormat || state.page>0 || state.market_offset>0 || elapsed>age || (fresh && elapsed>earlyRefresh);
-  if (!due || state.retry_at>now) return {refreshing:false,updatedAt:state.updated_at};
-  if (state.lease_until<=now) ctx.waitUntil(advanceCatalog(db,token,state).catch(()=>{}));
+  if (!due) return {refreshing:false,updatedAt:state.updated_at};
+  if (state.retry_at>now) return {refreshing:true,updatedAt:state.updated_at,retryAfterMs:state.retry_at-now};
+  if (state.lease_until<=now) ctx.waitUntil(advanceCatalog(db,token,state).catch(()=>{
+    console.error('Printing catalog sync could not acquire or release its lease');
+  }));
   return {refreshing:true,updatedAt:state.updated_at};
 }

@@ -235,7 +235,8 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
           if (attempt < 12) next = setTimeout(() => load(attempt+1,data.retryFresh !== false),data.retryAfterMs);
           else setDetailError('РИТМ ещё обновляет поставку. Повторите обновление.');
         } else if (data.catalog?.refreshing && attempt < 30) {
-          next = setTimeout(() => load(attempt+1,false),4000);
+          const delay = Math.max(4000,Math.min(30_000,data.catalog.retryAfterMs || 0));
+          next = setTimeout(() => load(attempt+1,false),delay);
         }
       }).catch(failure => {
         if (controller.signal.aborted) return;
@@ -725,7 +726,8 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
                           queuePane.current?.scrollTo(0,0);
                         }}>
                         <option value="">{!sizes.length && loadedDetails?.catalog?.refreshing
-                          ? 'Размеры загружаются…' : 'Все размеры'}</option>
+                          ? (loadedDetails.catalog.retryAfterMs ? 'Повтор загрузки размеров…' : 'Размеры загружаются…')
+                          : 'Все размеры'}</option>
                         {sizes.map(size => <option key={size} value={size}>{size}</option>)}
                       </select>}
                       <JobFilters groups={groups} rows={rows} filters={filters} onToggle={toggleFilter}
