@@ -145,7 +145,7 @@ function correctionFacts(row, before, after, roll) {
 }
 
 function resetRollProgress(row, operation) {
-  const reset=operation==='print' ? {printed:0,cut:0} : {cut:0};
+  const reset=operation==='print' ? {printed:0} : {cut:0};
   const next={...row,...reset};
   const facts=correctionFacts(row,row,next);
   if (Array.isArray(row.rolls)) {
@@ -167,6 +167,14 @@ function updatedRollTotal(row, rolls, field) {
   const total=row[field] ?? before;
   // Some imported article totals were capped at plan even when rolls exceeded it.
   return total===row.plan && before>row.plan ? Math.min(total,after) : Math.max(0,total+after-before);
+}
+
+export function finishRollCut(row, roll, employee, at) {
+  const pieces=roll.quantity-roll.cut;
+  const rolls=row.rolls.map(value=>value.id===roll.id ? {...value,cut:roll.quantity,cutAt:at} : value);
+  const recorded=updatedRollTotal(row,rolls,'cut') ?? (row.cut??0)+pieces;
+  const cut=Math.max(row.cut??0,Math.min(recorded,row.printed??recorded));
+  return {row:{...row,rolls,cut},fact:fact(row,'cut',employee,pieces,null,{roll})};
 }
 
 function editRoll(row, item) {
@@ -213,6 +221,9 @@ export function correctionPlan(position, request) {
     const next={...row,...editedProgress(row,item,row.plan)};
     change={row:next,facts:correctionFacts(row,row,next)};
   } else {
+    if (item.reset==='print' && (row.cut>0 || row.rolls?.some(roll=>!roll.legacyOnly && roll.cut>0))) {
+      throw workError('Печать нельзя отменить, когда порезка уже записана.');
+    }
     change=item.reset ? resetRollProgress(row,item.reset) : editRoll(row,item);
   }
   if (!change.facts.length) throw workError('Количество и название уже сохранены.');

@@ -72,19 +72,20 @@ function snapshot(extraRoll = false) {
   return {snapshotId:hash,capturedAt:at,catalogAt:at,manifest,parts,manifestHash:fingerprint([hash,at,at,manifest]),old};
 }
 
-function host(t) {
+function host(t, {cutterConfigured=true}={}) {
   const sql=new DatabaseSync(':memory:');
   t.after(()=>sql.close());
   const migrations = JSON.parse(readFileSync(new URL('../drizzle/meta/_journal.json',import.meta.url),'utf8'));
   for (const {tag} of migrations.entries) {
     sql.exec(readFileSync(new URL('../drizzle/'+tag+'.sql',import.meta.url),'utf8'));
   }
-  const configs={box:'2580',roll:'1479'};
+  const configs={box:'2580',roll:'1479',cutter:'3692'};
   const pins=Object.fromEntries(Object.entries(configs).map(([key,pin])=>{
     const salt='d'.repeat(32);
     return [key,{salt,hash:scryptSync(pin,salt,32).toString('hex')}];
   }));
   const env={DB:binding(sql),PRINTING_IMPORT_KEY:'b'.repeat(64),PRINTING_KPI_READ_KEY:'e'.repeat(64),PRINTING_PINS:JSON.stringify({version:1,pins})};
+  if (cutterConfigured) env.PRINTING_CUTTER_PIN=JSON.stringify({...pins.cutter,employee:'Резчик теста'});
   async function call(route, body, headers={}) {
     const init=body?{method:'POST',headers:{Origin:url,'Content-Type':'application/json',...headers},body:JSON.stringify(body)}:{headers};
     const result=await worker.fetch(new Request(url+route,init),env,{});
@@ -103,6 +104,7 @@ function host(t) {
 
 const list='/api/printing-workspace?department=';
 const write='/api/printing-write';
+const cutter='/api/printing-cutter';
 const use = cookie => ({Cookie:cookie});
 
 test('roll operation selection includes unprinted articles awaiting rolls and keeps cutting separate', ()=>{
@@ -147,9 +149,9 @@ test('roll search and batch operations match complete names without regard to ca
   }
 });
 
-test('direct Box and Roll URLs serve the app without a redirect to the home URL', async ()=>{
+test('direct Box, Roll, and Cutter URLs serve the app without a redirect to the home URL', async ()=>{
   const assets={fetch:request=>new URL(request.url).pathname==='/' ? new Response('print app') : Response.redirect(url)};
-  for (const section of ['/box','/roll']) {
+  for (const section of ['/box','/roll','/cutter','/cutter/']) {
     const response=await worker.fetch(new Request(url+section),{ASSETS:assets});
     assert.equal(response.status,200);
     assert.equal(await response.text(),'print app');
@@ -471,19 +473,20 @@ test('roll corrections rename and resize a roll and reset article progress indep
     rowId:'b',rollId:roll.id,quantity,expectedQuantity:2,expectedActual:0,
   }],operation);
   await log('print',first,2);
-  await log('print',second,2);
+  const printed=await log('print',second,2);
   const cut=await log('cut',first,1);
-  const revision=cut.value.patches[0].workRevision;
+  assert.equal(cut.status,403);
+  assert.equal(cut.value.rejected,true);
+  const revision=printed.value.patches[0].workRevision;
   const edit={rowId:'b',rollId:first.id,revision,name:'а52',quantity:3,printed:1};
   const changed=await send('correct',[edit]);
   const saved=changed.value.patches[0];
-  assert.deepEqual([saved.printed,saved.cut,saved.rolls[0].name,saved.rolls[0].quantity],[3,1,'а52',3]);
+  assert.deepEqual([saved.printed,saved.cut,saved.rolls[0].name,saved.rolls[0].quantity],[3,0,'а52',3]);
   assert.equal(rollEmployee(saved.rolls[0],saved,'print'),'Андрей');
   assert.equal((await send('correct',[{...edit,revision:saved.workRevision,quantity:5}])).status,409);
-  const clearCut=(await send('correct',[{rowId:'b',revision:saved.workRevision,reset:'cut'}])).value.patches[0];
-  assert.equal(clearCut.printed,3);
-  assert.ok(clearCut.rolls.every(roll=>roll.cut===0));
-  const clearPrint=(await send('correct',[{rowId:'b',revision:clearCut.workRevision,reset:'print'}])).value.patches[0];
+  assert.equal((await send('correct',[{rowId:'b',revision:saved.workRevision,reset:'cut'}])).status,403);
+  assert.equal((await send('correct',[{rowId:'b',rollId:first.id,revision:saved.workRevision,cut:1}])).status,403);
+  const clearPrint=(await send('correct',[{rowId:'b',revision:saved.workRevision,reset:'print'}])).value.patches[0];
   assert.deepEqual([clearPrint.printed,clearPrint.cut],[0,0]);
   assert.deepEqual(clearPrint.rolls.map(roll=>[roll.name,roll.quantity,roll.printed]),[['а52',3,0],['д13',2,0]]);
   const {work}=(await h.call(list+'roll&journal=1',null,use(cookie))).value;
@@ -499,7 +502,9 @@ test('corrections preserve historical rolls and the planned cap for imported ove
   const change=(position,patch)=>correctionPlan({row:position,revision:0},{department:'roll',items:[{revision:0,...patch}]}).changes[0].row;
   const smaller=change(row,{rollId:'live',printed:12,cut:12});
   assert.deepEqual([smaller.printed,smaller.cut],[10,10]);
-  const reset=change(smaller,{reset:'print'});
+  assert.throws(()=>change(smaller,{reset:'print'}),/порезка уже записана/);
+  const uncut=change(smaller,{rollId:'live',cut:0});
+  const reset=change(uncut,{reset:'print'});
   assert.deepEqual([reset.printed,reset.cut,reset.rolls[0].printed],[0,0,0]);
   assert.deepEqual(reset.rolls[1],row.rolls[1]);
   assert.equal(progressFacts(reset,'roll').cutAvailable,0);
@@ -529,12 +534,16 @@ test('batch print and cut handle several articles and rolls atomically', async t
   const h=host(t);
   await transferPrinting(snapshot(true),h.admin);
   const {cookie}=await h.login('roll');
+  const cutterLogin=await h.login('cutter');
+  assert.equal(cutterLogin.status,200);
+  assert.equal(cutterLogin.value.cutterConfigured,true);
+  const cuttingAsCutter=body=>h.call(cutter,body,use(cutterLogin.cookie));
   const send=body=>h.call(write,{department:'roll',supplyId:rollSupply,...body},use(cookie));
   const detail=()=>h.call(list+'roll&supply='+encodeURIComponent(rollSupply),null,use(cookie));
   const journal=()=>h.call(list+'roll&journal=1',null,use(cookie));
   const assigned=await send({command:'create',requestId:randomUUID(),items:[
     {rowId:'b',name:'д3',quantity:1,count:2,expectedPlan:2,expectedAllocated:0},
-    {rowId:'c',name:'а2',quantity:3,count:1,expectedPlan:3,expectedAllocated:0},
+    {rowId:'c',name:'Д3',quantity:3,count:1,expectedPlan:3,expectedAllocated:0},
   ]});
   assert.equal(assigned.status,200);
   let rows=(await detail()).value.rows;
@@ -544,24 +553,92 @@ test('batch print and cut handle several articles and rolls atomically', async t
   const printing={command:'work-many',requestId:randomUUID(),operation:'print',items};
   const duplicate=await send({...printing,items:[...items,items[0]]});
   assert.equal(duplicate.status,409);
+  const earlyPrint=await send({...printing,requestId:randomUUID(),items:[items[0]]});
+  assert.equal(earlyPrint.status,200);
+  assert.deepEqual((await cuttingAsCutter()).value.ready,[]);
+  printing.items=items.slice(1);
   const print=await send(printing);
   assert.equal(print.status,200);
   assert.deepEqual(print.value.patches.map(row=>row.printed),[2,3]);
   assert.equal((await send(printing)).value.confirmed,2);
   assert.equal((await journal()).value.work.length,3);
 
+  const {ready,supplies}= (await cuttingAsCutter()).value;
+  assert.equal(supplies.find(supply=>supply.id===rollSupply).remaining,2);
+  assert.deepEqual(ready.map(roll=>[roll.name,roll.number,roll.quantity,roll.items.length]),[['д3',1,4,2],['д3',2,1,1]]);
   rows=(await detail()).value.rows;
-  const cutting={command:'work-many',requestId:randomUUID(),operation:'cut',items:rows.flatMap(row=>rollBatchEntries(row,'cut'))};
-  const wrong=[...cutting.items.slice(0,-1),{...cutting.items.at(-1),quantity:4}];
-  assert.equal((await send({...cutting,items:wrong})).status,409);
+  const oldCutting={command:'work-many',requestId:randomUUID(),operation:'cut',items:rows.flatMap(row=>rollBatchEntries(row,'cut'))};
+  assert.equal((await send(oldCutting)).status,403);
+  assert.equal((await h.call(cutter,null,use(cookie))).status,403);
+  assert.equal((await h.call(write,{department:'roll',supplyId:rollSupply,...printing},use(cutterLogin.cookie))).status,403);
+  const cutting={requestId:randomUUID(),rolls:ready.map(({id,revision})=>({id,revision}))};
+  const wrong=[cutting.rolls[0],{...cutting.rolls[1],revision:hash}];
+  assert.equal((await cuttingAsCutter({...cutting,rolls:wrong})).status,409);
   assert.deepEqual((await detail()).value.rows.map(row=>row.cut),[0,0]);
-  const cut=await send(cutting);
+  const [cut,retried]=await Promise.all([cuttingAsCutter(cutting),cuttingAsCutter(cutting)]);
   assert.equal(cut.status,200);
-  assert.deepEqual(cut.value.patches.map(row=>row.cut),[2,3]);
+  assert.equal(retried.status,200);
+  assert.deepEqual(cut.value,retried.value);
+  assert.equal(cut.value.recorded,2);
+  assert.equal(cut.value.quantity,5);
+  const current=(await detail()).value.rows;
+  assert.deepEqual(current.map(row=>row.cut),[2,3]);
+  assert.equal((await send({command:'correct',requestId:randomUUID(),items:[{rowId:'b',revision:current[0].workRevision,reset:'print'}]})).status,409);
+  assert.equal((await cuttingAsCutter({...cutting,requestId:randomUUID()})).status,409);
+  const completed=(await cuttingAsCutter()).value;
+  assert.equal(completed.supplies.find(supply=>supply.id===rollSupply).remaining,0);
+  assert.equal(completed.ready.length,0);
+  assert.equal(completed.completed.length,2);
+  assert.ok(completed.completed.every(roll=>roll.remaining===0 && Number.isFinite(Date.parse(roll.completedAt))));
   const work=(await journal()).value.work;
   assert.equal(work.length,6);
-  assert.equal(work.filter(entry=>entry.operation==='cut' && entry.employee==='Лукман').length,3);
+  assert.equal(work.filter(entry=>entry.operation==='cut' && entry.employee==='Резчик теста').length,3);
   assert.ok(work.every(entry=>entry.area===entry.pieces*0.04));
+});
+
+test('cutter loads legacy history and records a selection across supplies with separate journal receipts', async t=>{
+  const h=host(t);
+  await transferPrinting(snapshot(),h.admin);
+  const other='fixture-workspace-roll-002:3';
+  const insertSupply=h.sql.prepare('INSERT INTO printing_supplies VALUES (?,?,?,?,?,?)');
+  insertSupply.run(other,'WB Рулоны','roll','open',2,'WB');
+  const add=h.sql.prepare('INSERT INTO printing_positions VALUES (?,?,?,?,?,?,?,?,?)');
+  const amend=h.sql.prepare('UPDATE printing_positions SET payload=?,plan=?,printed=?,cut=?,cut_available=? WHERE supply_id=? AND row_id=?');
+  const current=(id,rolls)=>({id,article:'SKU-'+id,name:'Позиция '+id,plan:rolls.length,printed:rolls.length,cut:0,rolls});
+  const roll=(id,name)=>({id,name,number:1,quantity:1,printed:1,cut:0});
+  const active=roll('active','п1'), additional=roll('additional','п1');
+  const historical={...roll('old','п2'),cut:1,legacyOnly:true};
+  const first={...current('b',[active,historical]),cut:1};
+  amend.run(JSON.stringify(first),2,2,1,1,rollSupply,'b');
+  add.run(other,'b',0,JSON.stringify(current('b',[additional])),1,1,0,1,0);
+  const importCut=h.sql.prepare('INSERT INTO printing_receipts VALUES (?,?,?,?,?,?,?,?)');
+  importCut.run(randomUUID(),rollSupply,'imported',at,'[]','{}',
+    JSON.stringify([{operation:'cut',pieces:1,rollId:historical.id}]),'sqlite-import');
+  const login=await h.login('cutter');
+  const read=()=>h.call(cutter,null,use(login.cookie));
+  const initial=(await read()).value;
+  assert.deepEqual(initial.supplies.map(s=>s.remaining),[1,1]);
+  assert.deepEqual(initial.completed.map(({name,completedAt})=>[name,completedAt]),[['п2',at]]);
+  assert.equal(initial.ready.length,2);
+  assert.notEqual(initial.ready[0].id,initial.ready[1].id);
+  const input={requestId:randomUUID(),rolls:initial.ready.map(({id,revision})=>({id,revision}))};
+  const result=await h.call(cutter,input,use(login.cookie));
+  assert.equal(result.status,200);
+  assert.deepEqual([result.value.recorded,result.value.quantity],[2,2]);
+  const combined=h.sql.prepare('SELECT id,supply_id FROM printing_receipts WHERE id=? OR id=? ORDER BY id').all(input.requestId,input.requestId+':1');
+  assert.deepEqual(combined.map(row=>row.supply_id),[rollSupply,other]);
+  assert.deepEqual((await read()).value.supplies.map(s=>s.remaining),[0,0]);
+});
+
+test('missing cutter PIN leaves existing sign-ins available and cutter access fails closed', async t=>{
+  const h=host(t,{cutterConfigured:false});
+  await transferPrinting(snapshot(),h.admin);
+  const user=await h.login('roll');
+  assert.equal(user.status,200);
+  assert.equal(user.value.cutterConfigured,false);
+  assert.equal((await h.login('cutter')).status,503);
+  assert.equal((await h.call(cutter)).status,401);
+  assert.equal((await h.call(cutter,null,use(user.cookie))).status,403);
 });
 
 test('batch quantities are limited by the article and include only matching printed rolls', ()=>{

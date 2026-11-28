@@ -302,7 +302,7 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
       boxWorkEntry(row,records,boxOperation,working)];
   })) : null,[showTake,showBoxWork,matchingRows,draftWork,id,working,boxOperation]);
   const rollChoices = useMemo(() => editable && isRoll
-    ? new Map(rows.map(row => [row.id,rollWorkChoice(row,rollQuery,working)])) : null,
+    ? new Map(rows.map(row => [row.id,rollWorkChoice(row,rollQuery,working,{includeCut:false})])) : null,
     [editable,isRoll,rows,rollQuery,working]);
   const selectable = !!(boxChoices || rollChoices);
   const eligible = useMemo(() => new Set((selectable ? matchingRows : [])
@@ -319,10 +319,8 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
   const blocked = !!pendingWork || busy;
   const boxBatch = !!boxChoices && selected.length > 0 && batchView;
   const rollSelection = rollChoices ? selected.map(row => rollChoices.get(row.id)) : empty;
-  const selectedRollOperation = rollOperation || (rollSelection.some(choice => choice.cut.length) ? 'cut' : 'print');
-  const rollWorkSelection = rollSelection.filter(choice => rollChoiceMatches(choice,selectedRollOperation));
-  const assignmentSelection = rollOperation === 'cut' ? empty : rollOperation ? rollWorkSelection : rollSelection;
-  const assignmentRows = assignmentSelection.filter(choice => choice.unassigned > 0).map(choice => choice.row);
+  const rollWorkSelection = rollSelection.filter(choice => rollChoiceMatches(choice,'print'));
+  const assignmentRows = rollSelection.filter(choice => choice.unassigned > 0).map(choice => choice.row);
   const allocationOpen = allocate && assignmentRows.length > 0;
   const rollBatch = working && rollSelection.length > 0 && batchView && !allocationOpen;
   const batchDetails = boxBatch || rollBatch || allocationOpen;
@@ -628,12 +626,11 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
       ({rowId,rollId,quantity,expectedQuantity,expectedActual}));
     try {
       const result = await sendWork({
-        supplyId:id,command:'work-many',requestId:crypto.randomUUID(),operation:selectedRollOperation,items,
+        supplyId:id,command:'work-many',requestId:crypto.randomUUID(),operation:'print',items,
       });
       const total = items.reduce((sum,item) => sum + item.quantity,0);
       clearSelection();
-      const action = selectedRollOperation === 'print' ? 'Печать записана' : 'Порезка записана';
-      setFeedback({value:action+' · '+showAmount(total)+' шт. · позиций '+result.confirmed});
+      setFeedback({value:'Печать записана · '+showAmount(total)+' шт. · позиций '+result.confirmed});
     } catch (failure) {
       setFeedback({error:true,value:failure.message || 'Не удалось записать работу по выбранным рулонам.'});
     }
@@ -642,6 +639,7 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
   async function saveWork(entry) {
     const source = sourceRows?.find(row => row.id === entry.rowId);
     if (!source || !editable || entry.supplyId !== id) throw new Error('Откройте артикул заново.');
+    if (isRoll && entry.operation !== 'print') throw new Error('Порезку рулонов записывает резчик.');
     const previous = working ? empty : readLocal(workKey);
     const records = rowRecords(previous,id,entry.rowId);
     const row = mergeRolls(source,working ? empty : readLocal(rollKey),id);
@@ -712,7 +710,7 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
           <aside className="shipment-sidebar" id="shipment-picker" aria-label="Поставки" hidden={!shipmentsOpen}
             onKeyDown={event => { if (event.key === 'Escape') closeShipments(); }}>
             {metadata && <ShipmentPicker key={department} supplies={pickerSupplies} current={supply}
-              loading={summaryLoading} stale={metadata.stale || !!error} busy={busy} onPick={chooseSupply}/>}
+              loading={summaryLoading} stale={metadata.stale || !!error} busy={busy} onPick={chooseSupply} isRoll={isRoll}/>}
           </aside>
           <section className="queue-pane" id="article-queue" aria-labelledby="queue-title" ref={queuePane} hidden={!queueOpen}>
               <div className="queue-toolbar">
@@ -745,7 +743,7 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
                 </div>}
                   {rollChoices && <div className="queue-mode-controls">
                     <div className="segments" role="group" aria-label="Режим списка рулонной печати">
-                      {[['','Все артикулы'],['print','Печать'],['cut','Порезка']].map(([operation,label]) =>
+                      {[['','Все артикулы'],['print','К печати']].map(([operation,label]) =>
                         <button key={operation} type="button" aria-pressed={rollOperation === operation} disabled={busy}
                           onClick={() => chooseRollOperation(operation)}>{label}</button>)}
                     </div>
@@ -777,7 +775,7 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
                   {details ? (isRoll ? 'Подгружаем рулоны и журнал…' : 'Подгружаем рабочий журнал…') : 'Загружаем артикулы поставки…'}</p>}
                 {detailError && <p className="notice error" role="alert">{detailError}</p>}
                 {searchKey && <OtherShipmentMatches result={searchResults?.key === searchKey ? searchResults : null}
-                  busy={busy} onOpen={openSearchMatch}/>}
+                  busy={busy} onOpen={openSearchMatch} isRoll={isRoll}/>}
                 {details && <>
                   {!details.partial && !details.detailsAvailable && <p className="notice">Дополнительные поля из таблицы пока недоступны.</p>}
                   {details.writeMessage && <p className="notice error" role="alert">{details.writeMessage}</p>}
@@ -808,8 +806,7 @@ export function App({department, onSessionExpired, onLogout, loggingOut, accessE
             {allocationOpen ? <RollAllocation rows={assignmentRows} drafts={drafts} changeDraft={changeDraft}
               mode={rollMode} setMode={setRollMode} sharedName={sharedName} setSharedName={setSharedName}
               onSave={saveSelectedRolls} onBack={() => setAllocate(false)} blocked={blocked}/> : rollBatch ?
-              <RollBatchWork selection={rollWorkSelection} operation={selectedRollOperation}
-                onOperation={chooseRollOperation}
+              <RollBatchWork selection={rollWorkSelection}
                 onAssign={() => openRollAllocation('print')} onOpen={openArticle} onSave={saveRollBatch} blocked={blocked}/> :
               boxBatch ? <>
                 <h2 className="panel-title">{showTake ? 'Взять в работу' : operationNames[boxOperation]+' по выбранным'}</h2>

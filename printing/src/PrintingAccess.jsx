@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import { App } from './App.jsx';
+import { CutterWorkspace } from './CutterWorkspace.jsx';
 import { isPrintingDepartment, printingDepartments, printingPinDigits, printingPinLength } from './printing-departments.mjs';
 
 const accessUrl = '/api/printing-access';
@@ -135,8 +136,9 @@ export function PrintingAccess() {
   const themeControl = <button className="outline theme-toggle" type="button" aria-pressed={dark} onClick={toggleTheme}>
     <span className="theme-symbol" aria-hidden="true">{dark ? '☀' : '☾'}</span> Тёмная тема
   </button>;
-  if (department && access?.department === department) {
-    return <App key={department} department={department} onSessionExpired={expire} onLogout={logout}
+  if (department && access?.department === department && (department !== 'cutter' || access.cutterConfigured)) {
+    const Workspace = department === 'cutter' ? CutterWorkspace : App;
+    return <Workspace key={department} department={department} onSessionExpired={expire} onLogout={logout}
       loggingOut={busy} accessError={workspaceError} themeControl={themeControl}/>;
   }
 
@@ -151,8 +153,8 @@ export function PrintingAccess() {
       <p className="quiet">Задайте отдельный PIN из четырёх цифр для каждого участка.</p>
       <form className="access-form" onSubmit={submit}>
         <fieldset disabled={busy}>
-          {Object.entries(printingDepartments).map(([key,label]) => <section key={key} aria-labelledby={'pin-'+key}>
-            <h2 id={'pin-'+key}>{label}</h2>
+          {['roll','box'].map(key => <section key={key} aria-labelledby={'pin-'+key}>
+            <h2 id={'pin-'+key}>{printingDepartments[key]}</h2>
             <div className="pin-pair">
               <PinField name={key} label="Новый PIN" initial/>
               <PinField name={key+'-confirm'} label="Повторите PIN" initial/>
@@ -164,12 +166,14 @@ export function PrintingAccess() {
     </> : department ? <>
       <a className="access-back" href="/">К выбору участка</a>
       <h1>{printingDepartments[department]}</h1>
-      <form className="access-form" onSubmit={submit}>
-        <fieldset disabled={busy}>
-          <PinField name="pin" label="PIN участка"/>
-          <button className="primary" type="submit">{busy ? 'Проверяем…' : 'Войти'}</button>
-        </fieldset>
-      </form>
+      {department === 'cutter' && !access.cutterConfigured ?
+        <p className="notice">Вход резчика откроется после настройки отдельного PIN.</p> :
+        <form className="access-form" onSubmit={submit}>
+          <fieldset disabled={busy}>
+            <PinField name="pin" label={department === 'cutter' ? 'PIN резчика' : 'PIN участка'}/>
+            <button className="primary" type="submit">{busy ? 'Проверяем…' : 'Войти'}</button>
+          </fieldset>
+        </form>}
     </> : <>
       <h1>Выберите участок</h1>
       <nav className="access-choices" aria-label="Вход по участкам">

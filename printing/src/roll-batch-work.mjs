@@ -7,7 +7,7 @@ export function rollUnassigned(row) {
   return Math.max(0, row.plan - row.rolls.reduce((sum, roll) => sum + roll.quantity, 0));
 }
 
-export function rollWorkChoice(row, query, working) {
+export function rollWorkChoice(row, query, working, {includeCut = true} = {}) {
   const unassigned = rollUnassigned(row);
   const needsAssignment = !query.trim() && unassigned > 0 && (!count(row.printed) || row.printed < row.plan);
   const matchingPrint = !query.trim() || row.rolls?.some(roll =>
@@ -17,7 +17,7 @@ export function rollWorkChoice(row, query, working) {
   return {
     row, printRemaining, unassigned, needsAssignment,
     print:working ? rollBatchEntries(row,'print',query) : [],
-    cut:working ? rollBatchEntries(row,'cut',query) : [],
+    cut:working && includeCut ? rollBatchEntries(row,'cut',query) : [],
   };
 }
 

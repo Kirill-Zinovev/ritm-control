@@ -1,5 +1,5 @@
 import React from 'react';
-import { MAX_ROLLS, boxSelectionText, isXerox, operationNames, rollDraft, takeRemaining, unitFactor } from './printing-workflow.mjs';
+import { MAX_ROLLS, boxSelectionText, isXerox, rollDraft, takeRemaining, unitFactor } from './printing-workflow.mjs';
 
 export const quantityText = new Intl.NumberFormat('ru-RU', {maximumFractionDigits:3});
 export const showAmount = value => value == null ? '—' : quantityText.format(value);
@@ -93,33 +93,27 @@ export function BoxBatchDock({count, employee, setEmployee, action, employees, b
   </form>;
 }
 
-export function RollBatchWork({selection, operation, onOperation, onAssign, onOpen, onSave, blocked}) {
-  const entries = selection.flatMap(item => item[operation]);
+export function RollBatchWork({selection, onAssign, onOpen, onSave, blocked}) {
+  const entries = selection.flatMap(item => item.print);
   const pieces = entries.reduce((total, item) => total + item.quantity, 0);
   const tooMany = entries.length > MAX_ROLLS;
-  const action = operation === 'print' ? 'Записать печать' : 'Записать порезку';
-  const needsRolls = operation === 'print' && selection.some(item => item.unassigned > 0);
+  const needsRolls = selection.some(item => item.unassigned > 0);
   return <>
-    <h2 className="panel-title">Печать и порезка по выбранным</h2>
-    <div className="segments" role="group" aria-label="Массовая операция по рулонам">
-      {['print','cut'].map(key => <button key={key} type="button" aria-pressed={operation === key} disabled={blocked}
-        onClick={() => onOperation(key)}>{operationNames[key]}</button>)}
-    </div>
+    <h2 className="panel-title">Печать по выбранным</h2>
     {selection.length ? <ul className="box-selection">
-      {selection.map(({row,[operation]:work,unassigned,printRemaining}) => <li key={row.id}>
+      {selection.map(({row,print:work,unassigned,printRemaining}) => <li key={row.id}>
         <button className="product" type="button" onClick={() => onOpen(row.id)}>
           <ProductPhoto key={row.photo} url={row.photo}/>
           <span className="product-copy"><span className="product-heading"><strong>{row.article}</strong><PrintExtension value={row.extension}/></span><small className="product-name" title={row.name}>{row.name}</small></span>
         </button>
         <div className="take-fields">
           {work.map(item => <small key={item.rollId}>{item.name || 'Рулон'} · <strong>{showAmount(item.quantity)} шт.</strong> · {item.employee}</small>)}
-          {operation === 'print' && unassigned > 0
+          {unassigned > 0
             ? <small>Нужно назначить рулон · <strong>{showAmount(Math.min(unassigned,printRemaining || unassigned))} шт.</strong></small>
             : !work.length && <small className="quiet">Проверьте данные рулона в карточке артикула.</small>}
         </div>
       </li>)}
-    </ul> : <p className="notice">{operation === 'print'
-      ? 'Среди отмеченных артикулов нет остатка к печати.' : 'Среди отмеченных артикулов нет остатка к порезке.'}</p>}
+    </ul> : <p className="notice">Среди отмеченных артикулов нет остатка к печати.</p>}
     <div className="batch-dock">
       {selection.length > 0 && <strong>Артикулов {selection.length}
         {entries.length > 0 && ' · рулонов '+entries.length+' · '+showAmount(pieces)+' шт.'}</strong>}
@@ -127,7 +121,7 @@ export function RollBatchWork({selection, operation, onOperation, onAssign, onOp
         onClick={onAssign}>Назначить рулоны по выбранным</button>}
       {tooMany && <p className="error" role="alert">За один раз можно записать до {MAX_ROLLS} рулонов.</p>}
       {(entries.length > 0 || !needsRolls) && <button className="primary" type="button" disabled={blocked || !entries.length || tooMany}
-        onClick={() => onSave(entries)}>{action}{pieces ? ' · '+showAmount(pieces)+' шт.' : ''}</button>}
+        onClick={() => onSave(entries)}>Записать печать{pieces ? ' · '+showAmount(pieces)+' шт.' : ''}</button>}
     </div>
   </>;
 }

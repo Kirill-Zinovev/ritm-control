@@ -263,6 +263,10 @@ async function writeCorrection(db, request) {
 export async function printingWrite(db, input) {
   const request=prepareCloudWrite(input);
   if (!request) return reject('Проверьте параметры записи.');
+  if (request.department==='roll' && (request.operation==='cut' ||
+      request.items.some(item=>item.reset==='cut' || item.cut!==undefined))) {
+    return response({rejected:true,message:'Записать порезку рулонов можно в рабочем месте резчика.'},403);
+  }
   if (request.command==='correct') return writeCorrection(db,request);
   return request.department==='box' ? writeBox(db,request) : writeRoll(db,request);
 }

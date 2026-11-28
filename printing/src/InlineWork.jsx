@@ -28,7 +28,7 @@ export function InlineWork({row, supply, isRoll, records, onSave, onCreate, onCo
   const base = current || row;
   const printed = base.printed == null ? null : base.printed + localTotal(records, 'print', current?.id);
   const cut = base.cut == null ? null : base.cut + localTotal(records, 'cut', current?.id);
-  const operation = chosenOperation || defaultOperation || (isRoll && printed > cut ? 'cut' : 'print');
+  const operation = isRoll ? 'print' : chosenOperation || defaultOperation || 'print';
   const limit = workRemaining(operation,current?.quantity ?? row.plan,printed,cut);
   const employee = isRoll ? rollEmployee(current, row, operation) : employees ? employees.find(item => item.id === name)?.id : name.trim();
   const factor = unitFactor(row, unit);
@@ -138,17 +138,16 @@ export function InlineWork({row, supply, isRoll, records, onSave, onCreate, onCo
     {correctingWork && <PrintingCorrection key={JSON.stringify([current?.id,row.workRevision])} row={row} roll={current}
       isRoll={isRoll} blocked={blocked} onSave={correct}/>}
     {available && !adding && !correctingWork && <form onSubmit={save} className="work-form work-record">
-      <div className="work-heading">
-        <div className="segments operation-tabs" aria-label={isRoll ? 'Операция по рулону' : 'Операция по артикулу'}>
+      {!isRoll && <div className="work-heading">
+        <div className="segments operation-tabs" aria-label="Операция по артикулу">
           {['print','cut'].map(key => <button key={key} type="button" aria-pressed={operation === key}
             onClick={() => selectOperation(key)}>{operationNames[key]}</button>)}
         </div>
-      </div>
+      </div>}
       <div className="work-employee">
         {isRoll ? <div className="automatic-employee">
-          <span>{operation === 'cut' ? 'Резчик' : 'Печатник'}</span><strong>{employee || 'Не определён'}</strong>
-          <small>{employee ? 'Подставляется автоматически' : operation === 'cut'
-            ? 'Проверьте код резчика в таблице' : 'Проверьте начало названия рулона'}</small>
+          <span>Печатник</span><strong>{employee || 'Не определён'}</strong>
+          <small>{employee ? 'Подставляется автоматически' : 'Проверьте начало названия рулона'}</small>
         </div> : <BoxEmployee employees={employees} value={name} onChange={setName}/>}
       </div>
       <div className="work-fields">

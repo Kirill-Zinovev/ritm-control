@@ -1,11 +1,12 @@
 import { validSupplyId } from '../src/workspace-write.mjs';
-import { activeSession, printingAccess } from './access.mjs';
+import { activeSession, cutterPinRecord, printingAccess } from './access.mjs';
 import { refreshCatalog } from './catalog.mjs';
 import { printingFeed, printingWrite, searchPrintingPositions } from './database.mjs';
 import { importPrinting } from './import-data.mjs';
 import { printingWorkReport } from './work-report.mjs';
 import { json, readJson, sameOriginJson } from './http.mjs';
 import { databaseBackup, databaseBackupPath } from './database-backup.mjs';
+import { printingCutter } from './cutter.mjs';
 
 async function printingOwnerAccount(request, expectedHash) {
   const email = request.headers.get('oai-authenticated-user-email')?.trim().toLowerCase();
@@ -19,7 +20,7 @@ async function printingOwnerAccount(request, expectedHash) {
 
 async function serveAsset(env, request, url) {
   if (!['GET','HEAD'].includes(request.method)) return new Response(null,{status:405});
-  if (['/','/box','/roll','/box/','/roll/'].includes(url.pathname)) {
+  if (['/','/box','/roll','/cutter','/box/','/roll/','/cutter/'].includes(url.pathname)) {
     return env.ASSETS.fetch(new Request(new URL('/',url),request));
   }
   return env.ASSETS.fetch(request);
@@ -39,9 +40,16 @@ export default {
       if (url.pathname==='/api/printing-access') return await printingAccess(db,request,env);
       if (url.pathname==='/api/printing-import') return await importPrinting(db,request,env);
       if (url.pathname==='/api/reporting/printing-work') return await printingWorkReport(db,request,env.PRINTING_KPI_READ_KEY);
-      if (!['/api/printing-workspace','/api/printing-write'].includes(url.pathname)) return json({message:'Маршрут недоступен.'},404);
+      if (!['/api/printing-workspace','/api/printing-write','/api/printing-cutter'].includes(url.pathname)) return json({message:'Маршрут недоступен.'},404);
       const session=await activeSession(db,request);
       if (!session) return json({message:'Войдите в свой участок по PIN.'},401);
+      if (url.pathname==='/api/printing-cutter') {
+        if (session.department!=='cutter') return json({rejected:true,message:'Войдите в рабочее место резчика по PIN.'},403);
+        const cutter=cutterPinRecord(env);
+        if (!cutter) return json({rejected:true,message:'PIN резчика ещё не настроен.'},503);
+        return await printingCutter(db,request,cutter.employee);
+      }
+      if (session.department==='cutter') return json({rejected:true,message:'Откройте рабочее место резчика.'},403);
       if (url.pathname==='/api/printing-workspace') {
         if (request.method!=='GET') return json({message:'Метод недоступен.'},405);
         if (session.department!==url.searchParams.get('department')) return json({message:'Войдите в свой участок по PIN.'},401);
@@ -69,7 +77,9 @@ export default {
       return json(result.value,result.status);
     } catch (error) {
       console.error('Printing request failed',url.pathname,error.name);
-      if (url.pathname==='/api/printing-write') return json({uncertain:true,message:'Журнал не подтвердил запись. Повторите тот же запрос.'},503);
+      if (url.pathname==='/api/printing-write' || (url.pathname==='/api/printing-cutter' && request.method==='POST')) {
+        return json({uncertain:true,message:'Журнал не подтвердил запись. Повторите тот же запрос.'},503);
+      }
       return json({message:'Не удалось прочитать базу печати. Повторите попытку.'},503);
     }
   },

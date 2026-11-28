@@ -2,7 +2,6 @@ import React, { useEffect, useId, useRef, useState } from 'react';
 import { PrintExtension, ProductPhoto, showAmount } from './BatchWork.jsx';
 import { Meter } from './InlineWork.jsx';
 import { localTotal, matchesRoll, normalize, rollSizeLabel, rollTitle, workRemaining } from './printing-workflow.mjs';
-import { rollCutAvailable } from './shipment-progress.mjs';
 
 const layouts = {available:'Есть макет', missing:'Нет макета', unknown:'Не проверено'};
 
@@ -103,7 +102,7 @@ export function RollJobFilters({groups, options, filters, onToggle, onReset, dis
   </div>;
 }
 
-export function ShipmentPicker({supplies, current, loading, stale, busy, onPick}) {
+export function ShipmentPicker({supplies, current, loading, stale, busy, onPick, isRoll}) {
   const currentTab = current?.status === 'completed' ? 'completed' : 'open';
   const [status, setStatus] = useState(currentTab);
   const [query, setQuery] = useState('');
@@ -131,7 +130,7 @@ export function ShipmentPicker({supplies, current, loading, stale, busy, onPick}
         <ShipmentMeter label="Порезка" total={supply.count} done={progress?.cut} known={progress?.cutKnown}/>
         <span className="shipment-remaining">
           {complete ? <strong className="shipment-done">Всё готово</strong> : <>
-            {progress?.canCut > 0 && <strong>Можно порезать {showAmount(progress.canCut)} поз.</strong>}
+            {!isRoll && progress?.canCut > 0 && <strong>Можно порезать {showAmount(progress.canCut)} поз.</strong>}
             {progress?.toPrint > 0 && <span>К печати {showAmount(progress.toPrint)} поз.</span>}
             {(!progress || incompleteData) && <small>Данные неполные</small>}
             {progress && !progress.total && <small>Нет позиций</small>}
@@ -185,7 +184,7 @@ function RemainingQuantity({label, amount}) {
   </small>;
 }
 
-export function OtherShipmentMatches({result, busy, onOpen}) {
+export function OtherShipmentMatches({result, busy, onOpen, isRoll}) {
   return <section className="article-search-results" aria-labelledby="other-supplies-title">
     <h2 className="search-section-title" id="other-supplies-title">В других поставках</h2>
     {!result ? <p className="quiet" role="status">Ищем артикулы…</p> : result.error ?
@@ -206,7 +205,7 @@ export function OtherShipmentMatches({result, busy, onOpen}) {
               <span>
                 <small className="quiet" aria-hidden="true">Порезка</small>
                 <Meter cut label="Порезка" value={hit.cut} plan={hit.plan}/>
-                <RemainingQuantity label="Можно порезать" amount={hit.cutAvailable}/>
+                {!isRoll && <RemainingQuantity label="Можно порезать" amount={hit.cutAvailable}/>}
               </span>
             </button>
           </li>)}
@@ -276,9 +275,7 @@ export function JobQueue({rows, showChecks, selectionDisabled, chosen, eligible,
           </td>
           <td className="meter-cell">
             <Meter cut label="Порезка" value={cut} plan={row.plan}/>
-            {showRemaining && <RemainingQuantity label="Можно порезать" amount={isBox
-              ? workRemaining('cut',row.plan,printed,cut)
-              : rollCutAvailable(row.rolls,printed,cut)}/>}
+            {showRemaining && isBox && <RemainingQuantity label="Можно порезать" amount={workRemaining('cut',row.plan,printed,cut)}/>}
           </td>
         </tr>;
       })}

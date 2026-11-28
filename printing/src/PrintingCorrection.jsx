@@ -19,7 +19,7 @@ export function PrintingCorrection({row, roll, isRoll, blocked, onSave}) {
   const hasCut = row.cut > 0 || activeRolls.some(value => value.cut > 0);
   const patch = {};
   if (base) {
-    for (const key of ['printed','cut']) {
+    for (const key of isRoll ? ['printed'] : ['printed','cut']) {
       if (draft[key] !== '' && Number(draft[key]) !== base[key]) patch[key] = Number(draft[key]);
     }
   }
@@ -27,7 +27,7 @@ export function PrintingCorrection({row, roll, isRoll, blocked, onSave}) {
     if (draft.name.trim() !== currentRoll.name) patch.name = draft.name.trim();
     if (draft.quantity !== '' && Number(draft.quantity) !== currentRoll.quantity) patch.quantity = Number(draft.quantity);
   }
-  const waitingToCancel = reset || (patch.printed === 0 && base?.printed > 0 && draft.cut === '0'
+  const waitingToCancel = reset || (patch.printed === 0 && base?.printed > 0 && (isRoll || draft.cut === '0')
     ? 'print' : patch.cut === 0 && base?.cut > 0 ? 'cut' : '');
   const canSave = !blocked && (reset || Object.keys(patch).length > 0);
 
@@ -37,7 +37,7 @@ export function PrintingCorrection({row, roll, isRoll, blocked, onSave}) {
   }
 
   function cancelProgress(operation) {
-    setDraft(values => ({...values,...(operation === 'print' ? {printed:'0',cut:'0'} : {cut:'0'})}));
+    setDraft(values => ({...values,...(operation === 'print' ? {printed:'0',...(!isRoll && {cut:'0'})} : {cut:'0'})}));
     setError('');
   }
 
@@ -62,7 +62,7 @@ export function PrintingCorrection({row, roll, isRoll, blocked, onSave}) {
     }
   }
 
-  return <form className="work-form correction-form" onSubmit={submit} aria-label="Исправления печати и порезки">
+  return <form className="work-form correction-form" onSubmit={submit} aria-label={isRoll ? 'Исправления печати' : 'Исправления печати и порезки'}>
     <h3>{currentRoll ? 'Рулон '+rollTitle(currentRoll) : 'Исправления по артикулу'}</h3>
     {base && !reset && <fieldset className="correction-edit" disabled={blocked}>
       {currentRoll && <div className="work-fields">
@@ -71,29 +71,28 @@ export function PrintingCorrection({row, roll, isRoll, blocked, onSave}) {
             onChange={event => change('quantity',event.target.value)}/></label>
       </div>}
       <div className="work-fields">
-        <label>Напечатано, шт.<input type="number" min="0" step={isRoll ? '1' : 'any'} required={base.printed != null}
+        <label>Напечатано, шт.<input type="number" min={isRoll ? base.cut ?? 0 : 0} step={isRoll ? '1' : 'any'} required={base.printed != null}
           placeholder="Нет данных" value={draft.printed} onChange={event => change('printed',event.target.value)}/></label>
-        <label>Порезано, шт.<input type="number" min="0" step={isRoll ? '1' : 'any'} required={base.cut != null}
-          placeholder="Нет данных" value={draft.cut} onChange={event => change('cut',event.target.value)}/></label>
+        {!isRoll && <label>Порезано, шт.<input type="number" min="0" step="any" required={base.cut != null}
+          placeholder="Нет данных" value={draft.cut} onChange={event => change('cut',event.target.value)}/></label>}
       </div>
       <div className="correction-actions">
-        <button className="outline" type="button" disabled={!(Number(draft.printed) > 0)}
+        <button className="outline" type="button" disabled={!(Number(draft.printed) > 0) || (isRoll && base.cut > 0)}
           onClick={() => cancelProgress('print')}>Отменить печать</button>
-        <button className="outline" type="button" disabled={!(Number(draft.cut) > 0)}
-          onClick={() => cancelProgress('cut')}>Отменить порезку</button>
+        {!isRoll && <button className="outline" type="button" disabled={!(Number(draft.cut) > 0)}
+          onClick={() => cancelProgress('cut')}>Отменить порезку</button>}
       </div>
     </fieldset>}
     {isRoll && <details className="correction-scope">
       <summary>По всему артикулу</summary>
       <div className="correction-actions">
-        <button className="outline" type="button" disabled={blocked || (!hasPrint && !hasCut)}
+        <button className="outline" type="button" disabled={blocked || !hasPrint || hasCut}
           onClick={() => cancelArticle('print')}>Отменить печать по артикулу</button>
-        <button className="outline" type="button" disabled={blocked || !hasCut}
-          onClick={() => cancelArticle('cut')}>Отменить порезку по артикулу</button>
       </div>
     </details>}
     {waitingToCancel && <p className="notice" role="status">
-      {waitingToCancel === 'print' ? 'После сохранения печать и порезка будут обнулены' : 'После сохранения порезка будет обнулена'}
+      {isRoll ? 'После сохранения печать будет обнулена' : waitingToCancel === 'print' ?
+        'После сохранения печать и порезка будут обнулены' : 'После сохранения порезка будет обнулена'}
       {reset ? ' по артикулу и его назначенным рулонам.' : currentRoll ? ' на выбранном рулоне.' : ' по этому артикулу.'}
       {reset && <> <button className="link" type="button" disabled={blocked} onClick={() => cancelArticle('')}>Снять отмену</button></>}
     </p>}
