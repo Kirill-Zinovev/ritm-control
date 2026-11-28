@@ -33,10 +33,17 @@
   flex: none;
   font-variant-numeric: tabular-nums;
 }
-.cutter-shipment[aria-pressed="true"], .cutter-shipment[aria-pressed="true"]:hover {
+.cutter-shipment[aria-pressed="true"] {
   border-color: var(--accent);
   background: var(--accent);
   color: #fff;
+}
+.cutter-shipment[aria-pressed="true"]:hover:not(:disabled) {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+}
+.cutter-shipment[aria-pressed="false"]:hover:not(:disabled) {
+  border-color: var(--accent-text);
 }
 .cutter-queue {
   display: grid;
